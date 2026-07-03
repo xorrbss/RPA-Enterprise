@@ -21,9 +21,9 @@ import type {
   SignedCommandRegistry,
 } from "../../../ts/security-middleware-contract";
 import type { BrowserSessionStore } from "../runtime/browser-session-store";
-import type { JwtClaimMapping, JwtRoleMap } from "./auth";
-import { ApiResponseError } from "./errors";
-import type { RunEnqueuer } from "./run-queue";
+import type { JwtClaimMapping, JwtRoleMap } from "../config/jwt-claims";
+import { ApiResponseError } from "../runtime/errors";
+import type { RunEnqueuer } from "../runtime/run-queue";
 import type { PrincipalDirectoryWriter } from "./principal-directory";
 import type { ScenarioPlanner } from "./scenario-generation-types";
 import type { ScenarioGenerationArtifactBuffer } from "./scenario-generation-artifacts";

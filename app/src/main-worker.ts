@@ -7,7 +7,7 @@
 
 import { run, runMigrations, type Runner } from "graphile-worker";
 
-import { PgGraphileRunEnqueuer } from "./api/run-queue";
+import { PgGraphileRunEnqueuer } from "./runtime/run-queue";
 import { PgAiGovernanceGatewayGuard } from "./api/ai-governance-enforcement";
 import { PgDurableSecurityAuditDecisionWriter } from "./api/security-audit";
 import { loadApiSessionEncryption, loadArtifactLifecycleWorkerConfig, loadBrowserConfig, loadGatewayConfig, loadWorkerConfig, type ArtifactLifecycleWorkerConfig, type CommonConfig, type GatewayConfig } from "./config/env";
@@ -41,10 +41,10 @@ import { PgScreenshotFrameVideoRecorder, PgVisualEvidenceRecorder } from "./runt
 import { VaultSecretStore } from "./secrets/vault-secret-store";
 import { VaultSecretStoreBoundary } from "./secrets/vault-secret-store-boundary";
 import { buildTaskList } from "./worker/graphile-runner";
-import { buildPoolForbiddenFlags } from "./worker/pool-forbidden-flags";
+import { buildPoolForbiddenFlags } from "./runtime/pool-forbidden-flags";
 import { startMaintenanceScheduler, type MaintenanceScheduler } from "./worker/maintenance-scheduler";
-import { WORKER_HEARTBEAT_INTERVAL_MS } from "./worker/worker-heartbeat-policy";
-export { WORKER_HEARTBEAT_INTERVAL_MS } from "./worker/worker-heartbeat-policy";
+import { WORKER_HEARTBEAT_INTERVAL_MS } from "./runtime/worker-heartbeat-policy";
+export { WORKER_HEARTBEAT_INTERVAL_MS } from "./runtime/worker-heartbeat-policy";
 import { pgBrowserLeasePlanResolver } from "./worker/pg-browser-lease-plan-resolver";
 import type { PgRuntimeWorkerOptions, RunExecutorFactory } from "./worker/runtime-worker";
 import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";

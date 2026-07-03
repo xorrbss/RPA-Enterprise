@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 
 import { safeSerialize } from "../../../security/compliance-scaffold";
-import { computeAuditHash } from "./audit-record-hash";
+import { computeAuditHash } from "../runtime/audit-record-hash";
 import {
   SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
   SECURITY_AUDIT_REQUIRED_ACTIONS,

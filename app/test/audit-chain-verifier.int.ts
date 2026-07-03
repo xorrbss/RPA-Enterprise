@@ -22,7 +22,7 @@ import {
 } from "../../ts/security-middleware-contract";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { PgDurableSecurityAuditDecisionWriter } from "../src/api/security-audit";
-import { verifyAuditChain } from "../src/api/audit-record-hash";
+import { verifyAuditChain } from "../src/runtime/audit-record-hash";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "rpa_audit_chain_verifier_int";

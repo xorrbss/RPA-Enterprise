@@ -21,7 +21,7 @@ import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { withTenantTx } from "../db/pool";
-import { ApiResponseError, registerErrorHandler } from "./errors";
+import { ApiResponseError, registerErrorHandler } from "../runtime/errors";
 import { registerDlqRoutes } from "./dlq";
 import { registerGatewayRoutes } from "./gateway";
 import { registerHumanTaskRoutes } from "./human-tasks";

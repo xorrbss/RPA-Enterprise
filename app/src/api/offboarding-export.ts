@@ -12,7 +12,7 @@ import {
 } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
 import { csvRow, csvWithBom } from "./csv";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 // offboarding export audit 보존일수 — artifact.read audit(ARTIFACT_READ_AUDIT_RETENTION_DAYS=90)과 동일 기준 재사용(비발명).

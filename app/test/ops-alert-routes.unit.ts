@@ -1,5 +1,5 @@
 // S4a OPS_ALERT_ROUTES env 파서(parseOpsAlertRoutes) 검증 — 유효 규칙 파싱 + 형식 오류 fail-closed.
-import { OPS_ALERT_AUTO_FIRE_SOURCES, parseOpsAlertRoutes } from "../src/api/ops-alert-routes";
+import { OPS_ALERT_AUTO_FIRE_SOURCES, parseOpsAlertRoutes } from "../src/runtime/ops-alert-routes";
 
 let failures = 0;
 function check(label: string, condition: boolean, detail?: string): void {

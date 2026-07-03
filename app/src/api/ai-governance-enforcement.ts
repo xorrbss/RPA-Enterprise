@@ -6,7 +6,7 @@ import type { LLMRequest } from "../../../ts/security-middleware-contract";
 import { withTenantTx, type PgPool } from "../db/pool";
 import type { AiGovernanceGatewayDecision, AiGovernanceGatewayGuard } from "../gateway/llm-gateway";
 import { isRecord, type CommandResponse } from "./command";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 
 export type AiRuntimePolicyMode = "observe" | "warn" | "block";
 type AiEvidenceType = "model_registry" | "prompt_registry" | "eval_result" | "cost_control";

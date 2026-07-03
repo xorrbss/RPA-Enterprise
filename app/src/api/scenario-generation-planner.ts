@@ -10,7 +10,7 @@
 import { createHash } from "node:crypto";
 
 import { isRecord } from "./command";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import {
   DEFAULT_PAGINATION_MAX_PAGES,
   MAX_AUTO_PAGINATION_PAGES,

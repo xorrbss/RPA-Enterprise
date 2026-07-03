@@ -38,7 +38,7 @@ import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { positiveInt } from "../src/config/env-primitives";
 import { PgPrincipalDirectory } from "../src/api/principal-directory";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
-import type { RunEnqueuer } from "../src/api/run-queue";
+import type { RunEnqueuer } from "../src/runtime/run-queue";
 import { PgDurableSecurityAuditDecisionWriter } from "../src/api/security-audit";
 import { buildServer } from "../src/api/server";
 import { PgBrowserSessionStore, DevPlaintextSessionEncryptor } from "../src/runtime/browser-session-store";

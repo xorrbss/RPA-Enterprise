@@ -4,7 +4,7 @@ import type { FastifyInstance } from "fastify";
 
 import { withTenantTx } from "../db/pool";
 import { csvCell, csvWithBom, guardSpreadsheetFormula } from "./csv";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 const REPORT_TZ = "Asia/Seoul";

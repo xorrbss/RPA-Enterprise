@@ -11,9 +11,9 @@ import type { RunState } from "../../../ts/state-machine-types";
 import { withTenantTx } from "../db/pool";
 import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent } from "../runtime/outbox";
 import { applyRunTransition } from "../runtime/run-transition";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
-import type { RunEnqueuer } from "./run-queue";
+import type { RunEnqueuer } from "../runtime/run-queue";
 import {
   apiErrorBody,
   isRecord,

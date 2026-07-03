@@ -13,8 +13,8 @@ import type { PoolClient } from "pg";
 import type { ObjectRef } from "../../../ts/core-types";
 import { originOf } from "../runtime/site-resolution";
 import { isRecord } from "./command";
-import { ApiResponseError } from "./errors";
-import type { RunEnqueuer } from "./run-queue";
+import { ApiResponseError } from "../runtime/errors";
+import type { RunEnqueuer } from "../runtime/run-queue";
 import { createRunInTx } from "./server-create-run";
 import type { ArtifactObjectReader } from "./server-shared";
 

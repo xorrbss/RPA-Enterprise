@@ -8,7 +8,7 @@
  *   enum 런타임 배열이 SSoT에 없어 `Record<State,true>`로 미러링 → 누락/오타가 컴파일타임 에러(드리프트 차단).
  */
 import type { HumanTaskKind, HumanTaskState, RunState, WorkitemState } from "../../../ts/state-machine-types";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;

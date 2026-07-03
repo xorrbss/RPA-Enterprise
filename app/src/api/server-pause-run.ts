@@ -4,7 +4,7 @@ import type { FastifyRequest } from "fastify";
 import type { PoolClient } from "pg";
 
 import type { RunState } from "../../../ts/state-machine-types";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { runIdempotentCommand, isRecord } from "./command";
 import { appendGovernanceAudit } from "./role-assignments";
 import { requirePrincipal, UUID_RE, type ApiServerDeps, type CommandResponse } from "./server-shared";

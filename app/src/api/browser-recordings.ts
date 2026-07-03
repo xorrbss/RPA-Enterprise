@@ -9,7 +9,7 @@ import { withTenantTx } from "../db/pool";
 import { originOf } from "../runtime/site-resolution";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
 import { compileScenario, studioValidationStagesFromCompile } from "./compile-pipeline";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { paginate, parseLimit, parsePageParams } from "./list-query";
 import { resolveRunTargetForIr, signedCommandRefsFor } from "./scenarios-support";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";

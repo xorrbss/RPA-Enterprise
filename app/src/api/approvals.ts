@@ -21,7 +21,7 @@ import type { PoolClient } from "pg";
 import { originOf } from "../runtime/site-resolution";
 import { fanOutCollectionRun } from "./approval-fan-out";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { type ApiServerDeps, requirePrincipal } from "./server-shared";
 import { createRunInTx } from "./server-create-run";
 

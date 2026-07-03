@@ -3,7 +3,7 @@
 import type { FastifyInstance } from "fastify";
 
 import { withTenantTx } from "../db/pool";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { decodeCursor, paginate, type PageCursor } from "./list-query";
 import {
   dateTimeFilter,

@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 
 export type ScenarioCertificationStatus = "uncertified" | "certified" | "revoked";
 export type ScenarioGovernanceStage = "dev" | "review" | "pilot" | "certified" | "deprecated";

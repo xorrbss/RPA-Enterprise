@@ -17,11 +17,11 @@ import { fileURLToPath } from "node:url";
 
 import type { PoolClient } from "pg";
 
-import type { OpsNotificationSendEnqueueInput } from "../src/api/run-queue";
+import type { OpsNotificationSendEnqueueInput } from "../src/runtime/run-queue";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { runOpsNotificationFire, type OpsNotificationFireEnqueuer } from "../src/worker/ops-notification-fire";
 import { resolveMaintenanceTenantIds } from "../src/worker/maintenance-scheduler";
-import type { OpsAlertRoute } from "../src/api/ops-alert-routes";
+import type { OpsAlertRoute } from "../src/runtime/ops-alert-routes";
 import {
   insertOpsNotificationAttempt,
   type ComputedOpsAlert,

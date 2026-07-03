@@ -8,7 +8,7 @@ import type { FastifyInstance } from "fastify";
 
 import { withTenantTx } from "../db/pool";
 import { isRecord, runIdempotentCommand } from "./command";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { recordOffboardingAudit, requireOffboardingSecurityAudit } from "./offboarding-export";
 import { UUID_RE } from "./reads-support";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 
-import { PgGraphileRunEnqueuer } from "../api/run-queue";
+import { PgGraphileRunEnqueuer } from "../runtime/run-queue";
 import { withTenantTx, type PgPool } from "../db/pool";
 import type { RuntimeWorkerJob } from "../../../ts/runtime-contract";
 import type { CorrelationId, TenantId } from "../../../ts/security-middleware-contract";
@@ -9,7 +9,7 @@ import { processDueRunTriggers } from "./run-trigger-scheduler";
 import { ARTIFACT_REDACTION_FAIL_THRESHOLD } from "./runtime-worker-artifact-lifecycle";
 import { assertLifecycleBypassUse } from "./runtime-worker-lifecycle-audit";
 import { runOpsNotificationFire } from "./ops-notification-fire";
-import type { OpsAlertRoute } from "../api/ops-alert-routes";
+import type { OpsAlertRoute } from "../runtime/ops-alert-routes";
 
 export const MAINTENANCE_POLL_INTERVAL_MS = 5_000;
 export const AUDIT_VERIFIER_INTERVAL_MS = 60 * 60 * 1000;

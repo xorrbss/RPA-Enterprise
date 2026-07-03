@@ -2,7 +2,7 @@
 import type { FastifyInstance } from "fastify";
 
 import { withTenantTx } from "../db/pool";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { paginate, parsePageParams } from "./list-query";
 import { UUID_RE } from "./reads-support";
 import { mapScenarioCertification, type ScenarioCertificationRow } from "./scenario-certification";

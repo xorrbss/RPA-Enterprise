@@ -2,7 +2,7 @@
 // 매핑·검증(순수)은 runtime-worker-artifact-lifecycle.ts. 본 모듈은 async DB(client.query) + append-only 감사 해시체인(createHash).
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
-import { computeAuditHash } from "../api/audit-record-hash";
+import { computeAuditHash } from "../runtime/audit-record-hash";
 import {
   SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
   checkBypassRlsUse,

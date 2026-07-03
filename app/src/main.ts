@@ -43,7 +43,7 @@ import { createLlmScenarioPlanner, LlmGatewayScenarioPlannerClient } from "./api
 import { PgPrincipalDirectory } from "./api/principal-directory";
 import { RoleMatrixRbacMiddleware } from "./api/rbac";
 import { PgPrincipalRoleAssignmentResolver } from "./api/role-assignments";
-import { PgGraphileRunEnqueuer } from "./api/run-queue";
+import { PgGraphileRunEnqueuer } from "./runtime/run-queue";
 import { BufferedScenarioGenerationArtifactSink } from "./api/scenario-generation-artifacts";
 import { PuppeteerSelectorProbeProvider } from "./api/selector-probe-provider";
 import {

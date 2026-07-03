@@ -18,7 +18,7 @@ import type {
   TenantId,
   CorrelationId,
 } from "../../../ts/security-middleware-contract";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { GatewayError } from "../gateway/llm-gateway";
 import type {
   GenerationCapabilities,

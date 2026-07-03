@@ -24,8 +24,8 @@ import type { WorkitemState } from "../../../ts/state-machine-types";
 import { applyWorkitemTransition } from "../runtime/workitem-transition";
 import { withTenantTx } from "../db/pool";
 import { runIdempotentCommand, type CommandResponse } from "./command";
-import { ApiResponseError } from "./errors";
-import type { SinkDeliverEnqueueInput } from "./run-queue";
+import { ApiResponseError } from "../runtime/errors";
+import type { SinkDeliverEnqueueInput } from "../runtime/run-queue";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

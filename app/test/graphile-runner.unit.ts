@@ -4,14 +4,16 @@
  * The queue adapter must not treat deferred/failed RuntimeJobResult values as a
  * successful Graphile job. Only `completed` may acknowledge the task.
  */
-import { PgGraphileRunEnqueuer } from "../src/api/run-queue";
+import { PgGraphileRunEnqueuer } from "../src/runtime/run-queue";
 import {
   assertRuntimeJobCompleted,
   buildTaskList,
+} from "../src/worker/graphile-runner";
+import {
   RUNTIME_CONTROL_JOB_TASK,
   RUNTIME_LIFECYCLE_JOB_TASK,
   runtimeJobTaskIdentifier,
-} from "../src/worker/graphile-runner";
+} from "../src/runtime/runtime-job-routing";
 import type { RuntimeWorkerJob } from "../../ts/runtime-contract";
 
 let failures = 0;

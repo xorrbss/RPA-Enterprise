@@ -58,7 +58,7 @@ import type { BrowserSessionProvider } from "../executor/browser-session-provide
 import type { ExecutorChallengeSuspensionPort, RuntimeJobEnqueuePort } from "../runtime/executor-ports";
 import type { CdpSessionProvider } from "../executor/cdp-session";
 import type { ExecutorPlugin } from "../../../ts/core-types";
-import type { RunEnqueuer } from "../api/run-queue";
+import type { RunEnqueuer } from "../runtime/run-queue";
 import type { ArtifactObjectReader } from "../api/server-shared";
 import { fanOutCollectionRun } from "../api/approval-fan-out";
 import { processRunTriggerFireJob } from "./run-trigger-scheduler";

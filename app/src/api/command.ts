@@ -21,7 +21,7 @@ import type { OperationId } from "../../../ts/control-plane-contract";
 import { ERROR_CATALOG, type ApiError } from "../../../ts/error-catalog";
 import type { CanonicalRequestHash, IdempotencyKey } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
