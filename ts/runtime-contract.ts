@@ -453,7 +453,8 @@ export interface VisualEvidenceVideoStartInput {
 }
 
 export interface VisualEvidenceVideoStopInput {
-  terminal: "success" | "success_empty" | "fail_business" | "fail_system" | "suspend";
+  // fail_security 포함 — securityFailure(R10) 종결도 실패 증적 비디오를 보존한다(EXECUTOR_OUTCOME_MAPPING_CONTRACT).
+  terminal: "success" | "success_empty" | "fail_business" | "fail_system" | "fail_security" | "suspend";
 }
 
 export interface RunVideoRecording {

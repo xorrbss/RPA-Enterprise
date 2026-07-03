@@ -96,6 +96,7 @@ export function OpsAlertCenter({
             <option value="failure_spike">실패 급증</option>
             <option value="session_expiry">로그인 세션 만료</option>
             <option value="artifact_redaction">증빙 보호 실패</option>
+            <option value="security_abort">보안 차단 중단</option>
             <option value="dlq">재처리 대기</option>
             <option value="bot_pool">Bot Pool</option>
             <option value="scim_secret_rotation">SCIM SecretRef</option>
@@ -489,6 +490,7 @@ function opsAlertSourceLabel(source: OpsAlertItem["source"]): string {
   if (source === "failure_spike") return "실패 급증";
   if (source === "session_expiry") return "로그인 세션 만료";
   if (source === "artifact_redaction") return "증빙 보호 실패";
+  if (source === "security_abort") return "보안 차단 중단";
   if (source === "bot_pool") return "Bot Pool";
   if (source === "scim_secret_rotation") return "SCIM SecretRef";
   if (source === "readiness_evidence") return "운영 전환 준비";

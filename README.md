@@ -925,3 +925,30 @@
 | 계약 | `api-surface.md` ops-alerts | source enum + 계산 의미론(유일한 표면임을 명시) |
 | 콘솔 | `web/src/views/orchestration/OpsAlertCenter.tsx` | 소스 필터/라벨 "증빙 보호 실패" |
 | 검증 | `api-ops-alerts.int`·`runtime-worker-claim.int`·`ops-alert-routes.unit` | 목록/필터/ack/딥링크/누출0 + failed 전이 tx원장 push + 라우트 파서 |
+
+## v2.33 패치 로그 (보안 예외 R10 이행 — security_exception→aborting 도달 + security_abort 알림)
+
+> **검증된 계약 미이행 해소**(3관점 감사 2026-07-03 R3-1 confirmed). state-machine.md **R10**(running +
+> security_exception → aborting, "SSE close + browser drain + 알림")과 runtime-contract
+> `EXECUTOR_OUTCOME_MAPPING_CONTRACT.securityFailure`(R10 + `requiresRunAbortJob` + `requiresNotificationPort`)가
+> 계약돼 있으나, 인터프리터가 `failed_security` step 을 `fail_system` 터미널로 **합류**시켜 R10 이 프로덕션에서
+> 도달 불가였다 — 보안 차단(도메인 정책 위반·프롬프트 인젝션 등)이 일반 시스템 실패로 위장되고 알림 0.
+> 해소: ① 인터프리터가 `fail_security` 터미널을 독립 산출(+fallback 티어 전환 재시도 금지 — 다른 셀렉터로
+> 차단 행위 재시도는 정책 우회) ② 드라이버가 R10(→aborting, failure_reason 기록)과 R23(→cancelled, H7
+> human-task cancel)을 완결 — 자신이 lease 소유자라 별도 run_abort 잡 대신 직접 종결(외부발신 abort 용 drain
+> claim 은 lease 반납 후 영구 실패해 aborting 고착 위험; 어휘 체인 abort→cancelled 유지) ③ 운영 알림 소스
+> `security_abort` 신설(critical, subject_type=run, error-catalog `exceptionClass=security` 코드 파생 —
+> 하드코딩 금지) + 자동 발화 등록(detected_at=`runs.ended_at`, 안정 세대).
+> **역호환**: 신규 소스/유니온 멤버는 additive. 종전에 failed_system 으로 기록되던 보안 차단이 cancelled 로
+> 종결되는 것은 **계약이 원래 요구한 동작의 복원**이다(failed_system 소비자는 순수 시스템 실패만 남아 정밀해짐).
+
+| 항목 | 위치 | 조치 |
+|---|---|---|
+| 런타임 | `app/src/runtime/ir-interpreter.ts` | `failed_security`→`fail_security` 터미널 독립 + fallback 티어 즉시 채택(전환 재시도 금지) + `terminalToStatus` 투영 정직화 |
+| 드라이버 | `app/src/runtime/run-step-driver.ts` | `fail_security` 분기: R10(security_exception, class=security)→R23(drain_ok) 완결 + failure_reason + H7 + artifact lifecycle |
+| 계약 | `ts/runtime-contract.ts` `VisualEvidenceVideoStopInput` | terminal 유니온에 `fail_security` 추가(보안 종결도 실패 증적 비디오 보존) |
+| DDL | `db/migration_core_entities.sql` | ops-alert acks/attempts/deliveries source CHECK + 저장 라우트 allowlist 에 `security_abort` |
+| 알림 | `app/src/api/ops-alerts-security-abort.ts`(신규)·`ops-alerts.ts`·`ops-alert-routes.ts` | runs(cancelled+security failure_reason) 계산 소스·by-id + 자동 발화 allowlist |
+| 계약 | `api-surface.md` ops-alerts | source enum + `security_abort` 계산 의미론 |
+| 콘솔 | `web/src/views/orchestration/OpsAlertCenter.tsx`·`web/src/api/types.ts` | 소스 필터/라벨 "보안 차단 중단" |
+| 검증 | `run-step-driver.int`·`api-ops-alerts.int`·interpreter unit | security step→cancelled 종결·R10/R23 이벤트·알림 계산/ack·fallback 미전환 |

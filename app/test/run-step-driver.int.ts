@@ -20,6 +20,7 @@ import type {
   PageState,
   PageStateResolver,
   PlainSecret,
+  RedactedString,
   SecretRef,
   SecretStore,
   StepResult,
@@ -45,6 +46,7 @@ const RUN = "71000000-0000-0000-0000-0000000000d1";
 const RUN_FAIL_BIZ = "71000000-0000-0000-0000-0000000000d3";
 const RUN_FAIL_SYS = "71000000-0000-0000-0000-0000000000d4";
 const RUN_SUSPEND = "71000000-0000-0000-0000-0000000000d5";
+const RUN_FAIL_SEC = "71000000-0000-0000-0000-0000000000f1";
 const RUN_HUMAN_TASK = "71000000-0000-0000-0000-0000000000d6";
 const RUN_ARTIFACT = "71000000-0000-0000-0000-0000000000d7";
 const RUN_VIDEO_ALWAYS = "71000000-0000-0000-0000-0000000000d8";
@@ -321,7 +323,7 @@ class ThrowingVideoRecorder implements VisualEvidenceVideoRecorder {
   }
 }
 
-function failingExecutor(status: "failed_business" | "failed_system"): ExecutorPlugin {
+function failingExecutor(status: "failed_business" | "failed_system" | "failed_security"): ExecutorPlugin {
   return {
     capabilities: () => ({ dom: false, vision: false, utility: true }),
     async execute(stepId) {
@@ -335,6 +337,10 @@ function failingExecutor(status: "failed_business" | "failed_system"): ExecutorP
         artifacts: [],
         cache: { mode: "bypass" },
         timings: { startedAt: now, endedAt: now, durationMs: 0 },
+        // security 는 실 분류 경로와 동형으로 exception 운반(failure_reason 기록 검증용).
+        ...(status === "failed_security"
+          ? { exception: { class: "security" as const, code: "DOMAIN_POLICY_VIOLATION", message: "" as RedactedString } }
+          : {}),
       };
     },
     async verify() {
@@ -620,7 +626,7 @@ async function main(): Promise<void> {
         [SVER_VISUAL_FAILURE, TENANT, SCEN_VISUAL_FAILURE, JSON.stringify(compiledVisualFailure.ir), compiledVisualFailure.compiledAst],
       );
       // R1을 우회해 claimed 상태로 직접 시드(드라이버는 R2부터). correlation_id=run_id.
-      for (const rid of [RUN, RUN_FAIL_BIZ, RUN_FAIL_SYS, RUN_SUSPEND, RUN_ARTIFACT, RUN_VISUAL_NO_ENQUEUER]) {
+      for (const rid of [RUN, RUN_FAIL_BIZ, RUN_FAIL_SYS, RUN_FAIL_SEC, RUN_SUSPEND, RUN_ARTIFACT, RUN_VISUAL_NO_ENQUEUER]) {
         await c.query(
           `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, worker_id, as_of)
            VALUES ($1,$2,$3,'claimed',$1,1,$4::uuid,'2026-06-16T00:00:00Z')`,
@@ -1141,6 +1147,43 @@ async function main(): Promise<void> {
       });
       check(`outbox에 ${f.event}`, fevents.includes(f.event), fevents.join(","));
     }
+
+    // 실패 terminal 구동(2b): fail_security → R10(running→aborting)+R23(→cancelled) 완결(R3-1/v2.33).
+    //   failed_system 합류 금지 — 보안 차단은 cancelled 로 종결 + failure_reason 보존 + run.cancelled emit.
+    const secRes = await driveClaimedRun(
+      {
+        runId: RUN_FAIL_SEC,
+        tenantId: TENANT,
+        scenarioVersionId: SVER,
+        correlationId: RUN_FAIL_SEC,
+        leaseId: "lease-sec",
+        siteProfileId: "site-1",
+        browserIdentityId: "bid-1",
+        networkPolicyId: "np-1",
+        params: { entry_url: "https://example.com" },
+      },
+      { pool, executor: failingExecutor("failed_security"), resolver: fakeResolver, workerId: WORKER },
+    );
+    check("driver(failed_security) → state=cancelled(R10→R23)", secRes.state === "cancelled", secRes.state);
+    check("failed_security → terminal=fail_security(합류 금지)", secRes.outcome.terminal === "fail_security", secRes.outcome.terminal);
+    const secDb = await withTenantTx(pool, TENANT, async (c) => {
+      const r = await c.query<{ status: string; ended_at: Date | null; failure_reason: { code?: string } | null }>(
+        `SELECT status, ended_at, failure_reason FROM runs WHERE id=$1::uuid`,
+        [RUN_FAIL_SEC],
+      );
+      return r.rows[0] ?? null;
+    });
+    check("DB runs.status = cancelled(어휘 체인 abort→cancelled)", secDb?.status === "cancelled", JSON.stringify(secDb));
+    check("cancelled ended_at 기록(terminal)", secDb?.ended_at !== null && secDb?.ended_at !== undefined);
+    check("failure_reason.code=DOMAIN_POLICY_VIOLATION 보존", secDb?.failure_reason?.code === "DOMAIN_POLICY_VIOLATION", JSON.stringify(secDb?.failure_reason));
+    const secEvents = await withTenantTx(pool, TENANT, async (c) => {
+      const r = await c.query<{ event_type: string }>(
+        `SELECT event_type FROM events_outbox WHERE correlation_id=$1::uuid ORDER BY created_at`,
+        [RUN_FAIL_SEC],
+      );
+      return r.rows.map((x) => x.event_type);
+    });
+    check("outbox에 run.cancelled(R23) — run.failed_system 아님", secEvents.includes("run.cancelled") && !secEvents.includes("run.failed_system"), secEvents.join(","));
 
     // suspend 구동(step2+3): suspended → suspending(R4)+human_task 포트 → resume-token 발행+R11 → suspended.
     const susp = await driveClaimedRun(

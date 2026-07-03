@@ -23,6 +23,9 @@ export const OPS_ALERT_AUTO_FIRE_SOURCES = [
   // A4-3: 레다크션 terminal 실패 — detected_at=artifact_redaction_failures 행 타임스탬프(안정 세대).
   //   failed 행은 RLS 로 콘솔에서 숨겨지므로 무인 통지가 사실상 유일한 외부 신호 경로다.
   "artifact_redaction",
+  // R3-1: 보안 예외 즉시 중단(R10→cancelled) — detected_at=runs.ended_at(안정 세대).
+  //   runtime-contract securityFailure.requiresNotificationPort 이행(무인 외부 통지 포함).
+  "security_abort",
 ] as const;
 
 export type OpsAlertAutoFireSource = (typeof OPS_ALERT_AUTO_FIRE_SOURCES)[number];

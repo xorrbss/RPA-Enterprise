@@ -9,7 +9,7 @@
  *  - tier 투영: 티어 서브그래프 내 노드 출력에 tier 부착 → node.<id>.tier 분기 가능.
  *  - advance_when 스코프 = flags+params+node(loop/cursor 없음).
  */
-import type { ExecutorPlugin, PageState, PageStateResolver, RunContext, StepResult, StepStatus, VerifyResult } from "../../ts/core-types";
+import type { ExecutorPlugin, PageState, PageStateResolver, RedactedString, RunContext, StepResult, StepStatus, VerifyResult } from "../../ts/core-types";
 import { parseIrelExpression, type IRELNode } from "../../codegen/irel-compile";
 import type { CompiledOnBranch } from "../src/runtime/flow-control";
 import { runScenario, type CompiledScenario } from "../src/runtime/ir-interpreter";
@@ -136,6 +136,34 @@ async function main(): Promise<void> {
     nodes: { F: fb([{ tier: "T0", entryNode: "t0" }, { tier: "T1", entryNode: "t1", advanceWhen: ast('node.absent.status == "success"') }]), t0: actTerm("a"), t1: actTerm("t1_done") },
   };
   check("마지막 티어 advance_when 미평가(부재참조여도 throw 아님) → 채택", (await run(s10, new Set(["t0"]))) === "t1_done");
+
+  // 11) R3-1/R10: security 실패는 티어 전환 재시도 금지 — 다른 셀렉터로 차단 행위 재시도 = 정책 우회.
+  //    T0 failed_security + T1 존재 → 즉시 fail_security 채택(T1 미실행) + failureReason 운반.
+  const secExecutor: ExecutorPlugin = {
+    capabilities: () => ({ dom: false, vision: false, utility: true }),
+    execute: async (stepId: string): Promise<StepResult> =>
+      stepId.split(".")[0] === "t0"
+        ? { ...stepResult("failed_security"), exception: { class: "security", code: "DOMAIN_POLICY_VIOLATION", message: "" as RedactedString } }
+        : stepResult("success"),
+    verify: async (): Promise<VerifyResult> => ({ passed: true, criteria: [] }) as unknown as VerifyResult,
+  };
+  const s11: CompiledScenario = { start: "F", nodes: { F: fb([{ tier: "T0", entryNode: "t0" }, { tier: "T1", entryNode: "t1" }]), t0: actTerm("a"), t1: actTerm("t1_done") } };
+  const o11 = await runScenario(s11, ctx(), { executor: secExecutor, resolver: resolver(), params: {} });
+  check("security 실패 → 티어 전환 없이 fail_security 채택", o11.terminal === "fail_security", o11.terminal);
+  check("security 실패 사유 운반(failureReason.code)", o11.failureReason?.code === "DOMAIN_POLICY_VIOLATION", JSON.stringify(o11.failureReason));
+
+  // 12) advance_when 이 명시돼 있어도 security 실패는 평가 없이 즉시 채택(전환으로 삼켜지지 않음).
+  const s12: CompiledScenario = {
+    start: "F",
+    nodes: { F: fb([{ tier: "T0", entryNode: "t0", advanceWhen: ast('node.t0.status == "failed_security"') }, { tier: "T1", entryNode: "t1" }]), t0: actTerm("a"), t1: actTerm("t1_done") },
+  };
+  const o12 = await runScenario(s12, ctx(), { executor: secExecutor, resolver: resolver(), params: {} });
+  check("advance_when 있어도 security 실패 즉시 채택(fail_security)", o12.terminal === "fail_security", o12.terminal);
+
+  // 13) 일반(비-fallback) 노드 security 실패 → fail_security 터미널(failed_system 합류 금지).
+  const s13: CompiledScenario = { start: "t0", nodes: { t0: actTerm("done") } };
+  const o13 = await runScenario(s13, ctx(), { executor: secExecutor, resolver: resolver(), params: {} });
+  check("일반 노드 security 실패 → fail_security(합류 금지)", o13.terminal === "fail_security", o13.terminal);
 
   if (failures > 0) {
     console.error(`\nFAIL: ${failures} check(s) failed`);
