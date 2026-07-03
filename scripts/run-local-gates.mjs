@@ -23,6 +23,7 @@ const skipDb = args.includes("--skip-db");
 const steps = [
   ["Root contract lint", "node", ["scripts/contract-lint.mjs"]],
   ["Blocked decision audit", "node", ["scripts/blocked-decisions-audit.mjs"]],
+  ["File-length gate", "node", ["scripts/file-length-gate.mjs"]],
   ["Codegen install", "npm", ["ci", "--prefix", "codegen"]],
   ["Codegen typecheck", "npm", ["--prefix", "codegen", "run", "typecheck"]],
   ["State-machine fixtures", "npm", ["--prefix", "codegen", "run", "fixtures"]],

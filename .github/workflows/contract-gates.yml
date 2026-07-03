@@ -38,6 +38,9 @@ jobs:
       - name: Audit app test wiring (no CI-orphan tests)
         run: node scripts/test-wiring-audit.mjs
 
+      - name: File-length gate (500-line rule, baseline ratchet)
+        run: node scripts/file-length-gate.mjs
+
   blocked-decision-audit:
     name: Blocked decision audit
     runs-on: ubuntu-latest
