@@ -50,7 +50,7 @@ import {
 } from "./run-step-driver-artifacts";
 import { compiledScenarioFrom } from "./ir-translate";
 import { InterpreterError, runScenario, type ScenarioOutcome, type SuspendContext } from "./ir-interpreter";
-import { pauseLinkedWorkitemCheckout, settleLinkedWorkitemForRunTerminal, type RunTerminalKind } from "./workitem-settlement";
+import { pauseLinkedWorkitemCheckout, settleLinkedWorkitemForRunTerminal, unpauseLinkedWorkitemForRunAbort, type RunTerminalKind } from "./workitem-settlement";
 import { cancelLinkedHumanTasksForRunTerminal } from "./human-task-transition";
 import { loadResolvedHumanTaskNodeOutputs } from "./human-task-resume-scope";
 import { recordChallenge } from "../observability/telemetry";
@@ -389,12 +389,30 @@ async function driveScenario(run: ClaimedRun, deps: DriveDeps, startNode?: strin
     });
     return { state: "failed_system", outcome };
   }
+  if (outcome.terminal === "fail_security") {
+    // R10(running→aborting, class=security) — state-machine.md R10 + runtime-contract securityFailure(R10 + run 중단 + 알림).
+    //   같은 tx: failure_reason 기록(ops-alert security_abort 소스의 원천 — 알림 절반) + artifact lifecycle.
+    await transition(deps.pool, run, "running", { type: "security_exception" }, { exceptionClass: "security" }, undefined, async (client) => {
+      if (failureReason !== undefined) await client.query(`UPDATE runs SET failure_reason=$3::jsonb WHERE tenant_id=$1::uuid AND id=$2::uuid`, [run.tenantId, run.runId, JSON.stringify(failureReason)]);
+      await enqueueArtifactLifecycleJobsForOutcome(client, run, deps, outcome);
+    });
+    // R23(aborting→cancelled, drain_ok) 도 드라이버가 직접 완결 — 자신이 lease 소유자라 run_abort 잡 불요.
+    //   (그 잡의 drain claim 은 외부 발신 abort 용: 반환 직후 worker finally 가 lease 를 회수하므로 잡이 늦게 돌면
+    //   lease 부재('missing')로 영구 실패해 run 이 aborting 에 고착된다.) 브라우저/자격증명 정리는 반환 직후
+    //   worker teardown(bound.release + releaseCredentialLeasesForRun)이 수행 — user-abort 의 drain 과 동등.
+    //   H7: 연결 비종결 human_task cancel. 워크아이템은 user-abort 와 동일하게 checkout sweeper(W6/W7)가 회수.
+    await transition(deps.pool, run, "aborting", { type: "drain_ok" }, {}, undefined, async (client) => {
+      await unpauseLinkedWorkitemForRunAbort(client, { tenantId: run.tenantId, runId: run.runId });
+      await cancelLinkedHumanTasksForRunTerminal(client, { tenantId: run.tenantId, runId: run.runId, correlationId: run.correlationId });
+    });
+    return { state: "cancelled", outcome };
+  }
   // suspend(트리거 i challenge=R4 / 트리거 ii @human_task=R5; resume 중 재-suspend 포함): running→suspending+포트→resume-token+R11→suspended.
   if (outcome.terminal === "suspend") {
     return driveSuspend(run, deps, outcome);
   }
   // 그 외 terminal: 미구현 — 조용히 흘리지 않고 throw로 표면화(terminal 은 string). @challenge IR 노드는 인터프리터에서 loud throw(미도달).
-  throw new Error(`driveScenario: terminal '${outcome.terminal}' 종료 전이 미구현(success/success_empty/fail_business/fail_system/suspend 외). 후속 증분에서 추가.`);
+  throw new Error(`driveScenario: terminal '${outcome.terminal}' 종료 전이 미구현(success/success_empty/fail_business/fail_system/fail_security/suspend 외). 후속 증분에서 추가.`);
 }
 
 /**

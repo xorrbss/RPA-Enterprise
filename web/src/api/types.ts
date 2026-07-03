@@ -775,7 +775,8 @@ export type OpsAlertSource =
   | "audit_verifier"
   | "readiness_evidence"
   | "session_expiry"
-  | "artifact_redaction";
+  | "artifact_redaction"
+  | "security_abort";
 export type OpsAlertSubjectType =
   | "run"
   | "human_task"
@@ -877,7 +878,8 @@ export type OpsAlertNotificationRouteSource =
   | "trigger_fire"
   | "failure_spike"
   | "session_expiry"
-  | "artifact_redaction";
+  | "artifact_redaction"
+  | "security_abort";
 export type OpsAlertNotificationRouteSeverity = "warning" | "critical";
 
 export interface OpsAlertNotificationRoute {

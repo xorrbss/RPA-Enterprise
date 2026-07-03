@@ -127,9 +127,12 @@ export class InterpreterError extends Error {
 const DEFAULT_MAX_STEPS = 200;
 
 // 실패 status → terminal 매핑. 처리 못 하는 status(suspended/challenge/uncertain 등)는 null → 호출부가 표면화.
+// failed_security 는 fail_system 합류 금지 — R10(즉시 중단+알림)이 R8(failed_system)과 다른 종결이다
+//   (state-machine.md R10, runtime-contract EXECUTOR_OUTCOME_MAPPING_CONTRACT.securityFailure).
 function failureTerminal(status: StepStatus): string | null {
   if (status === "failed_business") return "fail_business";
-  if (status === "failed_system" || status === "failed_security") return "fail_system";
+  if (status === "failed_security") return "fail_security";
+  if (status === "failed_system") return "fail_system";
   return null;
 }
 
@@ -197,7 +200,8 @@ function collectExtractPage(state: TraversalState, nodeId: string, stepId: strin
 
 function terminalToStatus(terminal: string): StepStatus {
   if (terminal === "fail_business") return "failed_business";
-  if (terminal === "fail_system" || terminal === "fail_security") return "failed_system";
+  if (terminal === "fail_security") return "failed_security";
+  if (terminal === "fail_system") return "failed_system";
   return "success";
 }
 
@@ -533,6 +537,13 @@ async function traverse(state: TraversalState, startNode: string, initialCtx: Ru
         const tier = tiers[t];
         // 티어 sub-traversal: currentTier=tier.tier 로 실행 → 티어 서브그래프 노드 출력에 tier 부착(node.<id>.tier 투영).
         const tierTerminal = await traverse(state, tier.entryNode, ctx, tier.tier);
+        // R10 즉시 중단: security 실패는 티어 전환 재시도 금지(다른 셀렉터로 차단된 행위를 재시도 = 정책 우회).
+        //   advance_when 평가 없이 즉시 채택해 run 종결(aborting)로 표면화한다.
+        if (tierTerminal === "fail_security") {
+          adopted = tier;
+          adoptedTerminal = tierTerminal;
+          break;
+        }
         const isLast = t === tiers.length - 1;
         // 마지막 티어는 무조건 채택(§4 — 전환할 티어 없음): advance_when 을 **평가하지 않는다**(무의미한 resolvePageState
         //   side-effect + 부재참조 spurious throw 방지). 비-마지막만 advance_when(있으면)/기본(실패 terminal)으로 판정.

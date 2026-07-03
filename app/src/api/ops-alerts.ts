@@ -15,6 +15,7 @@ import { runIdempotentCommand, isRecord } from "./command";
 import { ApiResponseError } from "./errors";
 import { parseLimit } from "./list-query";
 import { readArtifactRedactionAlerts, readArtifactRedactionAlertById } from "./ops-alerts-artifact-redaction";
+import { readSecurityAbortAlerts, readSecurityAbortAlertById } from "./ops-alerts-security-abort";
 import {
   SCIM_SECRET_ROTATION_DUE_SOON_DAYS,
   scimSecretRotationDueAt,
@@ -37,7 +38,8 @@ export type OpsAlertSource =
   | "audit_verifier"
   | "readiness_evidence"
   | "session_expiry"
-  | "artifact_redaction";
+  | "artifact_redaction"
+  | "security_abort";
 type OpsAlertSubjectType =
   | "run"
   | "human_task"
@@ -357,6 +359,7 @@ const SOURCE_SET: Record<OpsAlertSource, true> = {
   readiness_evidence: true,
   session_expiry: true,
   artifact_redaction: true,
+  security_abort: true,
 };
 
 const STATUS_SET: Record<OpsAlertListStatus, true> = {
@@ -615,6 +618,9 @@ export async function readComputedOpsAlerts(
   const artifactRedactionAlerts = source === undefined || source === "artifact_redaction"
     ? await readArtifactRedactionAlerts(client, tenantId, sourceQueryLimit)
     : [];
+  const securityAbortAlerts = source === undefined || source === "security_abort"
+    ? await readSecurityAbortAlerts(client, tenantId, sourceQueryLimit)
+    : [];
 
   return [
     ...runRows.rows.map(mapRunSlaAlert),
@@ -628,6 +634,7 @@ export async function readComputedOpsAlerts(
     ...readinessEvidenceAlerts,
     ...sessionExpiryAlerts,
     ...artifactRedactionAlerts,
+    ...securityAbortAlerts,
   ];
 }
 
@@ -705,6 +712,9 @@ async function readComputedOpsAlertById(
   }
   if (alertId.startsWith("artifact_redaction:")) {
     return readArtifactRedactionAlertById(client, tenantId, alertId);
+  }
+  if (alertId.startsWith("security_abort:")) {
+    return readSecurityAbortAlertById(client, tenantId, alertId);
   }
   return null;
 }

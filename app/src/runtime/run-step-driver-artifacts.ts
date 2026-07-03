@@ -62,12 +62,13 @@ export async function appendMergedExtractArtifact(
   return { ...outcome, artifacts: [...outcome.artifacts, artifactRef] };
 }
 
-export function knownTerminal(terminal: string): "success" | "success_empty" | "fail_business" | "fail_system" | "suspend" {
+export function knownTerminal(terminal: string): "success" | "success_empty" | "fail_business" | "fail_system" | "fail_security" | "suspend" {
   if (
     terminal === "success" ||
     terminal === "success_empty" ||
     terminal === "fail_business" ||
     terminal === "fail_system" ||
+    terminal === "fail_security" ||
     terminal === "suspend"
   ) {
     return terminal;
