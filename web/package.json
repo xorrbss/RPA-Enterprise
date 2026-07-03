@@ -1,6 +1,9 @@
 {
   "name": "rpa-console",
   "version": "0.1.0",
+  "engines": {
+    "node": ">=24"
+  },
   "private": true,
   "type": "module",
   "description": "D7 운영 콘솔 — rpa_enterprise_console.html 디자인을 React+Vite로 구현. 제어평면 API(api-surface) read/command 소비.",
