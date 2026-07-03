@@ -16,6 +16,7 @@ import { WorkerRunDrive } from "./runtime-worker-run-drive";
 import { WorkerRunResume } from "./runtime-worker-run-resume";
 import { ArtifactRedactionProcessor, type SupersededObjectStore } from "./artifact-redaction-processor";
 import { ArtifactRetentionProcessor } from "./artifact-retention-processor";
+import { TenantOffboardingPurgeProcessor } from "./tenant-offboarding-purge";
 import { ArtifactIntegrityProcessor, type IntegrityObjectStore, type IntegrityMismatch } from "./artifact-integrity-processor";
 import { ArtifactOrphanProcessor, type OrphanInventoryStore } from "./artifact-orphan-processor";
 import {
@@ -119,6 +120,9 @@ export interface PgRuntimeWorkerOptions {
   readonly artifactOrphanBatchLimit?: number;
   readonly artifactOrphanMaxDeletesPerTick?: number;
   readonly allowTestArtifactLifecyclePorts?: boolean;
+  /** O4 tenant_offboarding_purge per-tick cap — 행 삭제/artifact 드레인 상한(초과 시 deferred 로 재시도 연속). */
+  readonly offboardingPurgeRowCapPerTick?: number;
+  readonly offboardingPurgeArtifactCapPerTick?: number;
   readonly defaultBrowserLeaseTtlMs?: number;
   readonly artifactRedactionMaxAttempts?: number;
   readonly artifactLifecycleClaimTtlMs?: number;
@@ -178,6 +182,7 @@ export class PgRuntimeWorker implements RuntimeWorker {
   private readonly artifactRetention: ArtifactRetentionProcessor;
   private readonly artifactIntegrity: ArtifactIntegrityProcessor;
   private readonly artifactOrphan: ArtifactOrphanProcessor;
+  private readonly offboardingPurge: TenantOffboardingPurgeProcessor;
   private readonly runDrive: WorkerRunDrive;
   private readonly runResume: WorkerRunResume;
 
@@ -189,6 +194,8 @@ export class PgRuntimeWorker implements RuntimeWorker {
     this.artifactRetention = new ArtifactRetentionProcessor(pool, options);
     this.artifactIntegrity = new ArtifactIntegrityProcessor(pool, options);
     this.artifactOrphan = new ArtifactOrphanProcessor(pool, options);
+    // O4: 오프보딩 purge 는 artifact 드레인에 기존 retention 경로(claim→object delete→tombstone)를 재사용한다.
+    this.offboardingPurge = new TenantOffboardingPurgeProcessor(pool, options, this.artifactRetention);
     this.runDrive = new WorkerRunDrive(pool, options);
     this.runResume = new WorkerRunResume(pool, options);
   }
@@ -233,6 +240,9 @@ export class PgRuntimeWorker implements RuntimeWorker {
 
       case "artifact_retention":
         return this.artifactRetention.handle(job);
+
+      case "tenant_offboarding_purge":
+        return this.offboardingPurge.handle(job);
 
       case "artifact_integrity":
         return this.artifactIntegrity.handle(job);

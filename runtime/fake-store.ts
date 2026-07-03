@@ -979,6 +979,7 @@ export class InMemoryRuntimeWorker implements RuntimeWorker {
       case "artifact_retention":
       case "artifact_integrity":
       case "artifact_orphan":
+      case "tenant_offboarding_purge":
       case "sink_deliver":
       case "ops_notification_send":
       case "integration_handoff_dispatch":

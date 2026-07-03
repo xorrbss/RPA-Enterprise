@@ -540,7 +540,8 @@ export type BypassRlsUseCase =
   | "artifact_integrity_checker"
   | "artifact_orphan_sweeper"
   | "lease_sweeper"
-  | "scheduler_infra_worker_registry";
+  | "scheduler_infra_worker_registry"
+  | "tenant_offboarding_purge";
 
 export interface BypassRlsPolicyContract {
   applicationRoleMayBypassRls: false;
@@ -565,6 +566,7 @@ export const MINIMUM_BYPASS_RLS_POLICY = {
     "artifact_orphan_sweeper",
     "lease_sweeper",
     "scheduler_infra_worker_registry",
+    "tenant_offboarding_purge",
   ],
 } as const satisfies BypassRlsPolicyContract;
 
