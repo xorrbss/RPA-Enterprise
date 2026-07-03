@@ -7,7 +7,7 @@ import { withTenantTx } from "../db/pool";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
 import { ApiResponseError } from "./errors";
 import { paginate, parsePageParams } from "./list-query";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { parseKnownBody } from "./automation-ideas";
 
 type ProcessMiningImportSourceType = "process_mining" | "task_mining" | "monitoring_export" | "api_import";

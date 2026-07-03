@@ -3,7 +3,7 @@ import { S3ObjectStore } from "../artifacts/s3-object-store";
 import type { ApiConfig } from "../config/env";
 import { FsObjectStore } from "../gateway/pg-gateway-artifact-sink";
 import { VaultSecretStore } from "../secrets/vault-secret-store";
-import type { ArtifactObjectReader } from "./server";
+import type { ArtifactObjectReader } from "./server-shared";
 
 interface SchemeRoutingArtifactObjectReaderOptions {
   readonly fs?: ArtifactObjectReader;

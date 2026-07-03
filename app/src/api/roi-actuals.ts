@@ -7,7 +7,7 @@ import { withTenantTx } from "../db/pool";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
 import { ApiResponseError } from "./errors";
 import { parseLimit } from "./list-query";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { assertIdeaExists, parseKnownBody, validateIdeaId } from "./automation-ideas";
 
 interface RoiActualEvidenceRow {

@@ -10,7 +10,7 @@ import { withTenantTx } from "../db/pool";
 import { isRecord, runIdempotentCommand } from "./command";
 import { ApiResponseError } from "./errors";
 import { appendGovernanceAudit } from "./role-assignments";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 const ROLES: readonly Role[] = ["viewer", "operator", "reviewer", "approver", "admin"];
 const SCIM_SCHEMA_REF = "scim-principal@1";

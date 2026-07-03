@@ -7,7 +7,7 @@ import { ApiResponseError } from "./errors";
 import { paginate, parsePageParams } from "./list-query";
 import { withTenantTx } from "../db/pool";
 import { isRecord, runIdempotentCommand } from "./command";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { UUID_RE } from "./server-shared";
 
 type ConnectorKind = "browser" | "api" | "file" | "notification" | "data";

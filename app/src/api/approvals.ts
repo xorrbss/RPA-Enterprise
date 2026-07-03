@@ -22,7 +22,8 @@ import { originOf } from "../runtime/site-resolution";
 import { fanOutCollectionRun } from "./approval-fan-out";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
 import { ApiResponseError } from "./errors";
-import { createRunInTx, type ApiServerDeps, requirePrincipal } from "./server";
+import { type ApiServerDeps, requirePrincipal } from "./server-shared";
+import { createRunInTx } from "./server-create-run";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

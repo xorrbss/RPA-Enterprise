@@ -9,7 +9,7 @@ import { withTenantTx } from "../db/pool";
 import { isRecord, runIdempotentCommand } from "./command";
 import { ApiResponseError } from "./errors";
 import { parseLimit } from "./list-query";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { UUID_RE } from "./server-shared";
 
 export interface OpsAlertNotificationRoute {

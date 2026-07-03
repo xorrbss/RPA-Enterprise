@@ -6,7 +6,7 @@ import { ApiResponseError } from "./errors";
 import { paginate, parsePageParams } from "./list-query";
 import { UUID_RE } from "./reads-support";
 import { mapScenarioCertification, type ScenarioCertificationRow } from "./scenario-certification";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { summarizePageStateSelectors } from "./site-page-state-contract";
 
 // ── gateway call-summary(B4): stagehand_calls 사용량/비용 집계 ──

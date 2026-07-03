@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 
 import { withTenantTx } from "../db/pool";
 import { readActiveOffboardingRequest } from "./offboarding-lock";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 export type SessionCaptureServerMode = "dev" | "off";
 

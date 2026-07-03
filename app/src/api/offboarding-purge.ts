@@ -11,7 +11,7 @@ import { isRecord, runIdempotentCommand } from "./command";
 import { ApiResponseError } from "./errors";
 import { recordOffboardingAudit, requireOffboardingSecurityAudit } from "./offboarding-export";
 import { UUID_RE } from "./reads-support";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 // ops-defaults `offboarding.purge_grace_default` — 승인 후 비가역 삭제까지의 복구 창(반출 완료 + 오조작 복구).
 const OFFBOARDING_PURGE_GRACE_DEFAULT_DAYS = 7;

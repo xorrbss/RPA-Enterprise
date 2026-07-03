@@ -33,7 +33,7 @@ import { applyRunTransition } from "../runtime/run-transition";
 import { runIdempotentCommand, isRecord, type CommandResponse } from "./command";
 import { ApiResponseError } from "./errors";
 import { validateResolutionAgainstBusinessForm } from "./human-task-form-schema";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import type { RunEnqueuer } from "./run-queue";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

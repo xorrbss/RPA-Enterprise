@@ -23,7 +23,7 @@ import type { CanonicalRequestHash, IdempotencyKey } from "../../../ts/security-
 import { withTenantTx } from "../db/pool";
 import { ApiResponseError } from "./errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 export interface CommandResponse {
   status: number;

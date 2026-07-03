@@ -12,7 +12,7 @@ import {
   recordOffboardingAudit,
   requireOffboardingSecurityAudit,
 } from "./offboarding-export";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 const RAW_EXPORT_DEFAULT_LIMIT = 1000;
 const RAW_EXPORT_MAX_LIMIT = 5000;

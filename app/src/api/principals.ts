@@ -21,7 +21,7 @@ import type { PoolClient } from "pg";
 
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
 import { ApiResponseError } from "./errors";
-import { type ApiServerDeps, requirePrincipal } from "./server";
+import { type ApiServerDeps, requirePrincipal } from "./server-shared";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_DISPLAY_NAME = 256;

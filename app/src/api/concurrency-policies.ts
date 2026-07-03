@@ -7,7 +7,7 @@ import { withTenantTx } from "../db/pool";
 import { isRecord, runIdempotentCommand } from "./command";
 import { ApiResponseError } from "./errors";
 import { appendGovernanceAudit } from "./role-assignments";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 type CredentialStatus = "active" | "deprecated" | "revoked";
 type RotationPolicy = "manual" | "periodic_30d" | "periodic_60d" | "periodic_90d";

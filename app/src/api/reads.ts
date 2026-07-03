@@ -8,7 +8,7 @@
 
 import type { FastifyInstance } from "fastify";
 
-import type { ApiServerDeps } from "./server";
+import type { ApiServerDeps } from "./server-shared";
 import { registerArtifactReadRoutes } from "./reads-artifacts";
 import { registerCapabilityReadRoutes } from "./capabilities";
 import { registerCatalogReadRoutes } from "./reads-catalog";

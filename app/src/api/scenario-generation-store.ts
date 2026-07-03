@@ -26,8 +26,8 @@ import type {
   GenerationRunRequest,
   GenerationStatus,
 } from "./scenario-generation-types";
-import type { ApiServerDeps } from "./server";
-import { createRunInTx } from "./server";
+import type { ApiServerDeps } from "./server-shared";
+import { createRunInTx } from "./server-create-run";
 
 export interface ScenarioGenerationRow {
   id: string;

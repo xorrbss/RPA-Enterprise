@@ -11,7 +11,7 @@ import { ApiResponseError } from "./errors";
 import { HUMAN_TASK_POLICY_DEFAULTS } from "./human-task-policy-defaults";
 import { paginate, parsePageParams, uuidFilter } from "./list-query";
 import { appendGovernanceAudit } from "./role-assignments";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { UUID_RE } from "./server-shared";
 
 type WebAttendedRunRequestStatus = "requested" | "run_queued" | "blocked" | "cancelled";

@@ -14,7 +14,7 @@ import {
 import { runIdempotentCommand, isRecord } from "./command";
 import { ApiResponseError } from "./errors";
 import { paginate, parsePageParams, principalIdFilter, uuidFilter } from "./list-query";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { UUID_RE } from "./server-shared";
 
 type AuditOutcome = "allow" | "deny" | "blocked" | "error";

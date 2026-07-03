@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
 import { withTenantTx } from "../db/pool";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 type SearchType = "run" | "scenario" | "human_task" | "principal" | "credential";
 

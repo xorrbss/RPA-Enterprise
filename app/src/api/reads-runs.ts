@@ -8,7 +8,7 @@ import { withTenantTx } from "../db/pool";
 import { ApiResponseError } from "./errors";
 import { paginate, parsePageParams, runStateFilter, uuidFilter } from "./list-query";
 import { UUID_RE } from "./reads-support";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import type { RunMode } from "./server-create-run";
 
 interface RunListRow {

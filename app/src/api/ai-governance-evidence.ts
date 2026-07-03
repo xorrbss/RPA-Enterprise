@@ -8,7 +8,7 @@ import { isRecord, runIdempotentCommand, type CommandResponse } from "./command"
 import { parseAiRuntimePolicyRequest, readAiRuntimePolicy, upsertAiRuntimePolicy } from "./ai-governance-enforcement";
 import { ApiResponseError } from "./errors";
 import { parseLimit } from "./list-query";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 type AiGovernanceEvidenceType = "model_registry" | "prompt_registry" | "eval_result" | "cost_control" | "human_override";
 type AiGovernanceEvidenceStatus = "valid" | "failed" | "deferred";
