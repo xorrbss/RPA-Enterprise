@@ -22,11 +22,11 @@ import { createPool, withTenantTx } from "../src/db/pool";
 import { runOpsNotificationFire, type OpsNotificationFireEnqueuer } from "../src/worker/ops-notification-fire";
 import { resolveMaintenanceTenantIds } from "../src/worker/maintenance-scheduler";
 import type { OpsAlertRoute } from "../src/runtime/ops-alert-routes";
-import {
-  insertOpsNotificationAttempt,
-  type ComputedOpsAlert,
-  type OpsNotificationWebhookSendInput,
-} from "../src/api/ops-alerts";
+import { insertOpsNotificationAttempt } from "../src/runtime/ops-alerts/notification-attempts";
+import type {
+  ComputedOpsAlert,
+  OpsNotificationWebhookSendInput,
+} from "../src/runtime/ops-alerts/types";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCHEMA = "rpa_ops_fire_int";

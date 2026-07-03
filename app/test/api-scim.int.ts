@@ -16,7 +16,7 @@ import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
 import { PgPrincipalRoleAssignmentResolver } from "../src/api/role-assignments";
 import type { RunEnqueuer } from "../src/runtime/run-queue";
 import { buildServer } from "../src/api/server";
-import { scimSigningPayload } from "../src/api/scim";
+import { scimSigningPayload } from "../src/api/scim-signature";
 import { createPool, withTenantTx } from "../src/db/pool";
 import type { PlainSecret, SecretRef, SecretStore } from "../../ts/core-types";
 import type { SecretStoreBoundary, SignedCommandRegistry } from "../../ts/security-middleware-contract";
