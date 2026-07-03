@@ -97,7 +97,7 @@ export function registerOffboardingExportRoutes(app: FastifyInstance, deps: ApiS
     const rows = await selectOffboardingExportRows(deps, principal.tenantId, createdAtFrom, createdAtTo);
 
     // 반출 결정을 본문 반환 전에 fail-closed 로 기록(설계 §4-4) — append 실패 시 본문 미반환. payload 는 범위/행수만(원문 미포함).
-    await recordOffboardingExportAudit(securityAudit, request, principal, "offboarding_metadata_export_disclosed", {
+    await recordOffboardingAudit(securityAudit, request, principal, "tenant_data.export", "offboarding_metadata_export_disclosed", {
       decision_kind: "tenant_data.export",
       delivery: "metadata_csv",
       created_at_from: nullableIso(createdAtFrom),
@@ -130,10 +130,11 @@ export function requireOffboardingSecurityAudit(deps: ApiServerDeps): DurableSec
   return deps.securityAudit;
 }
 
-export async function recordOffboardingExportAudit(
+export async function recordOffboardingAudit(
   securityAudit: DurableSecurityAuditDecisionWriter,
   request: FastifyRequest,
   principal: AuthenticatedPrincipal,
+  action: "tenant_data.export" | "tenant_data.purge.request" | "tenant_data.purge.approve",
   reason: string,
   payload: Record<string, unknown>,
 ): Promise<void> {
@@ -142,7 +143,7 @@ export async function recordOffboardingExportAudit(
     {
       tenantId: principal.tenantId,
       actor: { subjectId: principal.subjectId, roles: principal.roles },
-      action: "tenant_data.export",
+      action,
       outcome: "allow",
       reason,
       correlationId: request.correlationId as CorrelationId,

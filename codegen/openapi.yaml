@@ -1875,6 +1875,122 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /offboarding/purge-requests:
+    get:
+      tags: [Offboarding]
+      operationId: listOffboardingPurgeRequests
+      summary: List tenant offboarding purge requests
+      description: >
+        List the tenant offboarding deletion ledger (newest first, up to 50 rows). Read scope reuses
+        tenant_data.export. grace_days echoes the configured purge grace period in days.
+      responses:
+        '200':
+          description: Tenant-scoped ledger rows plus the configured grace period.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OffboardingPurgeRequestPage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Offboarding]
+      operationId: createOffboardingPurgeRequest
+      summary: Request tenant data purge (maker)
+      description: >
+        Open a tenant offboarding deletion request (status pending). Requires tenant_data.purge.request
+        (admin) and Idempotency-Key. Only one active (pending/approved/purging) request may exist per
+        tenant; a second request fails with 409 TENANT_OFFBOARDING. Every transition is recorded as a
+        fail-closed tenant_data.purge.* security audit decision in the same transaction.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OffboardingPurgeRequestCreate'
+      responses:
+        '201':
+          description: Pending purge request created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OffboardingPurgeRequest'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /offboarding/purge-requests/{request_id}/decide:
+    post:
+      tags: [Offboarding]
+      operationId: decideOffboardingPurgeRequest
+      summary: Approve or reject a purge request (checker)
+      description: >
+        Maker-checker decision on a pending purge request. Requires tenant_data.purge.approve (admin)
+        and Idempotency-Key. The requester cannot decide their own request (403 self_approval_forbidden).
+        Approval schedules the irreversible purge at now() + grace (purge_after); rejection closes the
+        request. Recorded as a fail-closed tenant_data.purge.approve security audit decision.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: request_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OffboardingPurgeDecision'
+      responses:
+        '200':
+          description: Decided request (approved rows carry purge_after).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OffboardingPurgeRequest'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /offboarding/purge-requests/{request_id}/cancel:
+    post:
+      tags: [Offboarding]
+      operationId: cancelOffboardingPurgeRequest
+      summary: Cancel a pending/approved purge request
+      description: >
+        Cancel an offboarding purge request during the recovery window. Any admin may cancel
+        (tenant_data.purge.request + Idempotency-Key) regardless of who requested or approved —
+        the grace window exists for recovery. Only pending/approved rows are cancellable; purging
+        or terminal rows fail with 409 TENANT_OFFBOARDING (not_cancellable).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: request_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Cancelled request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OffboardingPurgeRequest'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
   /audit-log/verification-runs:
     get:
       tags: [AuditLog]
@@ -4491,6 +4607,7 @@ components:
         - SHELL_COMMAND_NOT_ALLOWED
         - UNAUTHENTICATED
         - AUTHZ_FORBIDDEN
+        - TENANT_OFFBOARDING
         - CONNECTOR_PERMISSION_DENIED
         - CONNECTOR_INCOMPATIBLE
         - CONNECTOR_HOOK_FAILED
@@ -7121,6 +7238,52 @@ components:
         { human_task_id, run_id, kind, state, created_at, resolved_at, payload, result,
         result_schema, payload_ref }. resume_token, bookmark, failure_reason.message,
         credentials, cookies, and resolved SecretRef values are never included.
+    OffboardingPurgeRequestStatus:
+      type: string
+      enum: [pending, approved, rejected, cancelled, purging, purged]
+    OffboardingPurgeRequest:
+      type: object
+      required: [request_id, status, reason, requested_by, created_at, updated_at]
+      properties:
+        request_id: { type: string, format: uuid }
+        status:
+          $ref: '#/components/schemas/OffboardingPurgeRequestStatus'
+        reason: { type: string }
+        requested_by: { type: string }
+        decided_by: { type: [string, "null"] }
+        decision_reason: { type: [string, "null"] }
+        decided_at: { type: [string, "null"], format: date-time }
+        purge_after: { type: [string, "null"], format: date-time }
+        purged_at: { type: [string, "null"], format: date-time }
+        held_rows:
+          type: object
+          description: legal_hold rows that survived the purge, as table name to row count.
+          additionalProperties: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    OffboardingPurgeRequestPage:
+      type: object
+      required: [items, grace_days]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/OffboardingPurgeRequest' }
+        grace_days: { type: integer, minimum: 1 }
+    OffboardingPurgeRequestCreate:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1 }
+    OffboardingPurgeDecision:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [approved, rejected]
+        reason: { type: string }
     ProcessMiningImportPage:
       type: object
       required: [items, next_cursor]
