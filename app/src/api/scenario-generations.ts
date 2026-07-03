@@ -19,7 +19,7 @@ import type {
 } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
 import { compileScenario, type CompileOutcome } from "./compile-pipeline";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { canonicalRequestHash, completeIdempotencyInTx, idempotencyRecordRowId } from "./idempotency";
 import { apiErrorBody, isRecord, type CommandResponse } from "./command";
 import { extractFirstHttpUrl, hostOfHttpUrl, isHostAllowed, isHttpUrl } from "./scenario-generation-url";
@@ -42,7 +42,7 @@ import type {
   ScenarioPlannerContext,
   ScenarioPlannerId,
 } from "./scenario-generation-types";
-import type { RunEnqueuer } from "./run-queue";
+import type { RunEnqueuer } from "../runtime/run-queue";
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PLANNER_REPAIR_ATTEMPTS = 1;

@@ -5,7 +5,7 @@ import type { PoolClient } from "pg";
 
 import { withTenantTx } from "../db/pool";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { paginate, parsePageParams } from "./list-query";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { UUID_RE } from "./server-shared";

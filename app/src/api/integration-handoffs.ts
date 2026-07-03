@@ -7,7 +7,7 @@ import type { SecretRef } from "../../../ts/core-types";
 import type { AuthenticatedPrincipal, PrincipalId, TenantId } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
 import { isRecord, runIdempotentCommand } from "./command";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { paginate, parsePageParams } from "./list-query";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { UUID_RE } from "./server-shared";

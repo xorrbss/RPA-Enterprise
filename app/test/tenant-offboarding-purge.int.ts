@@ -19,7 +19,7 @@ import pg from "pg";
 
 import { createPool, withTenantTx } from "../src/db/pool";
 import { PgRuntimeWorker } from "../src/worker/runtime-worker";
-import { RUNTIME_LIFECYCLE_JOB_TASK, runtimeJobTaskIdentifier } from "../src/worker/graphile-runner";
+import { RUNTIME_LIFECYCLE_JOB_TASK, runtimeJobTaskIdentifier } from "../src/runtime/runtime-job-routing";
 import { resolveDueOffboardingPurgeTenantIds } from "../src/worker/maintenance-scheduler";
 import {
   TENANT_PURGE_EXCLUDED_TABLES,

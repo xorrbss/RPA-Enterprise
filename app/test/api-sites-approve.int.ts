@@ -17,7 +17,7 @@ import { SignJWT } from "jose";
 import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
-import type { RunEnqueuer } from "../src/api/run-queue";
+import type { RunEnqueuer } from "../src/runtime/run-queue";
 import { buildServer } from "../src/api/server";
 import { createPool, withTenantTx } from "../src/db/pool";
 import type { SecretRef } from "../../ts/core-types";

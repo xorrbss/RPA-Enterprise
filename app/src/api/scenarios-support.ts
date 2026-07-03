@@ -18,7 +18,7 @@ import type {
 } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
 import { compileScenario } from "./compile-pipeline";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
 import { inferRuntimeTargetForStartUrl } from "./scenario-generation-target";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";

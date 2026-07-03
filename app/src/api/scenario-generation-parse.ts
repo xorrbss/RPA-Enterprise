@@ -8,7 +8,7 @@
  * isHttpUrl(url leaf)·generation 타입(./scenario-generation-types). UUID_RE는 본 모듈 소유, 원본이 import.
  */
 import { isRecord } from "./command";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { isHttpUrl } from "./scenario-generation-url";
 import type {
   EvidencePolicy,

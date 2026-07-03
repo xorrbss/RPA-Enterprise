@@ -3,11 +3,11 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
 
-import type { OpsAlertRoute, OpsAlertAutoFireSource, OpsAlertRouteSeverity } from "./ops-alert-routes";
-import { isOpsAlertAutoFireSource } from "./ops-alert-routes";
+import type { OpsAlertRoute, OpsAlertAutoFireSource, OpsAlertRouteSeverity } from "../runtime/ops-alert-routes";
+import { isOpsAlertAutoFireSource } from "../runtime/ops-alert-routes";
 import { withTenantTx } from "../db/pool";
 import { isRecord, runIdempotentCommand } from "./command";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { parseLimit } from "./list-query";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { UUID_RE } from "./server-shared";
@@ -147,33 +147,6 @@ export function registerOpsAlertNotificationRouteRoutes(app: FastifyInstance, de
       reply.code(response.status).send(response.body);
     },
   );
-}
-
-export async function readActiveOpsAlertNotificationRoutes(
-  client: PoolClient,
-  tenantId: string,
-): Promise<OpsAlertRoute[]> {
-  const result = await client.query<OpsAlertNotificationRouteRow>(
-    `SELECT id::text, source, min_severity, provider_alias, endpoint_secret_ref,
-            callback_signature_secret_ref, route_policy_ref, recipient_group_ref,
-            allowed_hosts, enabled, created_by, created_at, updated_by, updated_at
-       FROM ops_alert_notification_routes
-      WHERE tenant_id = $1::uuid
-        AND enabled = true
-        AND deleted_at IS NULL
-      ORDER BY updated_at DESC, id DESC`,
-    [tenantId],
-  );
-  return result.rows.map((row) => ({
-    ...(row.source !== null ? { source: row.source } : {}),
-    minSeverity: row.min_severity,
-    providerAlias: row.provider_alias,
-    endpointSecretRef: row.endpoint_secret_ref,
-    allowedHosts: row.allowed_hosts,
-    routePolicyRef: row.route_policy_ref,
-    ...(row.recipient_group_ref !== null ? { recipientGroupRef: row.recipient_group_ref } : {}),
-    ...(row.callback_signature_secret_ref !== null ? { callbackSignatureSecretRef: row.callback_signature_secret_ref } : {}),
-  }));
 }
 
 async function listOpsAlertNotificationRoutes(

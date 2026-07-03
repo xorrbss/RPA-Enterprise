@@ -17,11 +17,11 @@ import { runMigrations } from "graphile-worker";
 import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
-import { PgGraphileRunEnqueuer } from "../src/api/run-queue";
+import { PgGraphileRunEnqueuer } from "../src/runtime/run-queue";
 import { buildServer } from "../src/api/server";
 import { createPool, withTenantTx } from "../src/db/pool";
-import { RUNTIME_JOB_TASK } from "../src/worker/graphile-runner";
-import { ApiResponseError } from "../src/api/errors";
+import { RUNTIME_JOB_TASK } from "../src/runtime/runtime-job-routing";
+import { ApiResponseError } from "../src/runtime/errors";
 import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
 

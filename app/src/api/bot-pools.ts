@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
 
 import { withTenantTx } from "../db/pool";
-import { workerStaleThresholdSeconds } from "../worker/worker-heartbeat-policy";
+import { workerStaleThresholdSeconds } from "../runtime/worker-heartbeat-policy";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 export type BotPoolHealth = "ok" | "warning" | "critical";

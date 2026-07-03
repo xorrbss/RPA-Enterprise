@@ -13,7 +13,8 @@ import type { TenantId } from "../../ts/security-middleware-contract";
 
 import { createPool, withTenantTx } from "../src/db/pool";
 import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent, type OutboxEmit } from "../src/runtime/outbox";
-import { runOnceRuntimeWorker, RUNTIME_JOB_TASK } from "../src/worker/graphile-runner";
+import { runOnceRuntimeWorker } from "../src/worker/graphile-runner";
+import { RUNTIME_JOB_TASK } from "../src/runtime/runtime-job-routing";
 import type { BrowserLeasePlanResolver } from "../src/worker/runtime-worker";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));

@@ -9,8 +9,8 @@
  */
 import { resolve } from "node:path";
 
-import { DEFAULT_JWT_CLAIM_MAPPING, type JwtClaimMapping, type JwtRoleMap } from "../api/auth";
-import { parseOpsAlertRoutes, type OpsAlertRoute } from "../api/ops-alert-routes";
+import { DEFAULT_JWT_CLAIM_MAPPING, type JwtClaimMapping, type JwtRoleMap } from "./jwt-claims";
+import { parseOpsAlertRoutes, type OpsAlertRoute } from "../runtime/ops-alert-routes";
 import {
   assertHttpsUrl,
   bool,

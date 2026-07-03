@@ -7,7 +7,7 @@ import type { AuthenticatedPrincipal } from "../../../ts/security-middleware-con
 import { withTenantTx } from "../db/pool";
 import { CronScheduleError, nextCronFireAfter, parseCronExpression } from "../runtime/run-trigger-schedule";
 import { runIdempotentCommand, isRecord, type CommandResponse } from "./command";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { paginate, parsePageParams, uuidFilter } from "./list-query";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { UUID_RE } from "./server-shared";

@@ -14,7 +14,7 @@ import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
 import { PgPrincipalRoleAssignmentResolver } from "../src/api/role-assignments";
-import type { RunEnqueuer } from "../src/api/run-queue";
+import type { RunEnqueuer } from "../src/runtime/run-queue";
 import { buildServer } from "../src/api/server";
 import { scimSigningPayload } from "../src/api/scim";
 import { createPool, withTenantTx } from "../src/db/pool";

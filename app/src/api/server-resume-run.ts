@@ -8,7 +8,7 @@ import type { CanonicalRequestHash, IdempotencyKey } from "../../../ts/security-
 import type { RunState, SideEffectCmd } from "../../../ts/state-machine-types";
 import { withTenantTx } from "../db/pool";
 import { applyRunTransition } from "../runtime/run-transition";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
 import { HUMAN_TASK_POLICY_DEFAULTS } from "./human-task-policy-defaults";
 import { appendGovernanceAudit } from "./role-assignments";

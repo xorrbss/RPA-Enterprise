@@ -6,7 +6,7 @@ import type { PoolClient } from "pg";
 import { withTenantTx } from "../db/pool";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
 import { parseAiRuntimePolicyRequest, readAiRuntimePolicy, upsertAiRuntimePolicy } from "./ai-governance-enforcement";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { parseLimit } from "./list-query";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 

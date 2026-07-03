@@ -12,7 +12,7 @@ import {
   type IsoDateTime,
 } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { UUID_RE } from "./reads-support";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 

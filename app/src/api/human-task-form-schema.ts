@@ -1,5 +1,5 @@
 import { isRecord } from "./command";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 
 type BusinessFormFieldType = "text" | "textarea" | "number" | "boolean" | "date" | "select";
 type ResolutionDecision = "approve" | "reject" | "correct" | "retry";

@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 
 import { HUMANTASK_TERMINAL, type HumanTaskKind, type HumanTaskState } from "../../../ts/state-machine-types";
 import { withTenantTx } from "../db/pool";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import {
   humanTaskKindFilter,
   humanTaskStateFilter,

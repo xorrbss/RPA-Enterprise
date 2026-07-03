@@ -3,11 +3,11 @@ import { fileURLToPath } from "node:url";
 
 import { SignJWT } from "jose";
 
-import { insertAuditVerificationRun } from "../src/api/audit-verification-runs";
+import { insertAuditVerificationRun } from "../src/runtime/audit-verification-runs";
 import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
-import type { RunEnqueuer } from "../src/api/run-queue";
+import type { RunEnqueuer } from "../src/runtime/run-queue";
 import { buildServer } from "../src/api/server";
 import type { AuthReadinessConfig } from "../src/api/server-shared";
 import { createPool, withTenantTx } from "../src/db/pool";

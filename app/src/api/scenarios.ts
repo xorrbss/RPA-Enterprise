@@ -13,7 +13,7 @@ import type { PoolClient } from "pg";
 import { withTenantTx } from "../db/pool";
 import { runIdempotentCommand } from "./command";
 import { compileScenario, studioValidationStagesFromCompile } from "./compile-pipeline";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { appendGovernanceAudit } from "./role-assignments";
 import { mapScenarioCertification } from "./scenario-certification";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";

@@ -5,7 +5,7 @@ import type { PoolClient } from "pg";
 
 import { withTenantTx } from "../db/pool";
 import { isRecord, runIdempotentCommand } from "./command";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { appendGovernanceAudit } from "./role-assignments";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 

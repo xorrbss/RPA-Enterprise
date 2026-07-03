@@ -8,7 +8,7 @@ import { readAiGovernanceReadiness, type AiGovernanceReadinessSnapshot } from ".
 import { DEFAULT_AUTH_READINESS_CONFIG, evaluateAuthSsoReadiness } from "./auth-readiness";
 import { readBrowserBotPool } from "./bot-pools";
 import { runIdempotentCommand, isRecord } from "./command";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { parseLimit } from "./list-query";
 import { readOpsHealth } from "./ops-health";
 import { readLatestOpsNotificationDelivery, type OpsNotificationDelivery } from "./ops-alerts";

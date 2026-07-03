@@ -6,7 +6,7 @@ import type { PoolClient } from "pg";
 import { compileScenario } from "./compile-pipeline";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
 import { withTenantTx } from "../db/pool";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { paginate, parsePageParams } from "./list-query";
 import { appendGovernanceAudit } from "./role-assignments";
 import { readProductionReadiness, type ProductionReadinessConfig } from "./production-readiness";

@@ -21,7 +21,7 @@ import { SignJWT } from "jose";
 import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
-import type { RunEnqueuer, SinkDeliverEnqueueInput } from "../src/api/run-queue";
+import type { RunEnqueuer, SinkDeliverEnqueueInput } from "../src/runtime/run-queue";
 import { buildServer } from "../src/api/server";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { ingestRawItem } from "../src/runtime/pipeline/raw-ingest";
