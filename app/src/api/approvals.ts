@@ -22,10 +22,9 @@ import { originOf } from "../runtime/site-resolution";
 import { fanOutCollectionRun } from "./approval-fan-out";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
 import { ApiResponseError } from "../runtime/errors";
-import { type ApiServerDeps, requirePrincipal } from "./server-shared";
+import { type ApiServerDeps, requirePrincipal, UUID_RE } from "./server-shared";
 import { createRunInTx } from "./server-create-run";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // 결재 처리 시나리오 이름(시드된 명명 시나리오 — seed-hiworks-approval.ts / web approval-inbox COLLECT 와 동형 name 식별).
 // 시스템-레벨 워크플로라 클라이언트가 고르지 않고 엔드포인트가 최신 prod 버전을 해소한다(인박스의 수집 발견과 동일 패턴).

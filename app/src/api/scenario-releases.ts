@@ -11,7 +11,8 @@ import { paginate, parsePageParams } from "./list-query";
 import { appendGovernanceAudit } from "./role-assignments";
 import { readProductionReadiness, type ProductionReadinessConfig } from "./production-readiness";
 import { assertScenarioVersionCertifiedForProd, mapScenarioCertification, type ScenarioCertificationRow } from "./scenario-certification";
-import { parseIfMatch, signedCommandRefsFor, UUID_RE } from "./scenarios-support";
+import { parseIfMatch, signedCommandRefsFor } from "./scenarios-support";
+import { UUID_RE } from "./server-shared";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 type ScenarioEnvironment = "dev" | "staging" | "prod";
@@ -818,6 +819,8 @@ function packageHashFor(value: unknown): string {
   return `sha256:${createHash("sha256").update(canonicalize(value)).digest("hex")}`;
 }
 
+// [R2-5 동결] 배포본 패키지 해시(scenario_releases)의 바이트 형식 — audit-record-hash 와 동일 구현이나
+//   별도 저장 도메인(둘 다 저장 해시)이라 공유 시 한쪽 변경이 다른쪽 원장을 깨는 결합을 만든다. 통합 금지.
 function canonicalize(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map((item) => canonicalize(item)).join(",")}]`;

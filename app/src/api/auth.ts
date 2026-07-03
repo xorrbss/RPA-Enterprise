@@ -10,6 +10,7 @@
  * 알고리즘은 검증기(JwtVerifier) 주입으로 분리한다 — 경계는 transport/알고리즘 무관(운영은 RS256/JWKS 검증기
  * 주입). v1 기본은 HS256 공유 시크릿. alg 화이트리스트로 alg-confusion/none을 차단한다.
  */
+import { UUID_RE } from "./server-shared";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 
 import { normalizeJwtClaimMapping, type JwtClaimMapping, type JwtRoleMap } from "../config/jwt-claims";
@@ -23,7 +24,6 @@ import type {
 } from "../../../ts/security-middleware-contract";
 
 const ROLES: ReadonlySet<string> = new Set<Role>(["viewer", "operator", "reviewer", "approver", "admin"]);
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface JwtAuthenticationBoundaryOptions {
   readonly claimMapping?: Partial<JwtClaimMapping>;

@@ -1,3 +1,4 @@
+import { redactedErrorCode } from "./redacted-error-code";
 import { randomUUID } from "node:crypto";
 
 import type pg from "pg";
@@ -169,7 +170,7 @@ async function completeFailedAttempt(
   decision: Exclude<OpsNotificationDeliveryDecision, { kind: "sent" }>,
   finalFailure: boolean,
 ): Promise<string> {
-  const errorCode = redactedErrorCode(decision.reason);
+  const errorCode = redactedErrorCode(decision.reason, "OPS_NOTIFICATION_FAILED");
   const receiptAt = new Date();
   return withTenantTx(deps.pool, input.tenantId, async (client) => {
     const status: OpsNotificationAttemptStatus = finalFailure ? "dead_letter" : "failed";
@@ -303,15 +304,6 @@ async function insertDeliveryReceipt(
       attempt.legal_hold,
     ],
   );
-}
-
-function redactedErrorCode(reason: string): string {
-  const normalized = reason
-    .trim()
-    .replace(/[^a-zA-Z0-9_.:-]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .toUpperCase();
-  return (normalized.length === 0 ? "OPS_NOTIFICATION_FAILED" : normalized).slice(0, 120);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

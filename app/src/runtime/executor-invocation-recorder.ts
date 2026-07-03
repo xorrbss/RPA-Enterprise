@@ -12,7 +12,9 @@ import type {
 import { withTenantTx } from "../db/pool";
 import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent } from "./outbox";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// 의도적으로 RFC-4122 v1-5 엄격형(api 층의 느슨한 UUID_V4_RE 와 다름) — 내부 발급(randomUUID v4) ref 의
+// 출처 검증용이라 nil/v7 등 비표준 형태를 거부한다. 느슨한 정본으로 합치지 말 것(R2-5 동결).
+const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const FINAL_RECORDED_STATUSES = new Set<StepStatus>([
   "success",
   "failed_business",
@@ -107,7 +109,7 @@ function validateInput(input: ExecutorInvocationRecordInput): NormalizedRecordIn
   const startedAt = parseIsoDate(input.result.timings.startedAt, "result.timings.startedAt");
   const endedAt = parseIsoDate(input.result.timings.endedAt, "result.timings.endedAt");
   const actionPlanCacheId = input.result.cache.actionPlanCacheId ?? null;
-  if (actionPlanCacheId !== null && !UUID_RE.test(actionPlanCacheId)) {
+  if (actionPlanCacheId !== null && !UUID_V4_RE.test(actionPlanCacheId)) {
     throw new PgExecutorInvocationRecordRequiredError("executor invocation actionPlanCacheId must be a UUID when present");
   }
 
@@ -335,7 +337,7 @@ async function requirePersistedArtifactMetadata(
 
 function inputArtifactId(ref: string): string {
   const artifactId = requireString(ref, "artifact.artifactRef");
-  if (!UUID_RE.test(artifactId)) {
+  if (!UUID_V4_RE.test(artifactId)) {
     throw new PgExecutorInvocationRecordRequiredError("executor invocation artifactRef must be an artifacts.id UUID");
   }
   return artifactId;
