@@ -2346,6 +2346,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       content: "redacted generation artifact content",
     }),
     approveSite: async () => ({ site_profile_id: "s", approval_status: "approved" }),
+    listSiteApprovals: async () => ({ items: [], next_cursor: null }),
     createSite: async () => ({
       site_profile_id: "s",
       name: "n",

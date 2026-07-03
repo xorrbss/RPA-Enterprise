@@ -145,6 +145,7 @@ import {
   type ScenarioMutationResult,
   type ScenarioVersionGovernanceStageBody,
   type ScenarioVersionItem,
+  type SiteApprovalItem,
   type SiteCreateResult,
   type SiteElementCreateBody,
   type SiteElementDeleteResult,
@@ -298,6 +299,8 @@ export interface ApiClient {
   replayAllDlq(kind: "workitem" | "sink", idempotencyKey: string): Promise<ReplayAllDlqResult>;
   // 사이트 risk 승인(approver). Idempotency-Key + body{reason?,expires_at?} → approval_status=approved.
   approveSite(siteId: string, idempotencyKey: string, opts?: { reason?: string; expires_at?: string }): Promise<unknown>;
+  // 사이트 승인 이력(site.read, api-surface §6) — 누가/언제/왜/만료. 최신순 최대 20건.
+  listSiteApprovals(siteId: string): Promise<Paginated<SiteApprovalItem>>;
   // 사이트 신규 등록(operator+, api-surface §7 POST /v1/sites). Idempotency-Key + body. url_pattern은 http(s) origin.
   createSite(body: { name: string; url_pattern: string; risk?: string; page_state_selectors?: unknown }, idempotencyKey: string): Promise<SiteCreateResult>;
   // 사이트 이름 수정(operator+, api-surface §7 PATCH /v1/sites/{id}). Idempotency-Key + body{name}. 중복 name→422.
@@ -806,6 +809,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     replayDeadLetter: (deadLetterId, idempotencyKey, kind) => post(`/v1/dlq/${deadLetterId}/replay${queryString({ kind })}`, idempotencyKey),
     replayAllDlq: (kind, idempotencyKey) => post(`/v1/dlq/replay-all${queryString({ kind })}`, idempotencyKey),
     approveSite: (siteId, key, opts) => post(`/v1/sites/${siteId}/approve`, key, opts ?? {}),
+    listSiteApprovals: (siteId) => get(`/v1/sites/${siteId}/approvals`),
     createSite: (body, key) => post(`/v1/sites`, key, body),
     updateSite: (siteId, name, key) => send("PATCH", `/v1/sites/${siteId}`, { name }, { "Idempotency-Key": key }),
     updateSitePageState: (siteId, pageStateSelectors, key) =>

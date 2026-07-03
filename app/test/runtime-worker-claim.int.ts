@@ -995,6 +995,39 @@ async function main(): Promise<void> {
     check("red-site run remains queued", redRun.status === "queued", JSON.stringify(redRun));
     check("red-site block creates no lease", (await activeLeaseCount(pool, SITE_RED)) === 0);
 
+    // 기간 한정 승인 만료 집행(A3-3): approved=true라도 approval_expires_at 경과면 미승인과 동일하게 차단.
+    await withTenantTx(pool, TENANT_A, (c) =>
+      c.query(
+        `UPDATE site_profiles SET approved = true, approved_at = now(), approval_expires_at = now() - interval '1 hour'
+          WHERE id = $1::uuid`,
+        [SITE_RED],
+      ),
+    );
+    const redExpired = await configured.handle({
+      kind: "run_claim",
+      tenantId: TENANT_A as TenantId,
+      runId: RUN_RED as RunId,
+      correlationId: CORRELATION as CorrelationId,
+    });
+    check(
+      "red site with expired approval blocks",
+      redExpired.kind === "failed" && redExpired.code === "SITE_PROFILE_BLOCKED",
+      JSON.stringify(redExpired),
+    );
+    check("expired-approval block creates no lease", (await activeLeaseCount(pool, SITE_RED)) === 0);
+    // 미래 만료 승인은 통과 — 만료 검사가 유효 승인을 과차단하지 않음(negative control).
+    await withTenantTx(pool, TENANT_A, (c) =>
+      c.query(`UPDATE site_profiles SET approval_expires_at = now() + interval '1 hour' WHERE id = $1::uuid`, [SITE_RED]),
+    );
+    const redApproved = await configured.handle({
+      kind: "run_claim",
+      tenantId: TENANT_A as TenantId,
+      runId: RUN_RED as RunId,
+      correlationId: CORRELATION as CorrelationId,
+    });
+    check("red site with unexpired approval claims", redApproved.kind === "completed", JSON.stringify(redApproved));
+    check("approved red-site run claimed", (await runStatus(pool, RUN_RED)).status === "claimed");
+
     const gatewayWorker = new PgRuntimeWorker(pool, { workerId: GATEWAY_WORKER, browserLeasePlanResolver: planResolver });
     const gatewayWorkerClaim = await gatewayWorker.handle({
       kind: "run_claim",

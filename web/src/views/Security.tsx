@@ -30,6 +30,7 @@ import { ScimProviderPanel } from "./security/ScimProviderPanel";
 import { SecretRefAuditPanel } from "./security/SecretRefAuditPanel";
 import { SessionCaptureStatus } from "./security/SessionCaptureStatus";
 import { SessionRenewalQueue, collectSessionRenewalQueue } from "./security/SessionRenewalQueue";
+import { SiteApprovalControls } from "./security/SiteApprovalControls";
 
 type SecuritySectionKey = "sites" | "access" | "secrets" | "ai" | "infra" | "offboarding";
 
@@ -200,7 +201,18 @@ export function SecurityView(): JSX.Element {
             columns={[
               { header: "사이트", render: (r) => <SiteNameEditor site={r} /> },
               { header: "위험도", render: (r) => <StatusBadge status={r.risk} /> },
-              { header: "승인", render: (r) => <StatusBadge status={r.approval_status} /> },
+              {
+                header: "승인",
+                render: (r) => (
+                  <span style={{ display: "inline-flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+                    <StatusBadge status={r.approval_status} />
+                    {/* 기간 한정 승인 표면화(A3-3) — 만료 경과 시 배지가 '만료'로 바뀌고 실행이 다시 차단된다. */}
+                    {r.approval_status === "approved" && typeof r.approval_expires_at === "string" && (
+                      <span className="label">{new Date(r.approval_expires_at).toLocaleString()} 까지</span>
+                    )}
+                  </span>
+                ),
+              },
               { header: "자동 차단", render: (r) => <StatusBadge status={r.circuit_status} kind="circuit" /> },
               { header: "세션 저장 암호화", render: (r) => sessionEncryptionBadge(r) },
               {
@@ -209,15 +221,7 @@ export function SecurityView(): JSX.Element {
                   const label = r.name ?? "사이트명 미정";
                   return (
                     <span style={{ display: "inline-flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                      {r.approval_status === "pending" && (
-                        <ActionButton
-                          label="승인"
-                          action="site.approve"
-                          confirmText={`${label} 고위험 사이트의 실행 차단을 해제하고 승인할까요? 승인 후 이 사이트 자동화를 실행할 수 있습니다.`}
-                          run={(key) => api.approveSite(r.site_profile_id, key)}
-                          invalidateKeys={[["sites"]]}
-                        />
-                      )}
+                      <SiteApprovalControls site={r} />
                       {r.login_capable === true && (
                         <span className={`badge ${r.session_ready === true ? "green" : "amber"}`}>
                           {r.session_ready === true ? "세션 등록됨" : "세션 미등록"}

@@ -35,9 +35,9 @@ CREATE TABLE site_profiles (
   url_pattern     text        NOT NULL,                     -- 사이트 식별 패턴(정규화)
   risk            text        NOT NULL DEFAULT 'green'
                     CHECK (risk IN ('green','amber','red')),  -- red = 승인 워크플로우 필요(amber=중간; api-surface/openapi SiteRisk와 정합)
-  approved        boolean     NOT NULL DEFAULT false,       -- risk=red 승인 여부(SITE_PROFILE_BLOCKED 게이트)
+  approved        boolean     NOT NULL DEFAULT false,       -- risk=red 승인 여부(SITE_PROFILE_BLOCKED 게이트; approval_expires_at 경과 시 게이트 복귀)
   approved_at     timestamptz,
-  approved_by     uuid,                                      -- approver subject id(JWT/session principal)
+  approved_by     text,                                      -- approver subject id(JWT sub 원문) — 비-UUID OIDC sub(auth0|…·이메일) 수용, uuid 캐스트 금지(scenario_releases.approved_by와 동일 규범)
   approval_reason text,
   approval_expires_at timestamptz,
   circuit_state   text        NOT NULL DEFAULT 'closed'
@@ -54,7 +54,7 @@ CREATE TABLE site_profile_approvals (
   id              uuid        PRIMARY KEY,
   tenant_id       uuid        NOT NULL,
   site_profile_id uuid        NOT NULL REFERENCES site_profiles(id),
-  approved_by     uuid        NOT NULL,
+  approved_by     text        NOT NULL,                      -- JWT sub 원문(비-UUID OIDC sub 수용)
   reason          text,
   expires_at      timestamptz,
   created_at      timestamptz NOT NULL DEFAULT now()

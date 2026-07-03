@@ -880,3 +880,28 @@
 | 계약(핸들러) | `reserved-handlers.md` @human_task·복귀 토큰 | @human_task 재개 시 `node.<owningNodeId>.*` 노출 bullet + "판정 결과 주입" 단락(출처=`human_tasks.node_id`, 주입=resume re-SELECT, 토큰 미적재) |
 | 계약(정적검증) | `ir-static-validation.md` §1 V9·신규 V13·§3·§5 | V9에 @human_task 노드 게이트(decision/correction 허용) 명시 + V13 `decision_branch_incomplete`(promote-block) + ValidationReport rule union·§5 매핑표에 V13 |
 | 비도입(C2/C3) | codegen `static-validation.ts`/IREL compile·런타임 인터프리터/worker·web | V13 구현·`node.<id>.decision/correction` 투영·재개 re-SELECT 주입 — 전부 후속 PR(C2 codegen·C3 런타임·C4 web). 이번 PR은 계약+DDL만 |
+
+## v2.31 패치 로그 (사이트 승인 하드닝 — approved_by text 정합 + 만료 집행 + 이력 조회)
+
+> **검증된 내부 불일치 해소**(3관점 감사 2026-07-03 A3-2/A3-3/A3-7 confirmed). ① `site_profiles.approved_by`/
+> `site_profile_approvals.approved_by`가 `uuid`라 승인 라우트가 JWT sub를 `::uuid` 캐스트 — 비-UUID OIDC sub
+> (auth0|…·이메일)는 22P02→미분류 500으로 **승인 워크플로우 전면 좌초**. 저장소 스스로 세운 규범과 모순:
+> `approvals.decide`는 "decided_by는 text… ::uuid 캐스트 금지"를 명문화했고 신형 `scenario_releases.approved_by`도
+> text — sites만 구 패턴 잔존이라 **text로 통일**(약한 쪽을 규범에 맞춤). ② `approval_expires_at`은 기록만 되고
+> 읽는 곳이 0곳 — 기간 한정 승인이 조용히 영구화("조용한 false 금지" 위반; 동형 만료인 scenario certification·
+> AI governance evidence는 집행됨). **런타임 게이트가 만료 경과 시 `SITE_PROFILE_BLOCKED` 복귀** + 조회 표면
+> `approval_status=expired`. ③ `site_profile_approvals`는 INSERT만 있고 조회 경로 부재 — 승인 사후 감사가 DB
+> 직접 조회 의존. **GET /v1/sites/{id}/approvals 신설**(site.read).
+> **역호환**: DDL은 uuid→text 확장(기존 UUID 값 전부 유효한 text). 응답 추가 필드는 additive. `expired`는
+> `approval_status` 신규 값이나 기존 소비자는 pending/approved만 생산하던 DB에서 만료 설정 자체가 불가능했으므로
+> 실데이터 무영향.
+
+| 항목 | 위치 | 조치 |
+|---|---|---|
+| DDL | `db/migration_core_entities.sql` site_profiles·site_profile_approvals | `approved_by` uuid→text(비-UUID OIDC sub 수용) + 주석에 캐스트 금지 규범 |
+| 명령 | `app/src/api/sites.ts` applySiteApproval | `::uuid` 캐스트 2건 제거(UPDATE·감사 INSERT) |
+| 런타임 게이트 | `app/src/worker/runtime-worker-run-support.ts` | red 게이트를 `!approved OR approval_expired`로 확장(만료=미승인과 동일 차단) |
+| 조회 | `app/src/api/reads-catalog.ts` mapSite·신규 라우트 | `approval_status=pending\|approved\|expired` + `approved_by`/`approved_at`/`approval_expires_at` 투영, `GET /v1/sites/{id}/approvals`(최신 20건) |
+| 계약 | `api-surface.md` §6 sites | GET 목록/상세 필드·approve 만료 의미론·approvals 이력 행 추가 |
+| 콘솔 | `web/src/views/security/` | 승인 다이얼로그(사유·만료 입력, UTC ISO 전송)·`expired` 배지·승인 이력 열람 |
+| 검증 | `app/test/api-sites-approve.int.ts`·`app/test/runtime-worker-claim.int.ts`·web vitest | 비-UUID sub 승인 200·만료 시 SITE_PROFILE_BLOCKED·이력 조회·재승인 해제 |
