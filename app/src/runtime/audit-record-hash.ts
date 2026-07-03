@@ -34,6 +34,8 @@ function normalizeTs(value: string | Date | null): string | null {
   return new Date(value).toISOString();
 }
 
+// [R2-5 동결] 감사 체인 저장 해시(audit_log.hash)의 바이트 형식 — 변경 시 기존 행 검증이 전부 깨진다.
+//   scenario-releases 의 canonicalize 와 바이트 동일하지만 별도 저장 도메인이라 통합하지 않는다(각자 동결).
 function canonicalize(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map((item) => canonicalize(item)).join(",")}]`;

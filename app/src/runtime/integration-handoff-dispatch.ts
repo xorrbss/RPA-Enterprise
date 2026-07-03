@@ -1,3 +1,4 @@
+import { redactedErrorCode } from "./redacted-error-code";
 import { randomUUID } from "node:crypto";
 
 import type pg from "pg";
@@ -170,7 +171,7 @@ async function completeFailedAttempt(
   decision: Exclude<IntegrationHandoffDispatchDecision, { kind: "accepted" }>,
   finalFailure: boolean,
 ): Promise<string> {
-  const errorCode = redactedErrorCode(decision.reason);
+  const errorCode = redactedErrorCode(decision.reason, "INTEGRATION_HANDOFF_DISPATCH_FAILED");
   return withTenantTx(deps.pool, input.tenantId, async (client) => {
     const status: IntegrationHandoffDispatchAttemptStatus = finalFailure ? "dead_letter" : "failed";
     const updatedAttempt = await client.query(
@@ -247,15 +248,6 @@ async function completeFailedAttempt(
     await deps.enqueuer.enqueueRuntimeJob(client, job, deps.retryAfterMs);
     return nextAttemptId;
   });
-}
-
-function redactedErrorCode(reason: string): string {
-  const normalized = reason
-    .trim()
-    .replace(/[^a-zA-Z0-9_.:-]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .toUpperCase();
-  return (normalized.length === 0 ? "INTEGRATION_HANDOFF_DISPATCH_FAILED" : normalized).slice(0, 120);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

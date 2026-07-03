@@ -7,7 +7,7 @@ import { withTenantTx } from "../db/pool";
 import { isRecord, runIdempotentCommand } from "./command";
 import { ApiResponseError } from "../runtime/errors";
 import { appendGovernanceAudit } from "./role-assignments";
-import { requirePrincipal, type ApiServerDeps } from "./server-shared";
+import { requirePrincipal, type ApiServerDeps, UUID_RE } from "./server-shared";
 
 type CredentialStatus = "active" | "deprecated" | "revoked";
 type RotationPolicy = "manual" | "periodic_30d" | "periodic_60d" | "periodic_90d";
@@ -53,7 +53,6 @@ interface ConcurrencyPolicyItem {
   readonly replaced_by_credential_ref: string | null;
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CREDENTIAL_PURPOSES = new Set(["executor"]);
 const ROTATION_POLICIES = new Set<RotationPolicy>(["manual", "periodic_30d", "periodic_60d", "periodic_90d"]);
 const MAX_REASON = 500;

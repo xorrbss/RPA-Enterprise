@@ -26,9 +26,8 @@ import { withTenantTx } from "../db/pool";
 import { runIdempotentCommand, type CommandResponse } from "./command";
 import { ApiResponseError } from "../runtime/errors";
 import type { SinkDeliverEnqueueInput } from "../runtime/run-queue";
-import { requirePrincipal, type ApiServerDeps } from "./server-shared";
+import { requirePrincipal, type ApiServerDeps, UUID_RE } from "./server-shared";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** ?kind 판별(workitem|sink). 누락→workitem 기본, 무효→422(GET /v1/dlq?kind=와 동일 규약). */
 function parseReplayKind(raw: unknown): "workitem" | "sink" {

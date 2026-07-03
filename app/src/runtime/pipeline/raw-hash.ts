@@ -18,6 +18,8 @@
 import { createHash } from "node:crypto";
 
 /** 재귀 정규화: 키 정렬 + NFC + volatile 제외. JSON 직렬화 가능한 표현으로 환원한다. */
+// [R2-5 동결] raw_items.raw_hash 멱등 dedup 키의 바이트 형식(NFC 정규화 포함) — scim/webhook 의
+//   canonicalize 와 형식이 다르며(그쪽은 NFC 없음) 서로 대체 불가. 통합 금지.
 function canonicalize(value: unknown, volatile?: ReadonlySet<string>): unknown {
   if (typeof value === "string") return value.normalize("NFC");
   if (Array.isArray(value)) return value.map((v) => canonicalize(v, volatile));

@@ -28,6 +28,7 @@ import { ERROR_CATALOG, type ApiError } from "../../../ts/error-catalog";
 import { withTenantTx } from "../db/pool";
 
 /** canonical request hash(method+path+body, 정렬 직렬화). 동일 Idempotency-Key의 본문 변조(#7)를 탐지. */
+// [R2-5 동결] 멱등키 저장소의 요청 해시 바이트 형식 — 변경 시 재시도 요청이 신규로 오판된다. 통합 금지.
 export function canonicalRequestHash(method: string, path: string, body: unknown): string {
   return createHash("sha256").update(stableStringify({ method, path, body: body ?? null })).digest("hex");
 }

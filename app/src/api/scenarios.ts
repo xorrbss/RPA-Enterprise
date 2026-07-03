@@ -16,20 +16,8 @@ import { compileScenario, studioValidationStagesFromCompile } from "./compile-pi
 import { ApiResponseError } from "../runtime/errors";
 import { appendGovernanceAudit } from "./role-assignments";
 import { mapScenarioCertification } from "./scenario-certification";
-import { requirePrincipal, type ApiServerDeps } from "./server-shared";
-import {
-  cloneIrWithVersion,
-  isRecord,
-  parseIfMatch,
-  parseVersionParam,
-  promoteScenario,
-  promoteScenarioFromRun,
-  resolveRunTargetForIr,
-  signedCommandRefsFor,
-  UUID_RE,
-  type ScenarioVersionDetailRow,
-  type ScenarioVersionListRow,
-} from "./scenarios-support";
+import { requirePrincipal, type ApiServerDeps, UUID_RE } from "./server-shared";
+import { cloneIrWithVersion, isRecord, parseIfMatch, parseVersionParam, promoteScenario, promoteScenarioFromRun, resolveRunTargetForIr, signedCommandRefsFor, type ScenarioVersionDetailRow, type ScenarioVersionListRow } from "./scenarios-support";
 
 interface CertificationBody {
   readonly reason: string;

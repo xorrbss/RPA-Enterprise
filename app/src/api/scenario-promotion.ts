@@ -14,6 +14,7 @@
  * 본 모듈은 순수 변환(DB/IO 없음)이다. 캡처 plan 의 DB 조회(run→{node_id→ActionPlan})와 승격 시나리오 버전
  * 저장은 후속 슬라이스(②/③)에서 본 함수를 호출한다.
  */
+import { isRecord } from "./server-shared";
 import type { ActionPlan } from "../executor/action-plan-cache";
 
 export interface PromotionSkip {
@@ -30,9 +31,6 @@ export interface PromotionResult {
   readonly skipped: readonly PromotionSkip[];
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** node.what 에서 결정형화 대상 act(action==="act", 기존 click_selector 없음) 의 인덱스. 없으면 -1. */
 function firstPromotableActIndex(what: readonly unknown[]): number {

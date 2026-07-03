@@ -10,13 +10,12 @@ import { withTenantTx } from "../db/pool";
 import { isRecord, runIdempotentCommand } from "./command";
 import { ApiResponseError } from "../runtime/errors";
 import { appendGovernanceAudit } from "./role-assignments";
-import { requirePrincipal, type ApiServerDeps } from "./server-shared";
+import { requirePrincipal, type ApiServerDeps, UUID_RE } from "./server-shared";
 
 const ROLES: readonly Role[] = ["viewer", "operator", "reviewer", "approver", "admin"];
 const SCIM_SCHEMA_REF = "scim-principal@1";
 const SCIM_SIGNATURE_RE = /^sha256=([a-f0-9]{64})$/i;
 const SCIM_PROVIDER_KEY_RE = /^[a-z0-9][a-z0-9._:-]{1,63}$/;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export type ScimSecretRotationPolicy = "manual" | "periodic_30d" | "periodic_60d" | "periodic_90d";
 export type ScimSecretRotationStatus = "manual" | "current" | "due_soon" | "overdue" | "decommissioned";
 export const SCIM_SECRET_ROTATION_DUE_SOON_DAYS = 7;
@@ -1357,6 +1356,8 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(canonicalize(value)) ?? "null";
 }
 
+// [R2-5 동결] SCIM 인바운드 HMAC 서명 페이로드의 바이트 형식 — 외부 IdP 계약. raw-hash 와 달리 NFC 없음.
+//   통합/변경 금지(서명 검증 전면 파손).
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map((item) => canonicalize(item));
   if (isRecord(value)) {

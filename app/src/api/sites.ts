@@ -31,10 +31,9 @@ import { parseSitePageStateConfig } from "../executor/site-page-state-config";
 import { originOf } from "../runtime/site-resolution";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
 import { ApiResponseError } from "../runtime/errors";
-import { type ApiServerDeps, requirePrincipal } from "./server-shared";
+import { type ApiServerDeps, requirePrincipal, UUID_RE } from "./server-shared";
 import { summarizePageStateSelectors } from "./site-page-state-contract";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface ApproveBody {
   readonly reason?: string;
