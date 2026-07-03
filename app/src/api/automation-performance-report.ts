@@ -5,7 +5,7 @@ import type { FastifyInstance } from "fastify";
 import { withTenantTx } from "../db/pool";
 import { csvCell, csvWithBom, guardSpreadsheetFormula } from "./csv";
 import { ApiResponseError } from "./errors";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 const REPORT_TZ = "Asia/Seoul";
 const XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";

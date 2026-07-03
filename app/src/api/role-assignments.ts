@@ -16,7 +16,7 @@ import { computeAuditHash } from "./audit-record-hash";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
 import { ApiResponseError } from "./errors";
 import { paginate, parsePageParams } from "./list-query";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { UUID_RE } from "./server-shared";
 
 const ROLES = ["viewer", "operator", "reviewer", "approver", "admin"] as const satisfies readonly Role[];

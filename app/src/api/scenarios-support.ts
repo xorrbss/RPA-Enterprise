@@ -21,7 +21,7 @@ import { compileScenario } from "./compile-pipeline";
 import { ApiResponseError } from "./errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
 import { inferRuntimeTargetForStartUrl } from "./scenario-generation-target";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { promoteActsToDeterministic } from "./scenario-promotion";
 import { loadRunActionPlans } from "./scenario-promotion-store";
 import type { ScenarioCertificationStatus, ScenarioGovernanceStage } from "./scenario-certification";

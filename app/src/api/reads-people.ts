@@ -13,7 +13,7 @@ import {
   uuidFilter,
 } from "./list-query";
 import { UUID_RE } from "./reads-support";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 interface HumanTaskRow {
   id: string;

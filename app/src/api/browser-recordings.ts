@@ -12,7 +12,7 @@ import { compileScenario, studioValidationStagesFromCompile } from "./compile-pi
 import { ApiResponseError } from "./errors";
 import { paginate, parseLimit, parsePageParams } from "./list-query";
 import { resolveRunTargetForIr, signedCommandRefsFor } from "./scenarios-support";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { UUID_RE } from "./server-shared";
 
 type RecordingStatus = "recording" | "completed" | "discarded" | "failed";

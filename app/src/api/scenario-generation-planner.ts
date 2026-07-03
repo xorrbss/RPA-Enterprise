@@ -17,7 +17,7 @@ import {
   recordingPolicy,
   type RecordingPolicy,
 } from "./scenario-generation-policy";
-import type { ApiServerDeps } from "./server";
+import type { ApiServerDeps } from "./server-shared";
 import type {
   EvidencePolicy,
   GenerationCapabilities,

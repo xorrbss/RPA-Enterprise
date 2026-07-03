@@ -29,7 +29,7 @@ import { finalizeDraftIrEvidence, looksLikeSideEffectPrompt, paginationPlan, sce
 import { inferRuntimeTargetForRequest } from "./scenario-generation-target";
 import { encodeListCursor, loadGenerationForRun, loadScenarioVersionIrForRun, mapGenerationRow, persistGeneration, persistGenerationRun, type ScenarioGenerationRow } from "./scenario-generation-store";
 import { upsertFailedGenerationLedger } from "./scenario-generation-failed-ledger";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import type {
   EvidencePolicy,
   GenerationCapabilities,

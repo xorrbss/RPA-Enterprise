@@ -360,9 +360,3 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   return app;
 }
 
-// 분해 전 공개 표면 보존(consumers import from "./server") — server-shared/server-create-run 구현 재노출.
-export { requirePrincipal };
-export type { ApiServerDeps, AuthReadinessConfig };
-export { createRunInTx } from "./server-create-run";
-export type { CreateRunInTxInput } from "./server-create-run";
-export type { ArtifactObjectReader } from "./server-shared";

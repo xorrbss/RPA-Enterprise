@@ -6,7 +6,7 @@ import { workerStaleThresholdSeconds } from "../worker/worker-heartbeat-policy";
 import { isRecord, runIdempotentCommand } from "./command";
 import { ApiResponseError } from "./errors";
 import { appendGovernanceAudit } from "./role-assignments";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { UUID_RE } from "./server-shared";
 
 const POOL_KEY_RE = /^[a-z0-9][a-z0-9_-]{0,62}$/;

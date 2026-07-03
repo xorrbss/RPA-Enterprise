@@ -9,7 +9,7 @@ import { CronScheduleError, nextCronFireAfter, parseCronExpression } from "../ru
 import { runIdempotentCommand, isRecord, type CommandResponse } from "./command";
 import { ApiResponseError } from "./errors";
 import { paginate, parsePageParams, uuidFilter } from "./list-query";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { UUID_RE } from "./server-shared";
 
 type RunTriggerStatus = "enabled" | "paused" | "archived";

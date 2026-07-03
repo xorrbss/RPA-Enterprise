@@ -12,7 +12,7 @@ import { appendGovernanceAudit } from "./role-assignments";
 import { readProductionReadiness, type ProductionReadinessConfig } from "./production-readiness";
 import { assertScenarioVersionCertifiedForProd, mapScenarioCertification, type ScenarioCertificationRow } from "./scenario-certification";
 import { parseIfMatch, signedCommandRefsFor, UUID_RE } from "./scenarios-support";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 type ScenarioEnvironment = "dev" | "staging" | "prod";
 type ReleaseTargetEnvironment = Extract<ScenarioEnvironment, "staging" | "prod">;

@@ -6,7 +6,7 @@ import { withTenantTx } from "../db/pool";
 import { ApiResponseError } from "./errors";
 import { paginate, parsePageParams, workitemStateFilter } from "./list-query";
 import { UUID_RE } from "./reads-support";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 interface WorkitemRow {
   id: string;

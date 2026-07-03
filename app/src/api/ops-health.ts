@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
 
 import { withTenantTx } from "../db/pool";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 export type OpsHealthStatus = "ok" | "warning" | "critical";
 

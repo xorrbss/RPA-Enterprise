@@ -22,7 +22,7 @@ import {
   scimSecretRotationStatus,
   type ScimSecretRotationPolicy,
 } from "./scim";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { UUID_RE } from "./server-shared";
 import { verifyWebhookSignature, webhookSigningPayload } from "./webhook-trigger-auth";
 

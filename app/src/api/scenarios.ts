@@ -16,7 +16,7 @@ import { compileScenario, studioValidationStagesFromCompile } from "./compile-pi
 import { ApiResponseError } from "./errors";
 import { appendGovernanceAudit } from "./role-assignments";
 import { mapScenarioCertification } from "./scenario-certification";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import {
   cloneIrWithVersion,
   isRecord,

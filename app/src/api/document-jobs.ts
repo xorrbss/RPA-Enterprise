@@ -22,7 +22,7 @@ import {
 } from "./document-idp-extractor";
 import { ApiResponseError } from "./errors";
 import { paginate, parsePageParams } from "./list-query";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { UUID_RE } from "./server-shared";
 
 const ARTIFACT_READ_AUDIT_RETENTION_DAYS = 90;

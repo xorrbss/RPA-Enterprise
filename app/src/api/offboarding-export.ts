@@ -13,7 +13,7 @@ import {
 import { withTenantTx } from "../db/pool";
 import { csvRow, csvWithBom } from "./csv";
 import { ApiResponseError } from "./errors";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 // offboarding export audit 보존일수 — artifact.read audit(ARTIFACT_READ_AUDIT_RETENTION_DAYS=90)과 동일 기준 재사용(비발명).
 const OFFBOARDING_EXPORT_AUDIT_RETENTION_DAYS = 90;
