@@ -1768,7 +1768,11 @@ export interface DocumentValidationTaskResult {
 export interface SiteItem {
   readonly site_profile_id: string;
   readonly risk: string;
+  // pending | approved | expired(기간 한정 승인 만료 — 런타임 게이트 복귀, 재승인 필요)
   readonly approval_status: string;
+  readonly approved_by?: string | null;
+  readonly approved_at?: string | null;
+  readonly approval_expires_at?: string | null;
   readonly circuit_status: string;
   readonly name?: string;
   readonly url_pattern?: string;
@@ -1781,6 +1785,14 @@ export interface SiteItem {
   readonly default_network_policy_id?: string | null;
   readonly page_state_summary?: SitePageStateSummary;
   readonly page_state_selectors?: unknown | null;
+}
+
+// GET /v1/sites/{id}/approvals — 승인 이력(불변 감사 원장) 행.
+export interface SiteApprovalItem {
+  readonly approved_by: string;
+  readonly reason: string | null;
+  readonly expires_at: string | null;
+  readonly created_at: string;
 }
 
 export interface SitePageStateSummary {

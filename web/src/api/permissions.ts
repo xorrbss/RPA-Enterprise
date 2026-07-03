@@ -1,5 +1,7 @@
 import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { RBAC_ROLE_ACTIONS, RBAC_ROLE_LABELS } from "../../../ts/rbac-policy";
+import { useApiClient } from "./context";
 
 // UI gating is a convenience layer only. The backend RoleMatrixRbacMiddleware
 // is still authoritative, but the console now reads the same RBAC matrix source.
@@ -111,8 +113,21 @@ export function useSubject(): string | null {
   return useMemo(() => decodeSubject(localStorage.getItem("rpa.token")), []);
 }
 
+// A3-1: UI 게이팅을 서버 효과 역할(토큰∪수동부여 합산, /v1/auth/readiness current_principal.roles)로 전환.
+// 콘솔에서 수동 부여한 역할이 대상자 화면(버튼/섹션)에 반영되지 않던 결함 해소. 서버 응답 전/실패 시엔
+// 토큰 클레임 폴백(기존 동작 보존) — 게이팅은 편의 계층이고 최종 강제는 백엔드 rbacAction.
+// queryKey에 subject를 포함해 토큰 교체(다른 사용자 재접속) 시 이전 사용자의 캐시 역할이 새 세션에 새지 않게 한다.
 export function useRoles(): readonly string[] {
-  return useMemo(() => decodeRoles(localStorage.getItem("rpa.token")), []);
+  const api = useApiClient();
+  const token = localStorage.getItem("rpa.token");
+  const tokenRoles = useMemo(() => decodeRoles(token), [token]);
+  const readiness = useQuery({
+    queryKey: ["auth-readiness", decodeSubject(token) ?? "anonymous"],
+    queryFn: () => api.getAuthReadiness(),
+    enabled: token !== null && token !== "",
+    staleTime: 60_000,
+  });
+  return readiness.data?.current_principal.roles ?? tokenRoles;
 }
 
 export function useCan(): (action: string) => boolean {

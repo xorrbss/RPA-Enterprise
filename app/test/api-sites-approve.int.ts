@@ -4,7 +4,10 @@
  * 실행(temp PG15 게이트):
  *   node scripts/db-temp-postgres-gate.mjs -- npm --prefix app exec tsx -- app/test/api-sites-approve.int.ts
  * 검증: approver 승인→200 + approved=true + 감사 행, RBAC 거부(viewer/operator→403), 404(미존재/cross-tenant),
- *       422(malformed body·멱등키 누락), 멱등 replay(중복 승인 행 없음).
+ *       422(malformed body·멱등키 누락), 멱등 replay(중복 승인 행 없음),
+ *       비-UUID OIDC sub 승인자 200(A3-2: approved_by=text, ::uuid 캐스트 금지),
+ *       만료 표면(A3-3: expires_at 경과 → GET approval_status=expired, 재승인으로 해제),
+ *       승인 이력 조회(A3-7: GET /v1/sites/{id}/approvals — 누가/언제/왜/만료).
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -25,8 +28,11 @@ const SCHEMA = "rpa_sites_approve_int";
 const TENANT_A = "00000000-0000-0000-0000-0000000000a1";
 const TENANT_B = "00000000-0000-0000-0000-0000000000b2";
 const SITE_RED = "7a000000-0000-0000-0000-000000000001";
+const SITE_RED2 = "7a000000-0000-0000-0000-000000000002";
 const SITE_B = "7b000000-0000-0000-0000-000000000001";
 const APPROVER_SUB = "11111111-0000-0000-0000-000000000001";
+// 실 IdP sub 형상(auth0|…) — UUID가 아니다. 승인 라우트가 ::uuid 캐스트를 하면 22P02→500으로 좌초하는 회귀 가드.
+const OIDC_APPROVER_SUB = "auth0|approver@corp.example";
 
 const SECRET = new TextEncoder().encode("sites-approve-int-secret-do-not-use-in-prod-0123456789");
 const signedCommandRegistry: SignedCommandRegistry = {
@@ -50,12 +56,12 @@ function mint(claims: Record<string, unknown>): Promise<string> {
 
 type Pool = ReturnType<typeof createPool>;
 
-async function seedSite(pool: Pool, tenant: string, id: string): Promise<void> {
+async function seedSite(pool: Pool, tenant: string, id: string, name = "red-site"): Promise<void> {
   await withTenantTx(pool, tenant, (c) =>
     c.query(
       `INSERT INTO site_profiles (id, tenant_id, name, url_pattern, risk, approved, circuit_state)
-       VALUES ($1,$2,'red-site',$3,'red',false,'closed')`,
-      [id, tenant, `https://red.example/*`],
+       VALUES ($1,$2,$4,$3,'red',false,'closed')`,
+      [id, tenant, `https://${name}.example/*`, name],
     ),
   );
 }
@@ -87,6 +93,7 @@ async function main(): Promise<void> {
       setup.release();
     }
     await seedSite(pool, TENANT_A, SITE_RED);
+    await seedSite(pool, TENANT_A, SITE_RED2, "red-site-2");
     await seedSite(pool, TENANT_B, SITE_B);
     console.log("seeded red sites (tenant A + B)");
 
@@ -155,6 +162,57 @@ async function main(): Promise<void> {
       // 7) tenant B approver는 자기 사이트 승인 가능(격리 양방향)
       const okB = await post(`/v1/sites/${SITE_B}/approve`, approverB, "k-b");
       check("tenant B approver approves own site → 200", okB.statusCode === 200, okB.body);
+
+      // 8) 비-UUID OIDC sub 승인자(A3-2): auth0|… sub가 22P02 없이 200 + text로 기록.
+      const oidcApprover = await mint({ sub: OIDC_APPROVER_SUB, tenant_id: TENANT_A, roles: ["approver"] });
+      const past = new Date(Date.now() - 3_600_000).toISOString();
+      const okOidc = await post(`/v1/sites/${SITE_RED2}/approve`, oidcApprover, "k-oidc", {
+        reason: "파일럿 한시 승인",
+        expires_at: past,
+      });
+      check("non-UUID OIDC sub approve → 200 (no 22P02/500)", okOidc.statusCode === 200, okOidc.body);
+      check("non-UUID approved_by echoed", okOidc.json().approved_by === OIDC_APPROVER_SUB, okOidc.body);
+      check("DB: non-UUID approved_by 기록", (await siteState(pool, TENANT_A, SITE_RED2)).by === OIDC_APPROVER_SUB);
+
+      const getJson = (url: string, token: string) =>
+        app.inject({ method: "GET", url, headers: { authorization: `Bearer ${token}` } });
+
+      // 9) 만료 표면(A3-3): expires_at 경과 → approval_status=expired(조용한 영구화 금지).
+      const listExpired = await getJson(`/v1/sites?risk=red`, viewer);
+      check("GET /v1/sites → 200 (viewer, site.read)", listExpired.statusCode === 200, listExpired.body);
+      const expiredItem = (listExpired.json().items as { site_profile_id: string; approval_status: string; approval_expires_at: string | null }[]).find(
+        (s) => s.site_profile_id === SITE_RED2,
+      );
+      check("expired approval → approval_status=expired", expiredItem?.approval_status === "expired", JSON.stringify(expiredItem));
+      check("approval_expires_at projected", expiredItem?.approval_expires_at === past, JSON.stringify(expiredItem));
+
+      // 재승인(만료 없음) → approved로 복귀.
+      const reapprove = await post(`/v1/sites/${SITE_RED2}/approve`, oidcApprover, "k-oidc-2", { reason: "상시 승인 전환" });
+      check("re-approve after expiry → 200", reapprove.statusCode === 200, reapprove.body);
+      const listApproved = await getJson(`/v1/sites?risk=red`, viewer);
+      const approvedItem = (listApproved.json().items as { site_profile_id: string; approval_status: string }[]).find(
+        (s) => s.site_profile_id === SITE_RED2,
+      );
+      check("re-approve clears expired → approved", approvedItem?.approval_status === "approved", JSON.stringify(approvedItem));
+
+      // 10) 승인 이력(A3-7): 불변 원장 최신순 — 누가/언제/왜/만료.
+      const history = await getJson(`/v1/sites/${SITE_RED2}/approvals`, viewer);
+      check("GET approvals history → 200 (site.read)", history.statusCode === 200, history.body);
+      const items = history.json().items as { approved_by: string; reason: string | null; expires_at: string | null }[];
+      check("history has 2 entries (최신순)", items.length === 2, history.body);
+      check(
+        "history rows carry who/why/expiry",
+        items[0]?.approved_by === OIDC_APPROVER_SUB &&
+          items[0]?.reason === "상시 승인 전환" &&
+          items[0]?.expires_at === null &&
+          items[1]?.reason === "파일럿 한시 승인" &&
+          items[1]?.expires_at === past,
+        history.body,
+      );
+      const historyAbsent = await getJson(`/v1/sites/70000000-0000-0000-0000-0000000000ff/approvals`, viewer);
+      check("absent site history → 404", historyAbsent.statusCode === 404, historyAbsent.body);
+      const historyCross = await getJson(`/v1/sites/${SITE_RED2}/approvals`, approverB);
+      check("cross-tenant history → 404 (RLS, 존재 비노출)", historyCross.statusCode === 404, historyCross.body);
     } finally {
       await app.close();
     }

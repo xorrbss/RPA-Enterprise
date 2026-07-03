@@ -263,9 +263,10 @@ async function applySiteApproval(
     throw new ApiResponseError("RESOURCE_NOT_FOUND");
   }
   // 승인 반영(flip-to-true, 멱등 안전): approved + approver/시각/사유/만료.
+  // approved_by는 text — JWT sub 원문(auth0|…·이메일 등 비-UUID OIDC sub)에 ::uuid 캐스트 금지(22P02→미분류 500).
   await client.query(
     `UPDATE site_profiles
-        SET approved = true, approved_by = $1::uuid, approved_at = now(),
+        SET approved = true, approved_by = $1, approved_at = now(),
             approval_reason = $2, approval_expires_at = $3::timestamptz
       WHERE id = $4::uuid AND tenant_id = $5::uuid`,
     [approvedBy, body.reason ?? null, body.expiresAt ?? null, siteId, tenantId],
@@ -273,7 +274,7 @@ async function applySiteApproval(
   // 감사 행(불변 이력) — 매 승인마다 1행.
   await client.query(
     `INSERT INTO site_profile_approvals (id, tenant_id, site_profile_id, approved_by, reason, expires_at)
-     VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6::timestamptz)`,
+     VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::timestamptz)`,
     [randomUUID(), tenantId, siteId, approvedBy, body.reason ?? null, body.expiresAt ?? null],
   );
   return { status: 200, body: { site_profile_id: siteId, approved: true, approved_by: approvedBy } };
