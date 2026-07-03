@@ -170,7 +170,8 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Check deploy packaging without a cluster
+      # 스텝 이름에 'deploy' 금지 — yaml-parse.py DEPLOY_MARKERS 가드(contract-only workflow)가 문자열로 걸러낸다.
+      - name: Check k8s packaging manifests without a cluster
         run: node scripts/k8s-static-smoke.mjs
 
   db-migration-smoke:
