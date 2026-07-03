@@ -1025,6 +1025,7 @@ export interface RuntimeWorkerJob {
     | "artifact_retention"
     | "artifact_integrity"
     | "artifact_orphan"
+    | "tenant_offboarding_purge"
     | "dlq_replay"
     | "sink_deliver"
     | "ops_notification_send"

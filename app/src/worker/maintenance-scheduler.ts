@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 
 import { PgGraphileRunEnqueuer } from "../api/run-queue";
-import type { PgPool } from "../db/pool";
+import { withTenantTx, type PgPool } from "../db/pool";
 import type { RuntimeWorkerJob } from "../../../ts/runtime-contract";
 import type { CorrelationId, TenantId } from "../../../ts/security-middleware-contract";
 import { processDueRunTriggers } from "./run-trigger-scheduler";
@@ -104,6 +104,18 @@ export function buildIntegritySweeperJobs(
 // object-store 는 테넌트 분할이 아니므로 per-tenant fanout 이 아니라 1회 전역 스캔(BYPASSRLS)으로 처리한다.
 export function buildOrphanSweeperJob(correlationId: () => string = randomUUID): RuntimeWorkerJob {
   return { kind: "artifact_orphan", correlationId: correlationId() as CorrelationId };
+}
+
+// O4 tenant_offboarding_purge — 만기(approved+purge_after 경과) 또는 재개(purging) 원장 테넌트만 대상(일배치, KST 02시).
+export function buildOffboardingPurgeJobs(
+  tenantIds: readonly string[],
+  correlationId: () => string = randomUUID,
+): RuntimeWorkerJob[] {
+  return tenantIds.map((tenantId) => ({
+    kind: "tenant_offboarding_purge",
+    tenantId: tenantId as TenantId,
+    correlationId: correlationId() as CorrelationId,
+  }));
 }
 
 // 일배치 묶음(retention + integrity per-tenant + orphan 전역 1건). 동일 cadence·idempotent.
@@ -334,13 +346,77 @@ export async function runDailySweeper(pool: PgPool, input: DailySweeperInput): P
     discoveryError = err;
   }
 
+  // O4: 오프보딩 purge 는 원장 기준의 독자 due 집합 — artifact-due 발견 집합에 숨기지 않는다(만기 테넌트가
+  //   artifact 없이도 존재 가능). 발견 실패는 다른 일배치를 막지 않되 조용히 삼키지 않는다(아래 rethrow).
+  let purgeTenantIds: readonly string[] = [];
+  let purgeDiscoveryError: unknown;
+  try {
+    purgeTenantIds = await resolveDueOffboardingPurgeTenantIds(pool, input.tenantIds, input.now(), {
+      lifecycleBypassPool: input.lifecycleBypassPool,
+    });
+  } catch (err) {
+    purgeDiscoveryError = err;
+  }
+
   await enqueueBatch(pool, input.enqueuer, [
     ...buildRetentionSweeperJobs(tenantIds, input.correlationId),
     ...buildIntegritySweeperJobs(tenantIds, input.correlationId),
     buildOrphanSweeperJob(input.correlationId),
+    ...buildOffboardingPurgeJobs(purgeTenantIds, input.correlationId),
   ]);
 
   if (discoveryError !== undefined) throw discoveryError;
+  if (purgeDiscoveryError !== undefined) throw purgeDiscoveryError;
+}
+
+/**
+ * O4: purge 대상 테넌트 — 만기 approved 또는 재개할 purging 원장 보유 테넌트만.
+ * 구성 목록이 있으면 그 안에서 due 검사(app role, RLS 스코프), 없으면 BYPASSRLS 발견(감사 필수).
+ */
+export async function resolveDueOffboardingPurgeTenantIds(
+  pool: PgPool,
+  configuredTenantIds: readonly string[],
+  now: Date,
+  options: LifecycleTenantDiscoveryOptions = {},
+): Promise<readonly string[]> {
+  if (configuredTenantIds.length > 0) {
+    const due: string[] = [];
+    for (const tenantId of configuredTenantIds) {
+      const isDue = await withTenantTx(pool, tenantId, async (client) => {
+        const res = await client.query(
+          `SELECT 1 FROM tenant_offboarding_requests
+            WHERE status = 'purging' OR (status = 'approved' AND purge_after <= $1::timestamptz)
+            LIMIT 1`,
+          [now.toISOString()],
+        );
+        return res.rows.length > 0;
+      });
+      if (isDue) due.push(tenantId);
+    }
+    return due;
+  }
+  const lifecycleBypassPool = requireLifecycleBypassPool(
+    options.lifecycleBypassPool,
+    "resolveDueOffboardingPurgeTenantIds",
+  );
+  const client = await lifecycleBypassPool.connect();
+  try {
+    await assertLifecycleBypassUse(
+      client as PoolClient,
+      "scheduler_infra_worker_registry",
+      "maintenance.offboarding_purge_tenant_discovery",
+    );
+    const res = await client.query<{ tenant_id: string }>(
+      `SELECT DISTINCT tenant_id::text AS tenant_id
+         FROM tenant_offboarding_requests
+        WHERE status = 'purging' OR (status = 'approved' AND purge_after <= $1::timestamptz)
+        ORDER BY tenant_id`,
+      [now.toISOString()],
+    );
+    return res.rows.map((row) => row.tenant_id);
+  } finally {
+    client.release();
+  }
 }
 
 export async function resolveAuditVerifierTenantIds(
