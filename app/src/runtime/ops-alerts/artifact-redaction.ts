@@ -8,9 +8,7 @@
  */
 import type { PoolClient } from "pg";
 
-import type { ComputedOpsAlert } from "./ops-alerts";
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { UUID_RE, type ComputedOpsAlert } from "./types";
 
 interface ArtifactRedactionFailureRow {
   artifact_id: string;

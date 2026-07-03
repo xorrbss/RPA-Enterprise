@@ -16,13 +16,13 @@
  */
 import type { PoolClient } from "pg";
 
-import {
-  insertOpsNotificationAttempt,
-  readComputedOpsAlerts,
-  type ComputedOpsAlert,
-  type OpsAlertSeverity,
-  type OpsNotificationWebhookSendInput,
-} from "../api/ops-alerts";
+import { readComputedOpsAlerts } from "../runtime/ops-alerts/compute";
+import { insertOpsNotificationAttempt } from "../runtime/ops-alerts/notification-attempts";
+import type {
+  ComputedOpsAlert,
+  OpsAlertSeverity,
+  OpsNotificationWebhookSendInput,
+} from "../runtime/ops-alerts/types";
 import { readActiveOpsAlertNotificationRoutes } from "../runtime/ops-alert-notification-store";
 import type { OpsNotificationSendEnqueueInput } from "../runtime/run-queue";
 import { withTenantTx, type PgPool } from "../db/pool";

@@ -9,10 +9,8 @@
  */
 import type { PoolClient } from "pg";
 
-import { ERROR_CATALOG, type ErrorCode } from "../../../ts/error-catalog";
-import type { ComputedOpsAlert } from "./ops-alerts";
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { ERROR_CATALOG, type ErrorCode } from "../../../../ts/error-catalog";
+import { UUID_RE, type ComputedOpsAlert } from "./types";
 
 // 카탈로그가 단일 진실원천(error-catalog.ts) — 보안 분류 코드 집합을 여기서 파생(하드코딩 금지).
 const SECURITY_ERROR_CODES = Object.entries(ERROR_CATALOG)
