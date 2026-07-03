@@ -1,208 +1,31 @@
-import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { useApiClient } from "../api/context";
 import { useCan, useSubject } from "../api/permissions";
-import type { ApiClient } from "../api/client";
 import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
 import { DashboardEnvironmentState, environmentErrorKind, type DashboardEnvironmentError } from "../components/DashboardEnvironmentState";
 import { ActionButton } from "../components/ActionButton";
 import { FilterSelect } from "../components/FilterSelect";
-import { HumanTaskReviewPanel } from "../components/HumanTaskReviewPanel";
-import { SlideOver } from "../components/SlideOver";
 import { StatusBadge, kindLabel, statusLabel } from "../components/badges";
-import { ErrorState, Loading, desktopStateForError } from "../components/states";
-import { mergeParams, navigate, useHashIdParam, useHashParam } from "../router";
-import { formatDeadline } from "../util/time";
+import { mergeParams, useHashIdParam, useHashParam } from "../router";
 import { HUMANTASK_KINDS, HUMANTASK_STATES } from "./filters";
 import { ApprovalInboxView } from "./ApprovalInbox";
 import type { HumanTaskItem } from "../api/types";
 import { HUMAN_TASK_TERMINAL_STATES, isActiveHumanTask } from "./humanTaskFilters";
-
-const KEYS = [["human-tasks"]] as const;
-
-function dueTime(task: HumanTaskItem): number {
-  return task.timeout !== null ? Date.parse(task.timeout) : Number.POSITIVE_INFINITY;
-}
-
-function shortRef(id: string): string {
-  return id.slice(0, 8);
-}
-
-function humanTaskRef(id: string): string {
-  return `접수번호 #${shortRef(id)}`;
-}
-
-function principalLabel(
-  assignee: string | null,
-  principalOptions: readonly { value: string; label?: string }[],
-): string {
-  if (assignee === null) return "미배정";
-  const match = principalOptions.find((option) => option.value === assignee);
-  if (match?.label !== undefined && match.label.trim() !== "") return match.label;
-  return "담당자 정보 확인 필요";
-}
-
-function timeoutActionLabel(value: string | null): string {
-  switch (value) {
-    case null:
-      return "—";
-    case "escalate":
-      return "상위 담당자에게 이관";
-    case "retry":
-      return "자동 재검토";
-    case "cancel":
-      return "자동 종료";
-    default:
-      return "처리 정책 확인 필요";
-  }
-}
-
-function DeadlineText({ value }: { value: string | null | undefined }): JSX.Element {
-  const deadline = formatDeadline(value);
-  if (deadline.text === "-") return <span className="subtle">-</span>;
-  if (deadline.overdue) return <span className="badge red" title={value ?? undefined}>{deadline.text}</span>;
-  return <span title={value ?? undefined}>{deadline.text}</span>;
-}
-
-function hasBusinessForm(task: HumanTaskItem): boolean {
-  const schema = task.result_schema;
-  return schema !== null && schema !== undefined && typeof schema === "object" && !Array.isArray(schema)
-    && (schema as { version?: unknown }).version === "business_form_v1";
-}
-
-function artifactCount(task: HumanTaskItem): number {
-  return task.artifact_refs?.length ?? 0;
-}
-
-function hasStructuredResultSchema(task: HumanTaskItem): boolean {
-  const schema = task.result_schema;
-  if (schema === null || schema === undefined) return false;
-  if (typeof schema !== "object" || Array.isArray(schema)) return true;
-  return Object.keys(schema as Record<string, unknown>).length > 0;
-}
-
-function requiresStructuredReviewInput(task: HumanTaskItem): boolean {
-  return hasStructuredResultSchema(task) || artifactCount(task) > 0;
-}
-
-function isDocumentValidationTask(task: HumanTaskItem): boolean {
-  return task.kind === "validation" && (hasBusinessForm(task) || artifactCount(task) > 0);
-}
-
-// 상태별 운영자 액션(state-machine H1/H2/H3/H5/H6). 권한/assignee 범위는 백엔드가 강제.
-// principalOptions = /v1/principals 담당자 디렉터리(value=배정값 sub, label=표시이름). '배정' 입력의 datalist로만 쓰며 자유 입력 폴백은 유지.
-function HumanTaskActions({
-  api,
-  task,
-  principalOptions,
-  inDetail = false,
-}: {
-  api: ApiClient;
-  task: HumanTaskItem;
-  principalOptions: readonly { value: string; label?: string }[];
-  inDetail?: boolean;
-}): JSX.Element {
-  const id = task.human_task_id;
-  const subject = useSubject();
-  // '내 담당으로 지정' 단축 — 현재 토큰 sub로 self-assign(직접입력 없이 가장 흔한 케이스). 검증은 백엔드가 최종 강제.
-  //   sub는 비-UUID OIDC 식별자(auth0|…·이메일)여도 무방 — human_tasks.assignee 는 text 컬럼이고 필터도 `= $4::text`
-  //   (uuid 캐스트 없음, principalIdFilter 는 임의 문자열 허용). 과거의 isUuid 보수 가드는 불필요라 제거(비-UUID 실증 테스트 동반).
-  const selfAssign = subject !== null && subject.length > 0 ? (
-    <ActionButton
-      label="내 담당으로 지정"
-      action="human_task.assign"
-      confirmText="이 업무를 내 담당으로 지정할까요?"
-      run={(key) => api.assignHumanTask(id, subject, key)}
-      invalidateKeys={KEYS}
-    />
-  ) : null;
-  // 타인 배정: /v1/principals 담당자 디렉터리(datalist, 이름 표시) + 자유 입력. assignee는 PrincipalId(JWT sub) 자유형
-  //   string이라 디렉터리 밖 값도 허용(폴백). 디렉터리 항목은 이름(display_name)으로 보이고 배정값은 sub.
-  const assign = (
-    <ActionButton
-      label="담당자 지정"
-      action="human_task.assign"
-      confirmText="이 업무의 담당자를 지정할까요?"
-      inputLabel="담당자 선택 또는 직접 입력"
-      inputOptions={principalOptions}
-      run={(key, assignee) => {
-        // 빈 값은 다이얼로그 확인 비활성으로 1차 차단 + 여기서도 방어(조용한 실패 금지).
-        if (assignee === undefined || assignee === "") return Promise.reject(new Error("담당자를 입력하세요."));
-        return api.assignHumanTask(id, assignee, key);
-      }}
-      invalidateKeys={KEYS}
-    />
-  );
-  const escalate = (
-    <ActionButton
-      label="이관"
-      action="human_task.escalate"
-      confirmText="이 업무를 상위 담당자에게 이관할까요? 담당자가 비워지고 이관 대기 목록에 올라갑니다."
-      inputLabel="이관 사유 (선택)"
-      inputOptional
-      run={(key, reason) => api.escalateHumanTask(id, key, reason !== undefined && reason.trim() !== "" ? reason.trim() : undefined)}
-      invalidateKeys={KEYS}
-    />
-  );
-  const requiresStructuredReview = requiresStructuredReviewInput(task);
-  const structuredReviewAction = inDetail ? (
-    <span className="subtle">위 검토 영역에서 결과를 제출하세요.</span>
-  ) : (
-    <button className="btn" type="button" onClick={() => mergeParams({ ht: id })}>
-      검토 입력
-    </button>
-  );
-  // U2-1: 구조화 검토 1건이 지정(확인)→시작(확인)→입력→제출 4단계였다 — 일괄 승인이 이미 쓰는 H1→H2 체인
-  //   (task+step 결정형 멱등키, 재시도 안전)을 단건용으로 재사용해 확인 1회로 in_progress+검토 폼에 도달한다.
-  //   타인에게 배정된 업무는 제외(가로채기 방지) — 그 경우 기존 시작/이관 경로 그대로.
-  const reviewChain =
-    subject !== null &&
-    subject.length > 0 &&
-    requiresStructuredReview &&
-    (task.state === "open" || task.state === "escalated" || (task.state === "assigned" && task.assignee === subject)) ? (
-      <ActionButton
-        label="내가 검토 시작"
-        action="human_task.assign"
-        confirmText="이 업무를 내 담당으로 지정하고 바로 검토를 시작할까요? 검토 입력 화면이 열립니다."
-        run={async (key) => {
-          if (task.state === "open" || task.state === "escalated") {
-            await api.assignHumanTask(id, subject, `${key}:a`);
-          }
-          await api.startHumanTask(id, `${key}:s`);
-          mergeParams({ ht: id }); // 시작 즉시 상세(검토 폼)로 — in_progress 가 되면 판정 입력이 렌더된다.
-          return { started: true };
-        }}
-        invalidateKeys={KEYS}
-        successText="검토를 시작했습니다 — 검토 영역에서 판정을 입력하세요."
-      />
-    ) : null;
-  return (
-    <span style={{ display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
-      {task.state === "open" && (<>{reviewChain}{selfAssign}{assign}{escalate}</>)}
-      {task.state === "assigned" && (
-        <>
-          {reviewChain}
-          <ActionButton label="시작" action="human_task.start" confirmText="이 업무를 시작할까요?" run={(key) => api.startHumanTask(id, key)} invalidateKeys={KEYS} />
-          {escalate}
-        </>
-      )}
-      {task.state === "in_progress" && (
-        <>
-          {requiresStructuredReview ? (
-            structuredReviewAction
-          ) : (
-            <ActionButton label="완료 처리" action={`human_task.resolve.${task.kind}`} confirmText="업무를 완료 처리하고 자동화를 이어서 진행할까요? (별도 입력 항목 없이 완료됩니다)" run={(key) => api.resolveHumanTask(id, key)} invalidateKeys={KEYS} />
-          )}
-          {escalate}
-        </>
-      )}
-      {task.state === "escalated" && (<>{reviewChain}{selfAssign}{assign}</>)}
-      {HUMAN_TASK_TERMINAL_STATES.has(task.state) && "—"}
-    </span>
-  );
-}
+import {
+  DeadlineText,
+  artifactCount,
+  dueTime,
+  hasBusinessForm,
+  humanTaskRef,
+  isDocumentValidationTask,
+  principalLabel,
+  requiresStructuredReviewInput,
+} from "./human-tasks/labels";
+import { HumanTaskActions, KEYS } from "./human-tasks/HumanTaskActions";
+import { HumanTaskDetailPanel } from "./human-tasks/HumanTaskDetailPanel";
 
 // 통합 '사람 확인' 인박스 — 소스 탭: 확인 업무(@human_task 스트림) / 결재 목록(수집 아티팩트 리스트, 구 '결재 인박스' 메뉴 흡수).
 // 탭 상태는 해시 파라미터(source)로 보존 → 딥링크·뒤로가기·레거시 #approvalInbox 리다이렉트(#humanTasks?source=approvals) 대응.
@@ -481,82 +304,5 @@ function HumanTaskStreamView(): JSX.Element {
         ]}
       />
     </>
-  );
-}
-
-// 사람확인 상세 — getHumanTask(RLS 스코프). on_timeout=human_tasks.on_timeout 실 컬럼(만료 시 동작을 사전 확인).
-// 전이 버튼은 인박스와 동일한 HumanTaskActions를 재사용(DRY — 중복 동선 아님). run_id 있으면 원본 실행 교차링크,
-// null이면 미렌더(조용한 false 금지). 판정-데이터 입력은 불포함(v1 resolve=순수 continue 신호 — 상세는 관찰만 추가).
-function HumanTaskDetailPanel({
-  api,
-  humanTaskId,
-  detail,
-  principalOptions,
-  onClose,
-}: {
-  api: ApiClient;
-  humanTaskId: string;
-  detail: UseQueryResult<HumanTaskItem>;
-  principalOptions: readonly { value: string; label?: string }[];
-  onClose: () => void;
-}): JSX.Element {
-  const errorState = detail.isError ? desktopStateForError(detail.error) : null;
-  return (
-    <SlideOver title={`검토 업무 상세 — ${humanTaskRef(humanTaskId)}`} onClose={onClose}>
-      {detail.isLoading ? (
-        <Loading />
-      ) : detail.isError ? (
-        <ErrorState
-          title={errorState?.title}
-          message={`검토 업무를 확인하지 못했습니다. ${errorState?.message ?? ""}`}
-          details={errorState?.details}
-          onRetry={() => void detail.refetch()}
-        />
-      ) : detail.data !== undefined ? (
-        <>
-          <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 16px", margin: 0 }}>
-            <dt className="subtle">종류</dt>
-            <dd style={{ margin: 0 }}>{kindLabel(detail.data.kind)}</dd>
-            <dt className="subtle">상태</dt>
-            <dd style={{ margin: 0 }}>
-              <StatusBadge status={detail.data.state} />
-            </dd>
-            <dt className="subtle">담당자</dt>
-            <dd style={{ margin: 0 }}>
-              <span title={principalLabel(detail.data.assignee, principalOptions)}>{principalLabel(detail.data.assignee, principalOptions)}</span>
-            </dd>
-            <dt className="subtle">마감</dt>
-            <dd style={{ margin: 0 }}><DeadlineText value={detail.data.timeout} /></dd>
-            <dt className="subtle">만료 시 처리</dt>
-            <dd style={{ margin: 0 }}>
-              <span title={timeoutActionLabel(detail.data.on_timeout)}>{timeoutActionLabel(detail.data.on_timeout)}</span>
-            </dd>
-            {detail.data.run_id !== null && (
-              <>
-                <dt className="subtle">연결된 실행</dt>
-                <dd style={{ margin: 0 }}>
-                  <button className="linklike" type="button" onClick={() => { navigate("runTrace", { run: detail.data!.run_id as string }); }}>
-                    연결된 실행 보기 <span aria-hidden="true">→</span>
-                  </button>
-                </dd>
-              </>
-            )}
-            {detail.data.escalation_reason !== null && detail.data.escalation_reason !== undefined && detail.data.escalation_reason !== "" && (
-              <>
-                <dt className="subtle">이관 사유</dt>
-                <dd style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{detail.data.escalation_reason}</dd>
-              </>
-            )}
-          </dl>
-          <HumanTaskReviewPanel api={api} task={detail.data} />
-          <div style={{ marginTop: 14 }}>
-            <strong style={{ fontSize: 13 }}>업무 처리</strong>
-            <div style={{ marginTop: 8 }}>
-              <HumanTaskActions api={api} task={detail.data} principalOptions={principalOptions} inDetail />
-            </div>
-          </div>
-        </>
-      ) : null}
-    </SlideOver>
   );
 }

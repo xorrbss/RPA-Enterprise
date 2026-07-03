@@ -7,126 +7,30 @@ import type {
   SiteElementCreateBody,
   SiteElementItem,
   SiteElementProbeResponse,
-  SiteElementProbeStatus,
   SiteElementStability,
-  SiteElementType,
-  SiteElementUpdateBody,
   SiteItem,
 } from "../api/types";
 import { ErrorState, Loading } from "../components/states";
 import { errorLabel } from "../components/badges";
-
-const ELEMENT_TYPES: readonly SiteElementType[] = ["button", "input", "link", "table", "row", "field", "message", "other"];
-const STABILITIES: readonly SiteElementStability[] = ["stable", "review_needed", "broken"];
-
-const TYPE_LABEL: Record<SiteElementType, string> = {
-  button: "버튼",
-  input: "입력 필드",
-  link: "링크",
-  table: "테이블",
-  row: "행",
-  field: "데이터 필드",
-  message: "메시지",
-  other: "기타",
-};
-
-const STABILITY_LABEL: Record<SiteElementStability, string> = {
-  stable: "안정",
-  review_needed: "검토 필요",
-  broken: "재점검 필요",
-};
-
-const PROBE_LABEL: Record<SiteElementProbeStatus, string> = {
-  matched: "검증됨",
-  not_found: "찾을 수 없음",
-  invalid_selector: "화면 조건 오류",
-  failed: "검증 실패",
-  not_run: "검증 안 됨",
-};
-
-function stabilityTone(value: SiteElementStability): string {
-  if (value === "stable") return "green";
-  if (value === "review_needed") return "amber";
-  return "red";
-}
-
-function probeTone(value: SiteElementProbeStatus): string {
-  if (value === "matched") return "green";
-  if (value === "not_found" || value === "not_run") return "amber";
-  return "red";
-}
-
-function probeMessageTone(value: SiteElementProbeStatus): "green" | "amber" | "red" {
-  if (value === "matched") return "green";
-  if (value === "not_found" || value === "not_run") return "amber";
-  return "red";
-}
-
-function probeReasonLabel(result: SiteElementProbeResponse): string {
-  switch (result.reason_code) {
-    case "SAMPLE_URL_REQUIRED":
-      return "샘플 주소가 필요합니다.";
-    case "SELECTOR_PROBE_PROVIDER_UNAVAILABLE":
-      return "브라우저 검증 연결이 필요합니다.";
-    case "SELECTOR_NOT_FOUND":
-      return "해당 화면에서 요소를 찾지 못했습니다.";
-    case "SELECTOR_INVALID":
-      return "화면에서 찾는 조건 문법을 확인하세요.";
-    case "SELECTOR_PROBE_FAILED":
-      return "브라우저 검증 중 오류가 발생했습니다.";
-    case null:
-      return PROBE_LABEL[result.probe_status];
-    default:
-      return PROBE_LABEL[result.probe_status];
-  }
-}
-
-function probeMatchLabel(result: SiteElementProbeResponse): string {
-  if (result.match_count !== null) return `${result.match_count}개 일치`;
-  if (result.probe_status === "not_run") return "검증 연결 대기";
-  return "일치 수 확인 불가";
-}
-
-const EMPTY_FORM: SiteElementCreateBody = {
-  element_key: "",
-  label: "",
-  selector: "",
-  element_type: "button",
-  stability: "stable",
-  source: "manual",
-  sample_url: "",
-  notes: "",
-};
-
-interface BulkProbeItem {
-  label: string;
-  status: SiteElementProbeStatus;
-  reason: string;
-}
-
-interface BulkProbeState {
-  running: boolean;
-  total: number;
-  checked: number;
-  matched: number;
-  attention: number;
-  failed: number;
-  results: readonly BulkProbeItem[];
-}
-
-function formatCount(value: number): string {
-  return new Intl.NumberFormat("ko-KR").format(value);
-}
-
-function appendUniqueSites(prev: readonly SiteItem[], next: readonly SiteItem[]): SiteItem[] {
-  const seen = new Set(prev.map((item) => item.site_profile_id));
-  return [...prev, ...next.filter((item) => !seen.has(item.site_profile_id))];
-}
-
-function appendUniqueElements(prev: readonly SiteElementItem[], next: readonly SiteElementItem[]): SiteElementItem[] {
-  const seen = new Set(prev.map((item) => item.element_id));
-  return [...prev, ...next.filter((item) => !seen.has(item.element_id))];
-}
+import { ElementForm, cleanCreateBody, cleanUpdateBody } from "./site-elements/ElementForm";
+import { RepositorySummary } from "./site-elements/RepositorySummary";
+import {
+  EMPTY_FORM,
+  PROBE_LABEL,
+  STABILITIES,
+  STABILITY_LABEL,
+  TYPE_LABEL,
+  appendUniqueElements,
+  appendUniqueSites,
+  formatCount,
+  probeMatchLabel,
+  probeMessageTone,
+  probeReasonLabel,
+  probeTone,
+  stabilityTone,
+  type BulkProbeItem,
+  type BulkProbeState,
+} from "./site-elements/helpers";
 
 export function SiteElementsView(): JSX.Element {
   const api = useApiClient();
@@ -529,145 +433,4 @@ export function SiteElementsView(): JSX.Element {
       )}
     </div>
   );
-}
-
-function RepositorySummary(props: {
-  total: number;
-  usageTotal: number;
-  reviewCount: number;
-  brokenCount: number;
-  hasMore: boolean;
-  priority: readonly SiteElementItem[];
-  bulkProbe: BulkProbeState | null;
-  bulkDisabled: boolean;
-  onBulkProbe: () => void;
-  onSelect: (elementId: string) => void;
-}): JSX.Element {
-  const unstableCount = props.reviewCount + props.brokenCount;
-  return (
-    <div className="object-repo-summary-wrap">
-      <section className="object-repo-summary" aria-label="저장소 유지보수 요약">
-        <div>
-          <span>등록 요소</span>
-          <strong>{formatCount(props.total)}{props.hasMore ? "+" : ""}</strong>
-          {props.hasMore && <small>현재 표시 기준</small>}
-        </div>
-        <div>
-          <span>점검 필요</span>
-          <strong>{formatCount(unstableCount)}</strong>
-          <small>검토 {formatCount(props.reviewCount)} · 재점검 {formatCount(props.brokenCount)}</small>
-        </div>
-        <div>
-          <span>누적 사용</span>
-          <strong>{formatCount(props.usageTotal)}</strong>
-        </div>
-      </section>
-      <section className="object-repo-bulk" aria-label="현재 목록 재검증">
-        <div>
-          <strong>현재 목록 재검증</strong>
-          <span className="subtle">
-            {props.bulkProbe?.running === true
-              ? `${formatCount(props.bulkProbe.checked)} / ${formatCount(props.bulkProbe.total)}건 진행 중`
-              : `${formatCount(props.total)}건의 현재 표시 목록을 샘플 주소 기준으로 점검합니다.`}
-          </span>
-        </div>
-        <button className="btn" type="button" disabled={props.bulkDisabled || props.bulkProbe?.running === true} onClick={props.onBulkProbe}>
-          {props.bulkProbe?.running === true ? "재검증 중" : "현재 목록 재검증"}
-        </button>
-        {props.bulkProbe !== null && (
-          <div className="object-repo-bulk-result" role="status">
-            <span className="badge green">검증됨 {formatCount(props.bulkProbe.matched)}건</span>
-            <span className="badge amber">확인 필요 {formatCount(props.bulkProbe.attention)}건</span>
-            <span className="badge red">실패 {formatCount(props.bulkProbe.failed)}건</span>
-            {props.bulkProbe.results.slice(0, 3).map((result) => (
-              <small key={`${result.label}-${result.status}-${result.reason}`}>
-                {result.label} · {PROBE_LABEL[result.status]} · {result.reason}
-              </small>
-            ))}
-          </div>
-        )}
-      </section>
-      {props.priority.length > 0 ? (
-        <section className="object-repo-priority" aria-label="우선 점검 요소">
-          <strong>우선 점검</strong>
-          {props.priority.map((element) => (
-            <button key={element.element_id} className="object-repo-priority-item" type="button" onClick={() => props.onSelect(element.element_id)}>
-              <span>{element.label}</span>
-              <small title="여러 자동화에서 재사용되는 화면 요소입니다.">업무 식별명 · {formatCount(element.usage_count)}회 · {STABILITY_LABEL[element.stability]}</small>
-            </button>
-          ))}
-        </section>
-      ) : (
-        <p className="catalog-status-note">점검 필요한 저장소 요소가 없습니다.</p>
-      )}
-    </div>
-  );
-}
-
-function ElementForm({ form, setForm, lockKey }: {
-  form: SiteElementCreateBody;
-  setForm: (value: SiteElementCreateBody) => void;
-  lockKey: boolean;
-}): JSX.Element {
-  const update = (patch: Partial<SiteElementCreateBody>): void => setForm({ ...form, ...patch });
-  return (
-    <div className="object-repo-form">
-      <label>
-        <span>업무 식별명</span>
-        <input value={form.element_key} disabled={lockKey} onChange={(event) => update({ element_key: event.target.value })} placeholder="예: 제출버튼" />
-      </label>
-      <label>
-        <span>이름</span>
-        <input value={form.label} onChange={(event) => update({ label: event.target.value })} placeholder="제출 버튼" />
-      </label>
-      <label className="field-wide">
-        <span>화면에서 찾는 조건</span>
-        <input value={form.selector} onChange={(event) => update({ selector: event.target.value })} placeholder="예: 제출 버튼, 저장 버튼, 주문번호 입력칸" />
-      </label>
-      <label>
-        <span>유형</span>
-        <select value={form.element_type ?? "other"} onChange={(event) => update({ element_type: event.target.value as SiteElementType })}>
-          {ELEMENT_TYPES.map((type) => <option key={type} value={type}>{TYPE_LABEL[type]}</option>)}
-        </select>
-      </label>
-      <label>
-        <span>상태</span>
-        <select value={form.stability ?? "stable"} onChange={(event) => update({ stability: event.target.value as SiteElementStability })}>
-          {STABILITIES.map((value) => <option key={value} value={value}>{STABILITY_LABEL[value]}</option>)}
-        </select>
-      </label>
-      <label className="field-wide">
-        <span>샘플 주소</span>
-        <input value={form.sample_url ?? ""} onChange={(event) => update({ sample_url: event.target.value })} placeholder="https://portal.example.com/form" />
-      </label>
-      <label className="field-wide">
-        <span>메모</span>
-        <textarea value={form.notes ?? ""} onChange={(event) => update({ notes: event.target.value })} placeholder="공유되는 업무 흐름이나 주의사항" />
-      </label>
-    </div>
-  );
-}
-
-function cleanCreateBody(form: SiteElementCreateBody): SiteElementCreateBody {
-  return {
-    element_key: form.element_key.trim(),
-    label: form.label.trim(),
-    selector: form.selector.trim(),
-    element_type: form.element_type,
-    stability: form.stability,
-    source: form.source ?? "manual",
-    ...(form.sample_url?.trim() ? { sample_url: form.sample_url.trim() } : {}),
-    ...(form.notes?.trim() ? { notes: form.notes.trim() } : {}),
-  };
-}
-
-function cleanUpdateBody(form: SiteElementCreateBody): SiteElementUpdateBody {
-  return {
-    label: form.label.trim(),
-    selector: form.selector.trim(),
-    element_type: form.element_type,
-    stability: form.stability,
-    ...(form.sample_url?.trim() ? { sample_url: form.sample_url.trim() } : { sample_url: null }),
-    ...(form.notes?.trim() ? { notes: form.notes.trim() } : { notes: null }),
-  };
 }

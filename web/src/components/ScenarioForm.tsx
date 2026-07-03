@@ -2,13 +2,20 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
-import { ApiError, type ValidationResult } from "../api/types";
-import { errorLabel } from "./badges";
+import { type ValidationResult } from "../api/types";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { StepBuilder, stepBuilderInitialFromIr, stepBuilderRepresentable } from "./StepBuilder";
 import { OperatorWizard, wizardInitialFromIr } from "./OperatorWizard";
 import { StudioValidationStages } from "./StudioValidationStages";
 import { VisualFlowCanvas } from "./VisualFlowCanvas";
+import {
+  bumpVersion,
+  studioModeFromIr,
+  template,
+  withStudioMode,
+  type EditorMode,
+} from "./scenario-form/ir-mode";
+import { describe, validationReportLines } from "./scenario-form/validation-report";
 
 // 자동화(시나리오) 작성/편집 폼. 자동화 정의 원문(ir.schema)을 입력 → 저장 시 백엔드 컴파일 파이프라인
 // (ajv→IREL→V1–V11)이 검증. 편집은 GET으로 직전 IR을 불러와 prefill하고 [검증](dry-run) 후
@@ -22,180 +29,6 @@ export type ScenarioFormMode =
       readonly name: string;
       readonly version: number;
     };
-type EditorMode = "easy" | "form" | "visual" | "ir";
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
-// 권위 있는 유효 IR(app/test/scenarios.int.ts validIr 기준). 새 자동화 작성의 출발 템플릿.
-function template(name: string, version: number): string {
-  return JSON.stringify(
-    {
-      meta: { name, version, studio_mode: "ir" },
-      start: "n1",
-      nodes: {
-        n1: {
-          what: [{ action: "observe" }],
-          next: "n2",
-        },
-        n2: {
-          what: [
-            {
-              action: "extract",
-              instruction: "현재 페이지에서 extracted_rows 데이터를 추출하라.",
-              schema_ref: "extracted_rows",
-            },
-          ],
-          terminal: "success",
-        },
-      },
-    },
-    null,
-    2,
-  );
-}
-
-// 직전 IR을 새 버전 번호로 bump해 편집 출발점으로 사용(meta.version=현재+1, PUT 규칙).
-function bumpVersion(ir: unknown, version: number): string {
-  if (isRecord(ir)) {
-    const meta = isRecord(ir.meta) ? ir.meta : {};
-    return JSON.stringify({ ...ir, meta: { ...meta, version } }, null, 2);
-  }
-  return JSON.stringify(ir, null, 2);
-}
-
-function studioModeFromIr(ir: unknown): EditorMode {
-  if (!isRecord(ir) || !isRecord(ir.meta)) return "ir";
-  return ir.meta.studio_mode === "easy" ||
-    ir.meta.studio_mode === "form" ||
-    ir.meta.studio_mode === "visual" ||
-    ir.meta.studio_mode === "ir"
-    ? ir.meta.studio_mode
-    : "ir";
-}
-
-function withStudioMode(ir: unknown, studioMode: EditorMode): unknown {
-  if (!isRecord(ir)) return ir;
-  const meta = isRecord(ir.meta) ? ir.meta : {};
-  return { ...ir, meta: { ...meta, studio_mode: studioMode } };
-}
-
-const DETAIL_KEY_LABELS: Record<string, string> = {
-  field: "항목",
-  reason: "사유",
-  detail: "설명",
-  message: "설명",
-  available: "선택 가능",
-  code: "오류 코드",
-  instancePath: "위치",
-  schemaPath: "검증 규칙",
-};
-
-const DETAIL_VALUE_LABELS: Record<string, string> = {
-  model_required: "AI 모델 선택이 필요합니다.",
-  invalid_cron_expression: "예약식을 다시 확인해야 합니다.",
-  unsupported_operation: "지원하지 않는 동작입니다.",
-  start_url_required_for_auto_run: "자동 실행에는 시작 주소가 필요합니다.",
-  target_required_for_auto_run: "자동 실행에는 대상 사이트가 필요합니다.",
-  video_recording_port_not_configured:
-    "동영상 증거 저장 포트가 설정되지 않았습니다.",
-};
-
-function detailKeyLabel(key: string): string {
-  return DETAIL_KEY_LABELS[key] ?? key;
-}
-
-function detailValueLabel(value: unknown): string {
-  if (typeof value === "string") return DETAIL_VALUE_LABELS[value] ?? value;
-  if (typeof value === "number" || typeof value === "boolean")
-    return String(value);
-  if (Array.isArray(value)) return value.map(detailValueLabel).join(", ");
-  if (isRecord(value)) {
-    const keys = Object.keys(value);
-    return keys.length > 0
-      ? `하위 항목 ${keys.slice(0, 6).join(", ")}`
-      : "하위 항목 없음";
-  }
-  if (value === null) return "없음";
-  return "확인 필요";
-}
-
-function detailsText(details: Record<string, unknown>): string {
-  const rows = Object.entries(details).map(
-    ([key, value]) => `${detailKeyLabel(key)}: ${detailValueLabel(value)}`,
-  );
-  return rows.length > 0 ? `\n${rows.join("\n")}` : "";
-}
-
-function describe(e: unknown): string {
-  // web-고유 행동지향 분기: 붙여넣은 IR JSON 자체가 깨진 경우는 계약 코드가 아니라 입력 수정 안내(보존).
-  if (e instanceof SyntaxError)
-    return "JSON 형식 오류 — 중괄호/쉼표를 확인하세요.";
-  // 그 외(ApiError 포함)는 errorLabel(계약 userMessage 미러)로 통일하되, 검증 details는 운영자 요약으로 부가.
-  if (e instanceof ApiError && e.body?.details) {
-    return `${errorLabel(e)}${detailsText(e.body.details)}`;
-  }
-  return errorLabel(e);
-}
-
-function reportIssueText(issue: unknown): string {
-  if (!isRecord(issue)) return detailValueLabel(issue);
-  const path =
-    issue.instancePath ?? issue.path ?? issue.field ?? issue.schemaPath;
-  const message = issue.message ?? issue.reason ?? issue.code ?? issue.detail;
-  const node = issue.node_id ?? issue.nodeId;
-  const key =
-    `${issue.rule ?? ""} ${issue.code ?? ""} ${message ?? ""} ${path ?? ""}`.toLowerCase();
-  let summary =
-    "검증 항목을 확인하세요. 자동화 만들기의 단계 편집 또는 자동화 정의 직접 편집에서 수정할 수 있습니다.";
-  if (key.includes("action") || key.includes("unsupported")) {
-    summary =
-      "지원하지 않는 자동화 동작입니다. 단계 편집에서 동작 유형을 다시 선택하세요.";
-  } else if (
-    key.includes("target") ||
-    key.includes("branch") ||
-    key.includes("node")
-  ) {
-    summary =
-      "조건 분기 대상 단계가 없습니다. 단계 편집에서 다음 단계 연결을 확인하세요.";
-  } else if (key.includes("instruction") || key.includes("extract")) {
-    summary = "데이터 추출 단계의 지시문 또는 출력 형식을 확인하세요.";
-  } else if (key.includes("priority")) {
-    summary =
-      "조건 우선순위가 겹칩니다. 같은 조건 그룹 안의 우선순위를 조정하세요.";
-  } else if (key.includes("loop")) {
-    summary = "반복 단계의 종료 조건 또는 최대 반복 횟수를 확인하세요.";
-  } else if (key.includes("url") || key.includes("navigate")) {
-    summary = "페이지 이동 단계의 주소 입력값과 사이트 등록 상태를 확인하세요.";
-  }
-  return node !== undefined
-    ? `${summary} 문제가 난 단계 참조가 있습니다.`
-    : summary;
-}
-
-function validationReportLines(report: unknown): string[] {
-  if (!isRecord(report)) return ["검증 리포트가 실패를 반환했습니다."];
-  const errors = Array.isArray(report.errors) ? report.errors : [];
-  const warnings = Array.isArray(report.warnings) ? report.warnings : [];
-  const lines: string[] = [];
-  if (errors.length > 0) {
-    lines.push(`오류 ${errors.length}건`);
-    lines.push(...errors.slice(0, 3).map(reportIssueText));
-  }
-  if (warnings.length > 0) lines.push(`주의 ${warnings.length}건`);
-  if (lines.length === 0) {
-    const keys = Object.keys(report);
-    lines.push(
-      keys.length > 0
-        ? `리포트 항목 ${keys.join(", ")}`
-        : "검증 리포트가 실패를 반환했습니다.",
-    );
-  }
-  if (errors.length > 3)
-    lines.push(`추가 오류 ${errors.length - 3}건은 원문 상세에서 확인하세요.`);
-  return lines;
-}
 
 export function ScenarioForm({
   mode,
