@@ -8,6 +8,7 @@ import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
 import { CaptureGuide } from "../components/CaptureGuide";
+import { OffboardingPanel } from "../components/OffboardingPanel";
 import { FilterSelect } from "../components/FilterSelect";
 import { PrincipalDirectory } from "../components/PrincipalDirectory";
 import { RoleAssignmentPanel } from "../components/RoleAssignmentPanel";
@@ -30,7 +31,7 @@ import { SecretRefAuditPanel } from "./security/SecretRefAuditPanel";
 import { SessionCaptureStatus } from "./security/SessionCaptureStatus";
 import { SessionRenewalQueue, collectSessionRenewalQueue } from "./security/SessionRenewalQueue";
 
-type SecuritySectionKey = "sites" | "access" | "secrets" | "ai" | "infra";
+type SecuritySectionKey = "sites" | "access" | "secrets" | "ai" | "infra" | "offboarding";
 
 const SECURITY_SECTIONS: readonly {
   readonly key: SecuritySectionKey;
@@ -42,10 +43,11 @@ const SECURITY_SECTIONS: readonly {
   { key: "secrets", label: "비밀·연결·감사", purpose: "SecretRef, Credential, 보안 연결, 감사 증거 점검" },
   { key: "ai", label: "AI 거버넌스", purpose: "AI 정책, 런타임 통제, 증거 장부 확인" },
   { key: "infra", label: "운영 인프라", purpose: "워커 풀과 실행 인프라 운영 상태 확인" },
+  { key: "offboarding", label: "오프보딩", purpose: "데이터 반출과 승인 게이트 영구 삭제 관리" },
 ];
 
 function isSecuritySection(value: string | null): value is SecuritySectionKey {
-  return value === "sites" || value === "access" || value === "secrets" || value === "ai" || value === "infra";
+  return value === "sites" || value === "access" || value === "secrets" || value === "ai" || value === "infra" || value === "offboarding";
 }
 
 function resolveSecuritySection(args: {
@@ -277,6 +279,10 @@ export function SecurityView(): JSX.Element {
 
       {activeSection === "infra" && (
         can("worker_pool.manage") ? <WorkerPoolPanel /> : <SectionAccessNotice title="운영 인프라" />
+      )}
+
+      {activeSection === "offboarding" && (
+        can("tenant_data.export") ? <OffboardingPanel /> : <SectionAccessNotice title="오프보딩" />
       )}
 
       {guideSite !== null && <CaptureGuide site={guideSite} onClose={() => setGuideSite(null)} />}
