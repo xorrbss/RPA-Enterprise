@@ -8,7 +8,7 @@ import {
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 
 import { navigate, type ViewKey } from "../router";
-import { decodeRoles, decodeSubject, ROLE_LABELS } from "../api/permissions";
+import { decodeSubject, ROLE_LABELS, useRoles } from "../api/permissions";
 import {
   getInternalNavFlags,
   getVisibleNavGroups,
@@ -182,7 +182,9 @@ function LogoutButton({ className = "btn" }: { className?: string }): JSX.Elemen
 
 export function Layout({ view, children }: { view: ViewKey; children: ReactNode }): JSX.Element {
   const meta = VIEW_META[view];
-  const roles = useMemo(() => decodeRoles(localStorage.getItem("rpa.token")), []);
+  // A3-1 잔여: 버튼/섹션(useCan)과 동일하게 nav 가시성도 서버 효과 역할(토큰∪수동부여)을 따른다 —
+  // 토큰만 읽으면 수동 부여받은 역할의 메뉴가 안 보인다(딥링크·버튼은 되는데 메뉴만 없는 발견성 결함).
+  const roles = useRoles();
   const flags = useMemo<NavPolicyFlags>(() => getInternalNavFlags(), []);
   const [navMode, setNavMode] = useState<NavMode>(() => readStoredNavMode());
   const advancedAvailable = useMemo(() => hasAdvancedNav({ roles, flags }), [roles, flags]);

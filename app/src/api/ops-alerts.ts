@@ -1156,7 +1156,7 @@ function mapBotPoolAlert(pool: BotPoolItem, detectedAt: string): ComputedOpsAler
     subject_type: "bot_pool",
     subject_id: pool.bot_pool_id,
     recommended_action: "Bot Pool 용량, 만료 lease, worker heartbeat/circuit 상태를 확인하세요.",
-    route: "#orchestration?panel=botPools",
+    route: "#automationOps?section=queue", // 봇풀 패널이 큐 섹션에 렌더 — view key/section 은 라우터·Orchestration 이 실제 소비하는 값만 사용(dead link 금지)
     detected_at: detectedAt,
     due_at: null,
   };
@@ -1186,7 +1186,7 @@ function mapScimSecretRotationAlert(row: ScimSecretRotationAlertRow | undefined)
     subject_type: "scim_provider",
     subject_id: row.provider_key,
     recommended_action: "Patch the provider to a newly issued signature_secret_ref, or set secret_rotation_policy=manual only with owner-approved evidence.",
-    route: `#security?panel=scim&provider=${encodeURIComponent(row.provider_key)}`,
+    route: `#security?section=access&provider=${encodeURIComponent(row.provider_key)}`,
     detected_at: detectedAt.toISOString(),
     due_at: dueAt.toISOString(),
   }];
@@ -1260,7 +1260,7 @@ function mapReadinessEvidenceAlert(row: ProductionReadinessEvidenceAlertRow): Co
     subject_type: "readiness_evidence",
     subject_id: row.evidence_type,
     recommended_action: "Open production readiness and record fresh valid owner/platform evidence before controlled-prod release.",
-    route: "#automationOps?panel=productionReadiness",
+    route: "#automationOps?section=readiness",
     detected_at: detectedAt.toISOString(),
     due_at: row.expires_at?.toISOString() ?? null,
   };
