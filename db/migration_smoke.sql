@@ -82,6 +82,7 @@ DECLARE
     'principal_role_assignments',
     'principal_role_assignment_events',
     'artifacts',
+    'artifact_redaction_failures',
     'document_jobs',
     'document_extractions',
     'events_outbox',
@@ -188,7 +189,8 @@ DECLARE
     'audit_verifier_runs',
     'scenario_promotion_requests',
     'tenant_offboarding_requests',
-    'worker_pool_assignments'
+    'worker_pool_assignments',
+    'artifact_redaction_failures'
   ];
   table_name text;
   rel_id oid;

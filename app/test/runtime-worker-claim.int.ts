@@ -1459,6 +1459,21 @@ async function main(): Promise<void> {
           retryableFailed.lifecycleClaimSet === false,
         JSON.stringify(retryableFailed),
       );
+      // A4-3: failed 확정과 같은 tx 에 앱-가시 원장(artifact_redaction_failures) push — RLS 로 숨는 failed 행의
+      // 유일한 알림 원천. attempts_exhausted + 최종 시도 수가 기록된다.
+      const failureLedger = await withTenantTx(lifecycleBypassPool, TENANT_A, (c) =>
+        c.query<{ failure_kind: string; attempts: number }>(
+          `SELECT failure_kind, attempts FROM artifact_redaction_failures WHERE tenant_id = $1::uuid AND artifact_id = $2::uuid`,
+          [TENANT_A, ARTIFACT_REDACTION_RETRYABLE],
+        ),
+      );
+      check(
+        "artifact_redaction failed flip pushes app-visible failure ledger row",
+        failureLedger.rows.length === 1 &&
+          failureLedger.rows[0]?.failure_kind === "attempts_exhausted" &&
+          failureLedger.rows[0]?.attempts === 5,
+        JSON.stringify(failureLedger.rows),
+      );
       check(
         "artifact_redaction retry threshold calls retryable fixture twice",
         redactionCalls.filter((call) => call.artifact.artifactRef === ARTIFACT_REDACTION_RETRYABLE).length === 2,

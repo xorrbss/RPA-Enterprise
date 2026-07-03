@@ -46,6 +46,8 @@ const TRIGGER_A = "8a300000-0000-4000-8000-000000000001";
 const FIRE_A = "8a310000-0000-4000-8000-000000000001";
 const WORKITEM_A = "8a400000-0000-4000-8000-000000000001";
 const DLQ_A = "8a410000-0000-4000-8000-000000000001";
+const ART_FAILED = "8a420000-0000-4000-8000-000000000001";
+const ART_FAILURE_ROW = "8a430000-0000-4000-8000-000000000001";
 const WORKER_POOL_A = "8a500000-0000-4000-8000-000000000001";
 const SITE_POOL_A = "8a600000-0000-4000-8000-000000000001";
 const IDENTITY_POOL_A = "8a700000-0000-4000-8000-000000000001";
@@ -240,6 +242,18 @@ async function seedAlerts(pool: Pool): Promise<void> {
        VALUES ($1,$2,$3,'WORKITEM_CHECKOUT_CONFLICT',true,$4::timestamptz)`,
       [DLQ_A, TENANT_A, WORKITEM_A, isoMinutesFromNow(-20)],
     );
+    // A4-3 artifact_redaction: failed 아티팩트는 RLS 로 앱에서 안 보이므로, 워커가 finalize tx 에서 push 하는
+    // artifact_redaction_failures 원장이 알림의 유일한 원천이다(여기서는 워커 기록 결과를 그대로 시드).
+    await client.query(
+      `INSERT INTO artifacts (id, tenant_id, run_id, type, redaction_status, redaction_attempts, object_ref, retention_until)
+       VALUES ($1,$2,$3,'screenshot','failed',5,'object://ops-alerts/redaction-failed',$4::timestamptz)`,
+      [ART_FAILED, TENANT_A, RUN_A, isoDaysFromNow(30)],
+    );
+    await client.query(
+      `INSERT INTO artifact_redaction_failures (id, tenant_id, artifact_id, run_id, failure_kind, attempts, detected_at)
+       VALUES ($1,$2,$3,$4,'attempts_exhausted',5,$5::timestamptz)`,
+      [ART_FAILURE_ROW, TENANT_A, ART_FAILED, RUN_A, isoMinutesFromNow(-10)],
+    );
     await client.query(
       `INSERT INTO scim_providers
          (id, tenant_id, provider_key, display_name, status, inbound_schema_ref, auth_mode,
@@ -397,8 +411,8 @@ async function main(): Promise<void> {
     };
     const alertById = new Map(allBody.items.map((item) => [item.alert_id, item]));
     check(
-      "all ten alert sources are present",
-      ["run_sla", "human_task_sla", "trigger_fire", "failure_spike", "dlq", "bot_pool", "scim_secret_rotation", "audit_verifier", "readiness_evidence", "session_expiry"].every((source) =>
+      "all eleven alert sources are present",
+      ["run_sla", "human_task_sla", "trigger_fire", "failure_spike", "dlq", "bot_pool", "scim_secret_rotation", "audit_verifier", "readiness_evidence", "session_expiry", "artifact_redaction"].every((source) =>
         allBody.items.some((item) => item.source === source),
       ),
       all.body,
@@ -544,6 +558,46 @@ async function main(): Promise<void> {
         sessionOpenAfterAckBody.items[0]?.alert_id === sessionExpiryAlertId(SESSION_KEY_SOON) &&
         sessionOpenAfterAckBody.items[0]?.status === "open",
       sessionOpenAfterAck.body,
+    );
+
+    // A4-3 artifact_redaction — 레다크션 terminal 실패 원장 알림(목록/필터/ack).
+    const redactionOnly = await app.inject({ method: "GET", url: "/v1/ops-alerts?source=artifact_redaction", headers: { authorization: `Bearer ${viewer}` } });
+    const redactionBody = redactionOnly.json() as {
+      items: Array<{ alert_id: string; source: string; severity: string; title: string; detail: string; subject_type: string; subject_id: string | null; route: string | null; detected_at: string }>;
+    };
+    check("artifact_redaction filter -> 200 + 1 item", redactionOnly.statusCode === 200 && redactionBody.items.length === 1, redactionOnly.body);
+    check(
+      "artifact_redaction alert is critical, artifact-subject, run deep-link, operator Korean",
+      redactionBody.items[0]?.alert_id === `artifact_redaction:${ART_FAILED}` &&
+        redactionBody.items[0]?.severity === "critical" &&
+        redactionBody.items[0]?.title === "증빙 보호 처리 실패" &&
+        redactionBody.items[0]?.detail.includes("5회") &&
+        redactionBody.items[0]?.subject_type === "artifact" &&
+        redactionBody.items[0]?.subject_id === ART_FAILED &&
+        redactionBody.items[0]?.route === `#runTrace?run=${RUN_A}`,
+      redactionOnly.body,
+    );
+    check(
+      "artifact_redaction alert leaks no object refs or content",
+      !JSON.stringify(redactionBody.items[0]).includes("object://"),
+      redactionOnly.body,
+    );
+    const redactionAck = await app.inject({
+      method: "POST",
+      url: `/v1/ops-alerts/${encodeURIComponent(`artifact_redaction:${ART_FAILED}`)}/ack`,
+      headers: { authorization: `Bearer ${operator}`, "idempotency-key": "ack-artifact-redaction" },
+      payload: { comment: "재처리 요청함" },
+    });
+    check(
+      "artifact_redaction ack by-id -> 200 acknowledged",
+      redactionAck.statusCode === 200 && (redactionAck.json() as { status: string }).status === "acknowledged",
+      redactionAck.body,
+    );
+    const redactionAfterAck = await app.inject({ method: "GET", url: "/v1/ops-alerts?source=artifact_redaction", headers: { authorization: `Bearer ${viewer}` } });
+    check(
+      "acked artifact_redaction alert hidden from open list",
+      redactionAfterAck.statusCode === 200 && (redactionAfterAck.json() as { items: unknown[] }).items.length === 0,
+      redactionAfterAck.body,
     );
 
     const humanOnly = await app.inject({ method: "GET", url: "/v1/ops-alerts?source=human_task_sla&severity=warning", headers: { authorization: `Bearer ${viewer}` } });

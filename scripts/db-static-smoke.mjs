@@ -79,6 +79,7 @@ const expectedTables = [
   "principal_role_assignments",
   "principal_role_assignment_events",
   "artifacts",
+  "artifact_redaction_failures",
   "document_jobs",
   "document_extractions",
   "events_outbox",

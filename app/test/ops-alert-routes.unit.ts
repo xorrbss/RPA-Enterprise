@@ -63,6 +63,12 @@ function main(): void {
   );
   check("session_expiry source parses", sessionExpiry.length === 1 && sessionExpiry[0]!.source === "session_expiry", JSON.stringify(sessionExpiry[0]));
 
+  // A4-3: artifact_redaction 도 자동 발화 소스로 허용된다(detected_at=원장 행 타임스탬프 안정).
+  const artifactRedaction = parseOpsAlertRoutes(
+    JSON.stringify([{ source: "artifact_redaction", min_severity: "critical", provider_alias: "p", endpoint_secret_ref: "secret://a/b", allowed_hosts: ["h.example.com"], route_policy_ref: "r" }]),
+  );
+  check("artifact_redaction source parses", artifactRedaction.length === 1 && artifactRedaction[0]!.source === "artifact_redaction", JSON.stringify(artifactRedaction[0]));
+
   // fail-closed 케이스.
   expectThrow("non-array JSON throws", () => parseOpsAlertRoutes(JSON.stringify({ min_severity: "warning" })));
   expectThrow("malformed JSON throws", () => parseOpsAlertRoutes("{not json"));
@@ -80,7 +86,7 @@ function main(): void {
     parseOpsAlertRoutes(JSON.stringify([{ min_severity: "warning", endpoint_secret_ref: "secret://a/b", allowed_hosts: ["h"], route_policy_ref: "r" }])));
 
   // 자동 발화 소스 allowlist 는 detected_at 안정 소스만(멱등 세대 키 보호). session_expiry 는 detected_at=expires_at.
-  check("auto-fire sources are the stable-detected_at set", JSON.stringify([...OPS_ALERT_AUTO_FIRE_SOURCES]) === JSON.stringify(["run_sla", "human_task_sla", "trigger_fire", "failure_spike", "session_expiry"]));
+  check("auto-fire sources are the stable-detected_at set", JSON.stringify([...OPS_ALERT_AUTO_FIRE_SOURCES]) === JSON.stringify(["run_sla", "human_task_sla", "trigger_fire", "failure_spike", "session_expiry", "artifact_redaction"]));
 }
 
 main();

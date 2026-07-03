@@ -905,3 +905,23 @@
 | 계약 | `api-surface.md` §6 sites | GET 목록/상세 필드·approve 만료 의미론·approvals 이력 행 추가 |
 | 콘솔 | `web/src/views/security/` | 승인 다이얼로그(사유·만료 입력, UTC ISO 전송)·`expired` 배지·승인 이력 열람 |
 | 검증 | `app/test/api-sites-approve.int.ts`·`app/test/runtime-worker-claim.int.ts`·web vitest | 비-UUID sub 승인 200·만료 시 SITE_PROFILE_BLOCKED·이력 조회·재승인 해제 |
+
+## v2.32 패치 로그 (레다크션 terminal 실패 알림 — ops-defaults §6 "failed+알림"의 알림 절반 이행)
+
+> **검증된 계약 미이행 해소**(3관점 감사 2026-07-03 A4-3 confirmed). ops-defaults §6·impl-contracts §B는 레다크션
+> 실패 N회 초과 시 "**failed + 알림**"을 계약하지만 코드는 failed 전이만 이행 — 알림 채널이 0이었다. 더 나쁘게,
+> failed 행은 RLS(`artifacts_visible_isolation`, D8-A1 read 게이트)가 앱 롤에서 숨기므로 **증빙이 영구 열람 불가가
+> 되는데 관리자에게 어떤 신호도 가지 않았다**("조용한 실패 금지" 위반). 해소: ① 워커가 finalize CAS 성공과 같은
+> tx에서 앱-가시 원장 `artifact_redaction_failures`에 push 기록(증빙 내용/객체참조 미저장, 메타만) ② 운영 알림
+> 소스 `artifact_redaction` 신설(critical, subject_type=artifact, run 딥링크) ③ 자동 발화 소스 등록
+> (detected_at=원장 행 타임스탬프라 세대 안정 — 무인 외부 통지 포함).
+> **역호환**: 신규 테이블/소스는 additive. D8-A1(read 게이트)은 그대로 — 알림은 실패 사실의 메타만 표면화.
+
+| 항목 | 위치 | 조치 |
+|---|---|---|
+| DDL | `db/migration_core_entities.sql` | `artifact_redaction_failures`(tenant RLS, 아티팩트당 1행 UNIQUE, artifacts 복합 FK) + smoke/static 3곳 동기(migration_smoke·db-static) |
+| 워커 | `app/src/worker/artifact-redaction-processor.ts` | finalize에서 status=failed 확정 시 같은 tx로 원장 INSERT(ON CONFLICT 방어) |
+| 알림 | `app/src/api/ops-alerts-artifact-redaction.ts`(신규)·`ops-alerts.ts`·`ops-alert-routes.ts` | source=`artifact_redaction` 계산·by-id·ack + 자동 발화 allowlist 등록 |
+| 계약 | `api-surface.md` ops-alerts | source enum + 계산 의미론(유일한 표면임을 명시) |
+| 콘솔 | `web/src/views/orchestration/OpsAlertCenter.tsx` | 소스 필터/라벨 "증빙 보호 실패" |
+| 검증 | `api-ops-alerts.int`·`runtime-worker-claim.int`·`ops-alert-routes.unit` | 목록/필터/ack/딥링크/누출0 + failed 전이 tx원장 push + 라우트 파서 |

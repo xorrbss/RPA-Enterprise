@@ -14,6 +14,7 @@ import { readBrowserBotPool, type BotPoolItem } from "./bot-pools";
 import { runIdempotentCommand, isRecord } from "./command";
 import { ApiResponseError } from "./errors";
 import { parseLimit } from "./list-query";
+import { readArtifactRedactionAlerts, readArtifactRedactionAlertById } from "./ops-alerts-artifact-redaction";
 import {
   SCIM_SECRET_ROTATION_DUE_SOON_DAYS,
   scimSecretRotationDueAt,
@@ -35,7 +36,8 @@ export type OpsAlertSource =
   | "scim_secret_rotation"
   | "audit_verifier"
   | "readiness_evidence"
-  | "session_expiry";
+  | "session_expiry"
+  | "artifact_redaction";
 type OpsAlertSubjectType =
   | "run"
   | "human_task"
@@ -45,7 +47,8 @@ type OpsAlertSubjectType =
   | "scim_provider"
   | "audit_verifier"
   | "readiness_evidence"
-  | "browser_session";
+  | "browser_session"
+  | "artifact";
 type OpsAlertStatus = "open" | "acknowledged";
 type OpsAlertListStatus = OpsAlertStatus | "all";
 type ProductionReadinessEvidenceAlertType =
@@ -353,6 +356,7 @@ const SOURCE_SET: Record<OpsAlertSource, true> = {
   audit_verifier: true,
   readiness_evidence: true,
   session_expiry: true,
+  artifact_redaction: true,
 };
 
 const STATUS_SET: Record<OpsAlertListStatus, true> = {
@@ -608,6 +612,9 @@ export async function readComputedOpsAlerts(
   const sessionExpiryAlerts = source === undefined || source === "session_expiry"
     ? await readSessionExpiryAlerts(client, tenantId, sourceQueryLimit)
     : [];
+  const artifactRedactionAlerts = source === undefined || source === "artifact_redaction"
+    ? await readArtifactRedactionAlerts(client, tenantId, sourceQueryLimit)
+    : [];
 
   return [
     ...runRows.rows.map(mapRunSlaAlert),
@@ -620,6 +627,7 @@ export async function readComputedOpsAlerts(
     ...auditVerifierAlerts,
     ...readinessEvidenceAlerts,
     ...sessionExpiryAlerts,
+    ...artifactRedactionAlerts,
   ];
 }
 
@@ -694,6 +702,9 @@ async function readComputedOpsAlertById(
   }
   if (alertId.startsWith("session_expiry:")) {
     return readSessionExpiryAlertById(client, tenantId, alertId);
+  }
+  if (alertId.startsWith("artifact_redaction:")) {
+    return readArtifactRedactionAlertById(client, tenantId, alertId);
   }
   return null;
 }

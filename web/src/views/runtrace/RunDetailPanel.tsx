@@ -321,7 +321,7 @@ function ArrivalBanner({
       </span>
       {failed && reason !== null && (
         <span>
-          {errorCodeLabel(reason.code)}
+          {errorCodeLabel(reason.code, { terminal: true })}
           {reason.message !== "" && (
             <span className="subtle"> · {reason.message}</span>
           )}
