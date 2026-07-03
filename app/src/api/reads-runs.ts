@@ -250,16 +250,25 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
   //   OTel 메트릭은 백엔드 부재로 쿼리 불가). status별 정확 카운트 + 성공률. RLS 스코프, run.read.
   //   성공률 = completed / (completed+failed_business+failed_system) — 분모 0이면 null(0/0 단정 금지,
   //   "조용한 false 금지"). cancelled(사용자 취소)는 분모 제외(telemetry run_success_rate 와 동형).
+  //   ?run_mode=test|prod(선택) — 대시보드 요약 카드와 드릴다운 목록(run_mode=prod)의 모집단 통일(A1-1).
+  //   run_steps 에는 run_mode 가 없어 runs 조인으로 동일 모집단을 유지한다.
   app.get("/v1/runs/summary", { config: { rbacAction: "run.read" } }, async (request, reply) => {
     const principal = requirePrincipal(request);
+    const runMode = runModeFilter((request.query as Record<string, unknown>).run_mode);
     const { statusRows, cacheRows } = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const statuses = await c.query<{ status: string; n: string }>(
-        `SELECT status, count(*)::text AS n FROM runs WHERE tenant_id = $1::uuid GROUP BY status`,
-        [principal.tenantId],
+        `SELECT status, count(*)::text AS n FROM runs
+          WHERE tenant_id = $1::uuid AND ($2::text IS NULL OR run_mode = $2)
+          GROUP BY status`,
+        [principal.tenantId, runMode],
       );
       const caches = await c.query<{ cache_mode: string; n: string }>(
-        `SELECT cache_mode, count(*)::text AS n FROM run_steps WHERE tenant_id = $1::uuid GROUP BY cache_mode`,
-        [principal.tenantId],
+        `SELECT rs.cache_mode, count(*)::text AS n
+           FROM run_steps rs
+           JOIN runs r ON r.id = rs.run_id AND r.tenant_id = rs.tenant_id
+          WHERE rs.tenant_id = $1::uuid AND ($2::text IS NULL OR r.run_mode = $2)
+          GROUP BY rs.cache_mode`,
+        [principal.tenantId, runMode],
       );
       return { statusRows: statuses.rows, cacheRows: caches.rows };
     });
@@ -296,9 +305,12 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
   //   success_rate = completed/(completed+failed_business+failed_system), 그 날 평가 대상 run 0이면 null(0/0 단정
   //   금지, "조용한 false 금지"). total=그 날 생성된 run 수(처리량). cancelled/queued/running 은 분모 제외(summary 동형).
   //   RLS 스코프, run.read. days=조회 윈도우(기본 30, [1,90] 클램프).
+  //   ?run_mode=test|prod(선택) — summary 와 동일 모집단 정합(A1-1; 카드만 prod 면 스파크라인이 새 불일치가 된다).
   app.get("/v1/runs/trends", { config: { rbacAction: "run.read" } }, async (request, reply) => {
     const principal = requirePrincipal(request);
-    const windowDays = trendWindowDays((request.query as Record<string, unknown>).days);
+    const query = request.query as Record<string, unknown>;
+    const windowDays = trendWindowDays(query.days);
+    const runMode = runModeFilter(query.run_mode);
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<{
         day: string;
@@ -317,6 +329,7 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
            SELECT (created_at AT TIME ZONE 'Asia/Seoul')::date AS day, status, count(*)::int AS n
              FROM runs, win
             WHERE tenant_id = $1::uuid
+              AND ($3::text IS NULL OR run_mode = $3)
               AND (created_at AT TIME ZONE 'Asia/Seoul')::date >= win.today - win.span
             GROUP BY 1, 2
          )
@@ -329,7 +342,7 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
            LEFT JOIN agg a ON a.day = d.day
           GROUP BY d.day
           ORDER BY d.day`,
-        [principal.tenantId, windowDays],
+        [principal.tenantId, windowDays, runMode],
       );
       return result.rows;
     });

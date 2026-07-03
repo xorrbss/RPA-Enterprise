@@ -100,6 +100,7 @@ import {
   type RerunRunBody,
   type RerunRunResult,
   type ResumeRunResult,
+  type RunMode,
   type RunResumeRequest,
   type RunResumeRequestListParams,
   type RunDetail,
@@ -411,9 +412,10 @@ export interface ApiClient {
   // 상세 GET-by-id(RLS 스코프, 미존재/타테넌트→404). drill-down 뷰의 선행.
   getRun(runId: string): Promise<RunDetail>;
   // run outcome 집계(관찰성). status별 정확 카운트 + 성공률(api-surface §1 GET /v1/runs/summary).
-  getRunSummary(): Promise<RunSummary>;
+  // runMode 지정 시 해당 실행 구분만 집계 — 대시보드 카드와 드릴다운 목록의 모집단 통일.
+  getRunSummary(runMode?: RunMode): Promise<RunSummary>;
   // run outcome 일별 추세(분석; api-surface §1 GET /v1/runs/trends). days=조회 윈도우(기본 30, [1,90] 서버 클램프).
-  getRunTrends(days?: number): Promise<RunTrends>;
+  getRunTrends(days?: number, runMode?: RunMode): Promise<RunTrends>;
   getWorkitem(id: string): Promise<WorkitemItem>;
   getHumanTask(id: string): Promise<HumanTaskItem>;
   getScenario(id: string): Promise<ScenarioDetail>;
@@ -900,8 +902,14 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     rollbackScenario: (scenarioId, sourceVersion, latestVersion, key) =>
       post(`/v1/scenarios/${scenarioId}/versions/${sourceVersion}/rollback`, key, {}, { "If-Match": String(latestVersion) }),
     getRun: (id) => get(`/v1/runs/${id}`),
-    getRunSummary: () => get<RunSummary>("/v1/runs/summary"),
-    getRunTrends: (days) => get<RunTrends>(`/v1/runs/trends${days !== undefined ? `?days=${days}` : ""}`),
+    getRunSummary: (runMode) => get<RunSummary>(`/v1/runs/summary${runMode !== undefined ? `?run_mode=${runMode}` : ""}`),
+    getRunTrends: (days, runMode) => {
+      const params = new URLSearchParams();
+      if (days !== undefined) params.set("days", String(days));
+      if (runMode !== undefined) params.set("run_mode", runMode);
+      const qs = params.toString();
+      return get<RunTrends>(`/v1/runs/trends${qs.length > 0 ? `?${qs}` : ""}`);
+    },
     getWorkitem: (id) => get(`/v1/workitems/${id}`),
     getHumanTask: (id) => get(`/v1/human-tasks/${id}`),
     getScenario: (id) => get(`/v1/scenarios/${id}`),
