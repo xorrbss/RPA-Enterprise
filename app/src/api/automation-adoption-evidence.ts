@@ -4,7 +4,8 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { PoolClient } from "pg";
 
 import { withTenantTx } from "../db/pool";
-import { assertIdeaExists, parseKnownBody, validateIdeaId } from "./automation-ideas";
+import { assertIdeaExists } from "./automation-ideas";
+import { parseKnownBody, validateIdeaId } from "./automation-ideas-parse";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
 import { ApiResponseError } from "../runtime/errors";
 import { parseLimit } from "./list-query";

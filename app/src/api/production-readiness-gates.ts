@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 
-import type { AiGovernanceReadinessSnapshot } from "./ai-governance-enforcement";
+import type { AiGovernanceReadinessSnapshot } from "./ai-governance-readiness";
 import { DEFAULT_AUTH_READINESS_CONFIG, evaluateAuthSsoReadiness } from "./auth-readiness";
 import type { readBrowserBotPool } from "../runtime/bot-pool-read";
 import type { AuthReadinessConfig } from "./server-shared";

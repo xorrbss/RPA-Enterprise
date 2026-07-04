@@ -23,10 +23,15 @@ import type { AuthenticatedPrincipal, RunId, SecretStoreBoundary } from "../../.
 import type { CdpSessionProvider } from "./cdp-session";
 import { pageStateRef } from "./page-state-resolver";
 import { setDownloadBehavior } from "./raw-cdp";
+import { UtilityExecutorError } from "./utility-executor-error";
+import { assertDeterministicCriteria, assertUtilityAction } from "./utility-executor-assert";
+
+// 도메인 에러는 utility-executor-error.ts(순환 import 회피 leaf) — 재export(기존 import 경로 호환).
+export { UtilityExecutorError, type UtilityErrorCode } from "./utility-executor-error";
 
 /** 본 실행기가 지원하는 결정형 액션(IRActionType 의 utility 부분집합). */
-type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-type HttpAuth =
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+export type HttpAuth =
   | { type: "none" }
   | { type: "secret_ref_bearer"; secretRef: SecretRef; connectorId?: string };
 type HttpFetchResponse = {
@@ -76,33 +81,6 @@ export type DeterministicCriteria =
   | { type: "min_rows"; selector: string; n: number }
   | { type: "http_status"; codes: readonly number[] };
 
-/**
- * UtilityExecutor 도메인 에러코드 — error-catalog.ts 의 `ErrorCode` 와 **별개 네임스페이스**다.
- * (PageStateResolverError 와 동일 패턴.) 런타임 예외 분류기가 이 코드를 ExceptionClass 로 매핑하며,
- * `ERROR_CATALOG[code]` 로 직접 인덱싱하지 않는다. 타입을 좁혀 카탈로그 오인덱싱을 컴파일 단계에서 차단한다
- * (bare `string` 이면 `EXECUTOR_CAPABILITY_MISMATCH` 등이 ERROR_CATALOG[undefined] 크래시로 새는 것을 막지 못함).
- */
-export type UtilityErrorCode =
-  | "IR_SCHEMA_INVALID"
-  | "EXECUTOR_CAPABILITY_MISMATCH"
-  | "ARTIFACT_RETENTION_FAILED"
-  | "DOMAIN_POLICY_VIOLATION"
-  | "RUN_ABORTED";
-
-export class UtilityExecutorError extends Error {
-  constructor(
-    readonly code: UtilityErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = "UtilityExecutorError";
-  }
-}
-
-const DOM_ACTIONS = new Set(["act", "observe", "extract"]);
-const NON_BROWSER_ACTIONS = new Set(["file", "shell"]);
-const HTTP_METHODS = new Set<HttpMethod>(["GET", "POST", "PUT", "PATCH", "DELETE"]);
-const SENSITIVE_HTTP_HEADERS = new Set(["authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key"]);
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const DEFAULT_HTTP_RESPONSE_BODY_LIMIT_CHARS = 65_536;
 
@@ -123,7 +101,7 @@ export class UtilityExecutor implements ExecutorPlugin {
       // run abort → 실행 진입 차단(RunContext.abortSignal, CDP_DISCONNECTED 경로 상위 처리).
       throw new UtilityExecutorError("RUN_ABORTED", `step '${stepId}' aborted before execute`);
     }
-    const a = this.assertUtilityAction(stepId, action);
+    const a = assertUtilityAction(stepId, action);
     const policyFailure =
       a.type === "navigate" || a.type === "api_call"
         ? this.navigationPolicyFailure(stepId, a.url, ctx, a.type)
@@ -204,7 +182,7 @@ export class UtilityExecutor implements ExecutorPlugin {
   }
 
   async verify(criteria: unknown, ctx: RunContext): Promise<VerifyResult> {
-    const c = this.assertDeterministicCriteria(criteria);
+    const c = assertDeterministicCriteria(criteria);
     let pass: boolean;
     if (c.type === "element_present") {
       const session = this.sessions.forLease(ctx.leaseId);
@@ -254,266 +232,7 @@ export class UtilityExecutor implements ExecutorPlugin {
     };
   }
 
-  private assertUtilityAction(stepId: string, action: unknown): UtilityAction {
-    if (typeof action !== "object" || action === null || !("type" in action)) {
-      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' action missing 'type'`);
-    }
-    const type = (action as { type: unknown }).type;
-    if (typeof type !== "string") {
-      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' action.type not a string`);
-    }
-    if (DOM_ACTIONS.has(type)) {
-      throw new UtilityExecutorError(
-        "EXECUTOR_CAPABILITY_MISMATCH",
-        `step '${stepId}' action '${type}' requires the dom executor (Stagehand act/observe/extract) — not utility`,
-      );
-    }
-    if (NON_BROWSER_ACTIONS.has(type)) {
-      throw new UtilityExecutorError(
-        "EXECUTOR_CAPABILITY_MISMATCH",
-        `step '${stepId}' action '${type}' is non-browser utility — handled by a separate module (architecture §9.1)`,
-      );
-    }
-    if (type === "navigate") {
-      const url = nonEmptyString((action as { url?: unknown }).url);
-      if (url === undefined) {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' navigate.url must be a non-empty string`);
-      }
-      let parsed: URL;
-      try {
-        parsed = new URL(url);
-      } catch {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' navigate.url must be an absolute URL`);
-      }
-      // 방어심층(RQ-021): 실행기는 url을 독립 재검증하는 신뢰경계다 — http(s)만 허용한다. opaque scheme
-      //   (file:/javascript:/data:/blob: 등)은 producer(site-resolution.originOf)가 막아도 실행기에서 fail-closed로
-      //   재차단(단일 producer 가정에 의존하지 않음, 조용한 false 금지). site-resolution.originOf와 동일 규약.
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        throw new UtilityExecutorError(
-          "IR_SCHEMA_INVALID",
-          `step '${stepId}' navigate.url must be an http(s) URL (got scheme '${parsed.protocol}')`,
-        );
-      }
-      return { type, url };
-    }
-    if (type === "api_call") {
-      return this.assertHttpApiCall(stepId, action as Record<string, unknown>);
-    }
-    if (type === "download") {
-      const trigger = (action as { trigger?: unknown }).trigger;
-      const selector = typeof trigger === "object" && trigger !== null
-        ? nonEmptyString((trigger as { selector?: unknown }).selector)
-        : undefined;
-      const fileName = nonEmptyString((action as { fileName?: unknown }).fileName);
-      const timeoutMs = (action as { timeoutMs?: unknown }).timeoutMs;
-      if (selector === undefined) {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' download.trigger.selector must be a non-empty string`);
-      }
-      if (fileName === undefined || /[\\/]/.test(fileName)) {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' download.fileName must be a file name, not a path`);
-      }
-      if (timeoutMs !== undefined && (typeof timeoutMs !== "number" || !Number.isInteger(timeoutMs) || timeoutMs <= 0)) {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' download.timeoutMs must be a positive integer`);
-      }
-      return { type, trigger: { selector }, fileName, timeoutMs };
-    }
-    if (type === "upload") {
-      const selector = nonEmptyString((action as { selector?: unknown }).selector);
-      const files = (action as { files?: unknown }).files;
-      const validFiles = typeof files === "string"
-        ? nonEmptyString(files)
-        : Array.isArray(files) && files.length > 0 && files.every((f) => nonEmptyString(f) !== undefined)
-          ? files
-          : undefined;
-      if (selector === undefined) {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' upload.selector must be a non-empty string`);
-      }
-      if (validFiles === undefined) {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' upload.files must be a non-empty string or string array`);
-      }
-      return { type, selector, files: validFiles };
-    }
-    throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' unknown action '${type}'`);
-  }
-
-  private assertHttpApiCall(stepId: string, action: Record<string, unknown>): Extract<UtilityAction, { type: "api_call" }> {
-    const rawMethod = typeof action.method === "string" ? action.method.toUpperCase() : "GET";
-    if (!HTTP_METHODS.has(rawMethod as HttpMethod)) {
-      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.method must be one of GET/POST/PUT/PATCH/DELETE`);
-    }
-    const method = rawMethod as HttpMethod;
-    const url = nonEmptyString(action.url);
-    if (url === undefined) {
-      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.url must be a non-empty string`);
-    }
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.url must be an absolute URL`);
-    }
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.url must be an http(s) URL`);
-    }
-
-    const headers = this.assertHttpHeaders(stepId, action.headers);
-    const auth = this.assertHttpAuth(stepId, action.auth, action.connectorId ?? action.connector_id);
-    const timeoutMs = action.timeoutMs ?? action.timeout_ms;
-    if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || (timeoutMs as number) <= 0 || (timeoutMs as number) > 300_000)) {
-      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.timeoutMs must be an integer between 1 and 300000`);
-    }
-    const sideEffectKind = this.assertSideEffectKind(stepId, action.sideEffect ?? action.side_effect);
-    const idempotencyKey = nonEmptyString(action.idempotencyKey ?? action.idempotency_key);
-    const effectiveSideEffectKind = sideEffectKind ?? (method === "GET" ? "read_only" : "update");
-    if (effectiveSideEffectKind !== "read_only" && idempotencyKey === undefined) {
-      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.idempotency_key is required for non-read-only HTTP calls`);
-    }
-    return {
-      type: "api_call",
-      method,
-      url,
-      headers,
-      ...(action.body !== undefined ? { body: action.body } : {}),
-      auth,
-      ...(timeoutMs !== undefined ? { timeoutMs: timeoutMs as number } : {}),
-      sideEffectKind: effectiveSideEffectKind,
-      ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
-    };
-  }
-
-  private assertHttpHeaders(stepId: string, raw: unknown): Record<string, string> {
-    if (raw === undefined) return {};
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.headers must be an object`);
-    }
-    const headers: Record<string, string> = {};
-    for (const [name, value] of Object.entries(raw)) {
-      if (name.trim().length === 0 || typeof value !== "string") {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.headers must contain non-empty string values`);
-      }
-      const normalized = name.trim();
-      if (SENSITIVE_HTTP_HEADERS.has(normalized.toLowerCase())) {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.headers.${normalized} must use SecretRef auth, not raw header values`);
-      }
-      headers[normalized] = value;
-    }
-    return headers;
-  }
-
-  private assertHttpAuth(stepId: string, raw: unknown, rawConnectorId: unknown): HttpAuth {
-    if (raw === undefined) return { type: "none" };
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-      throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.auth must be an object`);
-    }
-    const type = (raw as { type?: unknown }).type;
-    if (type === "none") return { type: "none" };
-    if (type === "secret_ref_bearer") {
-      const secretRef = nonEmptyString((raw as { secret_ref?: unknown; secretRef?: unknown }).secret_ref ?? (raw as { secretRef?: unknown }).secretRef);
-      if (secretRef === undefined || !secretRef.startsWith("secret://")) {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.auth.secret_ref must be a SecretRef`);
-      }
-      const connectorId = nonEmptyString(rawConnectorId ?? (raw as { connector_id?: unknown; connectorId?: unknown }).connector_id ?? (raw as { connectorId?: unknown }).connectorId);
-      return { type: "secret_ref_bearer", secretRef: secretRef as SecretRef, ...(connectorId !== undefined ? { connectorId } : {}) };
-    }
-    throw new UtilityExecutorError(
-      "IR_SCHEMA_INVALID",
-      `step '${stepId}' api_call.auth.type must be 'none' or 'secret_ref_bearer'`,
-    );
-  }
-
-  private assertSideEffectKind(stepId: string, raw: unknown): SideEffectKind | undefined {
-    if (raw === undefined) return undefined;
-    if (
-      raw === "read_only" ||
-      raw === "login" ||
-      raw === "submit" ||
-      raw === "create" ||
-      raw === "update" ||
-      raw === "delete" ||
-      raw === "upload"
-    ) {
-      return raw;
-    }
-    throw new UtilityExecutorError("IR_SCHEMA_INVALID", `step '${stepId}' api_call.sideEffect must be a valid side effect kind`);
-  }
-
-  private assertDeterministicCriteria(criteria: unknown): DeterministicCriteria {
-    if (typeof criteria !== "object" || criteria === null || !("type" in criteria)) {
-      throw new UtilityExecutorError("IR_SCHEMA_INVALID", "verify criteria missing 'type'");
-    }
-    const type = (criteria as { type: unknown }).type;
-    if (type === "element_present") {
-      const selector = nonEmptyString((criteria as { selector?: unknown }).selector);
-      if (selector === undefined) {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", "element_present.selector must be a non-empty string");
-      }
-      return { type, selector };
-    }
-    if (type === "element_visible") {
-      const target = (criteria as { target?: unknown }).target;
-      const selector = typeof target === "object" && target !== null
-        ? nonEmptyString((target as { selector?: unknown }).selector)
-        : undefined;
-      if (selector === undefined) {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", "element_visible.target.selector must be a non-empty string");
-      }
-      return { type, target: { selector } };
-    }
-    if (type === "min_rows") {
-      const selector = nonEmptyString((criteria as { selector?: unknown }).selector);
-      const n = (criteria as { n?: unknown }).n;
-      if (selector === undefined) {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", "min_rows.selector must be a non-empty string");
-      }
-      if (!Number.isInteger(n) || (n as number) < 1) {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", "min_rows.n must be an integer >= 1");
-      }
-      return { type, selector, n: n as number };
-    }
-    if (type === "element_absent") {
-      const target = (criteria as { target?: unknown }).target;
-      const selector = typeof target === "object" && target !== null
-        ? nonEmptyString((target as { selector?: unknown }).selector)
-        : undefined;
-      if (selector === undefined) {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", "element_absent.target.selector must be a non-empty string");
-      }
-      return { type, target: { selector } };
-    }
-    if (type === "text_includes") {
-      const texts = (criteria as { texts?: unknown }).texts;
-      if (!Array.isArray(texts) || texts.length === 0 || !texts.every((t) => nonEmptyString(t) !== undefined)) {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", "text_includes.texts must be a non-empty array of non-empty strings");
-      }
-      return { type, texts: texts as string[] };
-    }
-    if (type === "url_matches") {
-      const pattern = nonEmptyString((criteria as { pattern?: unknown }).pattern);
-      if (pattern === undefined) {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", "url_matches.pattern must be a non-empty string");
-      }
-      try {
-        new RegExp(pattern);
-      } catch {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", `url_matches.pattern is not a valid regex: ${pattern}`);
-      }
-      return { type, pattern };
-    }
-    if (type === "http_status") {
-      const codes = (criteria as { codes?: unknown }).codes;
-      if (!Array.isArray(codes) || codes.length === 0 || !codes.every((code) => Number.isInteger(code) && code >= 100 && code <= 599)) {
-        throw new UtilityExecutorError("IR_SCHEMA_INVALID", "http_status.codes must be non-empty HTTP status codes");
-      }
-      return { type, codes: codes as number[] };
-    }
-    {
-      // VLM/스크린샷 기준 등은 vision 실행기 소관(후행, §9.1) — 조용히 통과시키지 않는다.
-      throw new UtilityExecutorError(
-        "EXECUTOR_CAPABILITY_MISMATCH",
-        `verify criteria '${String(type)}' is not deterministic — requires the vision executor`,
-      );
-    }
-  }
+  // action/verify criteria 검증(assert*)은 utility-executor-assert.ts(의미 단위 분리, CLAUDE.md #7).
 
   private async executeHttpApiCall(
     action: Extract<UtilityAction, { type: "api_call" }>,
@@ -618,10 +337,6 @@ export class UtilityExecutor implements ExecutorPlugin {
       work.then(resolve, reject).finally(() => ctx.abortSignal.removeEventListener("abort", abort));
     });
   }
-}
-
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function hasHeader(headers: Record<string, string>, wanted: string): boolean {

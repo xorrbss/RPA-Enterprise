@@ -3,7 +3,7 @@ import type { PoolClient } from "pg";
 
 import { withTenantTx } from "../db/pool";
 import { readBrowserBotPool } from "../runtime/bot-pool-read";
-import { readAiGovernanceReadiness } from "./ai-governance-enforcement";
+import { readAiGovernanceReadiness } from "./ai-governance-readiness";
 import { runIdempotentCommand } from "./command";
 import { parseLimit } from "./list-query";
 import { readOpsHealth } from "./ops-health";

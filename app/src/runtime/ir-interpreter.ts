@@ -19,15 +19,21 @@
  *     InterpreterError로 표면화한다("조용한 false/unknown 금지").
  */
 import type { IRELNode, IRELScope } from "../../../codegen/irel-compile";
-import type { ArtifactRef, ClassifiedException, ExecutorPlugin, HttpResponseSnapshot, PageStateResolver, RunContext, StepResult, StepStatus, VerifyResult } from "../../../ts/core-types";
+import type { ArtifactRef, ClassifiedException, ExecutorPlugin, PageStateResolver, RunContext, StepResult, VerifyResult } from "../../../ts/core-types";
 import { SPAN, withSpan, spanCommonFromContext } from "../observability/telemetry";
 import { evaluateCondition, selectOnBranch, NoBranchMatchedError, SessionRegistrationRequiredError, type CompiledOnBranch } from "./flow-control";
 import { mergeExtractOutputs, type ExtractResultPage, type MergedExtractResult } from "./extract-result-merge";
+import { parseHumanTaskInput } from "./ir-interpreter-human-task";
 import {
-  HUMAN_TASK_MAX_TIMEOUT_MS,
-  HUMAN_TASK_MIN_TIMEOUT_MS,
-  parseHumanTaskTimeoutMs,
-} from "./human-task-timeout-policy";
+  InterpreterError,
+  failureTerminal,
+  httpResponseFromStep,
+  isFailureTerminal,
+  projectNodeOutput,
+  resolveActionValueFromNode,
+  terminalToStatus,
+  type NodeOutput,
+} from "./ir-interpreter-node-output";
 import type {
   CompiledScenario,
   InterpreterDeps,
@@ -48,6 +54,8 @@ export type {
   ScenarioOutcome,
   SuspendContext,
 } from "./ir-interpreter-types";
+// 분해 재-export — 기존 import 경로(ir-interpreter) 유지(ir-translate·run-step-driver·tests).
+export { InterpreterError } from "./ir-interpreter-node-output";
 
 /** §E executor.execute span 의 `executor` 속성 — 플러그인 활성 capability 라벨(dom/vision/utility). 미활성=none. */
 function executorCapabilityLabel(caps: { dom: boolean; vision: boolean; utility: boolean }): string {
@@ -55,112 +63,10 @@ function executorCapabilityLabel(caps: { dom: boolean; vision: boolean; utility:
   return active.length > 0 ? active.join("+") : "none";
 }
 
-/** 표준 노드 출력 필드(IREL node.<id>.*). 미투영 필드는 부재 → 참조 시 IREL_RUNTIME_MISSING(loud). */
-interface NodeOutput {
-  // status 는 실행 노드(StepResult 투영)에만 부착. @human_task 해소 출력은 StepStatus 가 없어 status 부재(decision/correction 만, ir-expression §2).
-  readonly status?: StepStatus;
-  readonly row_count?: number;
-  readonly extracted_ref?: string;
-  readonly http_status?: number;
-  readonly http_ok?: boolean;
-  readonly http_body?: unknown;
-  // tier: fallback_chain 노드가 채택한 티어(T0..T3). fallback 노드 출력에만 부착(ir-expression §2). 비-fallback은 부재(loud).
-  readonly tier?: string;
-  // @human_task 해소 출력(resume nodeScope 시드): decision(닫힌 enum)·correction(business_form 교정값). reserved-handlers.md.
-  readonly decision?: string;
-  readonly correction?: Record<string, unknown>;
-}
-
-/** StepResult → 표준 노드 출력 투영(ir-expression §2). status는 항상; row_count/extracted_ref는 extract 액션만. */
-function projectNodeOutput(res: StepResult): NodeOutput {
-  if (res.action === "api_call") {
-    const http = httpResponseFromStep(res);
-    return {
-      status: res.status,
-      ...(http !== undefined ? {
-        http_status: http.status,
-        http_ok: http.ok,
-        ...(http.body !== undefined ? { http_body: http.body } : {}),
-      } : {}),
-    };
-  }
-  if (res.action !== "extract") return { status: res.status };
-  const rowCount = res.output !== null && typeof res.output === "object" ? (res.output as { rowCount?: unknown }).rowCount : undefined;
-  const ref = res.artifacts[0];
-  return {
-    status: res.status,
-    ...(typeof rowCount === "number" ? { row_count: rowCount } : {}),
-    ...(typeof ref === "string" ? { extracted_ref: ref } : {}),
-  };
-}
-
-function httpResponseFromStep(res: StepResult): HttpResponseSnapshot | undefined {
-  if (res.action !== "api_call" || res.output === undefined || typeof res.output !== "object" || res.output === null) return undefined;
-  const output = res.output as Partial<HttpResponseSnapshot>;
-  if (typeof output.status !== "number" || typeof output.ok !== "boolean" || typeof output.contentType !== "string" || typeof output.finalUrl !== "string" || typeof output.bodyTruncated !== "boolean") return undefined;
-  return {
-    status: output.status,
-    ok: output.ok,
-    contentType: output.contentType,
-    finalUrl: output.finalUrl,
-    redirected: output.redirected === true,
-    ...(typeof output.redirectLocation === "string" ? { redirectLocation: output.redirectLocation } : {}),
-    ...(Object.prototype.hasOwnProperty.call(output, "body") ? { body: output.body } : {}),
-    bodyTruncated: output.bodyTruncated,
-  };
-}
-
-
-export class InterpreterError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = "InterpreterError";
-  }
-}
-
 // ops-defaults.md §5 `interpreter.graph_max_steps` — **구조적(non-loop) 노드 순회** 상한(비종료 방어, D8-A7/A8).
 // loop 반복은 max_iterations로 독립 바운드되며 runScenario가 loop별 (max_iterations×nodeCount) 만큼 budget을 확장해
 // 두 가드를 실제 독립화한다(loop 반복이 구조 상한을 spurious 소진 방지). 환경별/중첩-loop 오버라이드는 deps.maxSteps.
 const DEFAULT_MAX_STEPS = 200;
-
-// 실패 status → terminal 매핑. 처리 못 하는 status(suspended/challenge/uncertain 등)는 null → 호출부가 표면화.
-// failed_security 는 fail_system 합류 금지 — R10(즉시 중단+알림)이 R8(failed_system)과 다른 종결이다
-//   (state-machine.md R10, runtime-contract EXECUTOR_OUTCOME_MAPPING_CONTRACT.securityFailure).
-function failureTerminal(status: StepStatus): string | null {
-  if (status === "failed_business") return "fail_business";
-  if (status === "failed_security") return "fail_security";
-  if (status === "failed_system") return "fail_system";
-  return null;
-}
-
-/**
- * act.value_from_node = {node, key} 를 dispatch 직전 소유 노드의 correction[key](사람이 검토·편집한 값)로 해소해 a.value 로
- * 고정한다. nodeScope 는 런타임(traverse)에서만 존재하므로 compiledScenarioFrom(정적·params-only)이 아닌 여기서 해소한다.
- * 미해소(노드 미방문/correction 부재/키 부재/비-문자열)면 loud throw — LLM/캐시 값으로 무음 fill 하지 않는다("조용한 false 금지").
- * value_from_node 가 없거나 act 가 아니면 원본 그대로 반환(투명).
- */
-function resolveActionValueFromNode(action: unknown, nodeScope: Record<string, NodeOutput>): unknown {
-  if (typeof action !== "object" || action === null) return action;
-  const a = action as { type?: unknown; valueFromNode?: unknown };
-  if (a.type !== "act" || a.valueFromNode === undefined) return action;
-  const vfn = a.valueFromNode as { node?: unknown; key?: unknown };
-  if (typeof vfn.node !== "string" || typeof vfn.key !== "string") {
-    throw new InterpreterError("IR_SCHEMA_INVALID", `interpreter: value_from_node 는 {node,key} 문자열 필요`);
-  }
-  const owner = nodeScope[vfn.node];
-  const correction = owner?.correction;
-  const v = correction !== undefined ? correction[vfn.key] : undefined;
-  if (typeof v !== "string") {
-    throw new InterpreterError(
-      "IR_SCHEMA_INVALID",
-      `interpreter: value_from_node {${vfn.node}.${vfn.key}} 미해소 — 소유 노드 correction 에 문자열 값 없음(사람 검토값 부재; 조용한 fill 금지)`,
-    );
-  }
-  return { ...(action as object), value: v };
-}
 
 /** 순회 공유 가변 상태 — fallback 티어 sub-traversal 이 nodeScope/loopState/steps/visited/budget 을 공유한다. */
 interface TraversalState {
@@ -184,7 +90,6 @@ function nodeScopeRef(state: TraversalState): Record<string, Record<string, unkn
   return state.nodeScope as unknown as Record<string, Record<string, unknown>>;
 }
 
-/** terminal 문자열 → StepStatus(fallback 노드 출력의 status 도출 — 채택 티어 entry_node 출력 부재 시). */
 function collectExtractPage(state: TraversalState, nodeId: string, stepId: string, res: StepResult): void {
   if (res.action !== "extract" || res.status !== "success") return;
   const output = res.extracted ?? res.output;
@@ -196,142 +101,6 @@ function collectExtractPage(state: TraversalState, nodeId: string, stepId: strin
     output,
     ...(typeof artifactRef === "string" ? { artifactRef } : {}),
   });
-}
-
-function terminalToStatus(terminal: string): StepStatus {
-  if (terminal === "fail_business") return "failed_business";
-  if (terminal === "fail_security") return "failed_security";
-  if (terminal === "fail_system") return "failed_system";
-  return "success";
-}
-
-// 실패 terminal 집합(failureTerminal 산출 + 표준 vocab fail_*). 생략 advance_when 기본 전환 판정(§4: StepResult.status=failed_*).
-// startsWith("fail") 대신 정확 매칭 — "failover_*" 류 비-실패 terminal 오분류 방지(break-it).
-const FAILURE_TERMINALS = new Set(["fail_business", "fail_system", "fail_security"]);
-
-/** fallback advance 기본(§4): 티어 결과가 실패 terminal 이면 다음 티어로 전환. */
-function isFailureTerminal(terminal: string): boolean {
-  return FAILURE_TERMINALS.has(terminal);
-}
-
-/**
- * @human_task input(reserved-handlers) → 타입 검증된 산출. 미정/오류는 조용히 흘리지 않고 IR_SCHEMA_INVALID 로 표면화.
- * kind 미지정→exception 기본(R5), on_timeout 미지정→fail 기본(reserved-handlers/DDL). assignee_role 은 필수(미할당 task 금지).
- * payload·timeout(둘 다 optional)은 v1 의도적 미투영(은폐 아님, 명시 deferral): payload 는 inline 저장 부재(read 측 v1
- * 미포함, payload_ref 만) · timeout→expires_at 은 human_task timeout 스위퍼(H4/H8)가 미구현이라 발화 소비자 없음
- * (challenge 경로도 expires_at 미설정 동일). 스위퍼 증분에서 timeout 파싱+expires_at+payload_ref 를 함께 배선.
- */
-/**
- * @human_task payload 의 한 **VALUE**를 해소한다 — {from_param:"key"} 리프면 run params 값으로 치환(리뷰어가 **하나의
- * 사람-확인 인박스**에서 이 run 의 실제 데이터를 보고 business_form 필드가 payload[field.key]로 pre-fill 되게,
- * HumanTaskReviewPanel.initialFormValues). url_ref/value_ref(params 참조)와 동형이되 payload 는 중첩 레코드라 리프 마커로
- * 리터럴과 구분한다. 미해소(키 부재/비-스칼라)는 loud throw("조용한 false 금지"). 마커가 아니면 그대로/재귀. 호출부는 루트
- * 레코드의 각 VALUE 에만 적용해(루트 자체는 표시용 레코드로 보존) 루트가 마커로 collapse 되지 않게 한다(PAYLOAD-02).
- */
-function resolvePayloadParams(value: unknown, params: Record<string, unknown> | undefined, nodeId: string): unknown {
-  if (Array.isArray(value)) return value.map((v) => resolvePayloadParams(v, params, nodeId));
-  if (value !== null && typeof value === "object") {
-    const rec = value as Record<string, unknown>;
-    const keys = Object.keys(rec);
-    if (keys.length === 1 && keys[0] === "from_param" && typeof rec.from_param === "string") {
-      const pk = rec.from_param;
-      const pv = params?.[pk];
-      if (typeof pv !== "string" && typeof pv !== "number" && typeof pv !== "boolean") {
-        throw new InterpreterError(
-          "IR_SCHEMA_INVALID",
-          `@human_task node '${nodeId}': payload from_param '${pk}' 미해소 — run params 에 스칼라 값 없음(리뷰어 컨텍스트 유실; 조용한 false 금지)`,
-        );
-      }
-      return pv;
-    }
-    return Object.fromEntries(keys.map((k) => [k, resolvePayloadParams(rec[k], params, nodeId)]));
-  }
-  return value;
-}
-
-function parseHumanTaskInput(
-  nodeId: string,
-  input: Record<string, unknown>,
-  params: Record<string, unknown> | undefined,
-): {
-  humanTaskKind: "approval" | "validation" | "exception";
-  assigneeRole: string;
-  onTimeout: "fail" | "escalate";
-  timeoutMs?: number;
-  payload?: Record<string, unknown>;
-  resultSchema?: Record<string, unknown>;
-  artifactRefs?: readonly string[];
-} {
-  const kindRaw = input.kind;
-  let humanTaskKind: "approval" | "validation" | "exception";
-  if (kindRaw === undefined) humanTaskKind = "exception";
-  else if (kindRaw === "approval" || kindRaw === "validation" || kindRaw === "exception") humanTaskKind = kindRaw;
-  else
-    throw new InterpreterError(
-      "IR_SCHEMA_INVALID",
-      `@human_task node '${nodeId}': input.kind '${String(kindRaw)}' 무효(approval|validation|exception)`,
-    );
-  const assigneeRole = input.assignee_role;
-  if (typeof assigneeRole !== "string" || assigneeRole.trim().length === 0) {
-    throw new InterpreterError("IR_SCHEMA_INVALID", `@human_task node '${nodeId}': input.assignee_role 필수(비어있지 않은 string)`);
-  }
-  const onTimeoutRaw = input.on_timeout;
-  let onTimeout: "fail" | "escalate";
-  if (onTimeoutRaw === undefined) onTimeout = "fail";
-  else if (onTimeoutRaw === "fail" || onTimeoutRaw === "escalate") onTimeout = onTimeoutRaw;
-  else
-    throw new InterpreterError(
-      "IR_SCHEMA_INVALID",
-      `@human_task node '${nodeId}': input.on_timeout '${String(onTimeoutRaw)}' 무효(fail|escalate)`,
-    );
-  const timeoutRaw = input.timeout;
-  let timeoutMs: number | undefined;
-  if (timeoutRaw !== undefined) {
-    if (typeof timeoutRaw !== "string") {
-      throw new InterpreterError("IR_SCHEMA_INVALID", `@human_task node '${nodeId}': input.timeout must be a duration string`);
-    }
-    const parsed = parseHumanTaskTimeoutMs(timeoutRaw);
-    if (parsed === null) {
-      throw new InterpreterError(
-        "IR_SCHEMA_INVALID",
-        `@human_task node '${nodeId}': input.timeout '${timeoutRaw}' invalid (ms|s|m|h|d, ${HUMAN_TASK_MIN_TIMEOUT_MS}-${HUMAN_TASK_MAX_TIMEOUT_MS}ms)`,
-      );
-    }
-    timeoutMs = parsed;
-  }
-  const payloadRaw = optionalRecordInput(nodeId, input.payload, "payload");
-  // payload 는 항상 표시용 레코드(displayKey→value) — 루트 자체를 {from_param} 마커로 오인해 스칼라로 collapse 시키지 않도록
-  //   각 VALUE 만 해소한다(루트 collapse + unsound cast 로 jsonb 에 문자열 영속되던 PAYLOAD-02 방지). 마커는 값 위치에서만 유효.
-  const payload = payloadRaw !== undefined
-    ? Object.fromEntries(Object.entries(payloadRaw).map(([k, v]) => [k, resolvePayloadParams(v, params, nodeId)]))
-    : undefined;
-  const resultSchema = optionalRecordInput(nodeId, input.result_schema, "result_schema");
-  const artifactRefs = optionalStringArrayInput(nodeId, input.artifact_refs, "artifact_refs");
-  return {
-    humanTaskKind,
-    assigneeRole,
-    onTimeout,
-    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-    ...(payload !== undefined ? { payload } : {}),
-    ...(resultSchema !== undefined ? { resultSchema } : {}),
-    ...(artifactRefs !== undefined ? { artifactRefs } : {}),
-  };
-}
-
-function optionalRecordInput(nodeId: string, value: unknown, field: string): Record<string, unknown> | undefined {
-  if (value === undefined) return undefined;
-  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  throw new InterpreterError("IR_SCHEMA_INVALID", `@human_task node '${nodeId}': input.${field} 는 object 여야 함`);
-}
-
-function optionalStringArrayInput(nodeId: string, value: unknown, field: string): readonly string[] | undefined {
-  if (value === undefined) return undefined;
-  if (Array.isArray(value) && value.every((item) => typeof item === "string" && item.length > 0)) {
-    return value;
-  }
-  throw new InterpreterError("IR_SCHEMA_INVALID", `@human_task node '${nodeId}': input.${field} 는 non-empty string[] 이어야 함`);
 }
 
 /**

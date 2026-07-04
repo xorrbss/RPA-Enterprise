@@ -8,7 +8,8 @@ import { isRecord, runIdempotentCommand, type CommandResponse } from "./command"
 import { ApiResponseError } from "../runtime/errors";
 import { parseLimit } from "./list-query";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";
-import { assertIdeaExists, parseKnownBody, validateIdeaId } from "./automation-ideas";
+import { assertIdeaExists } from "./automation-ideas";
+import { parseKnownBody, validateIdeaId } from "./automation-ideas-parse";
 
 interface RoiActualEvidenceRow {
   readonly id: string;

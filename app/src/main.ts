@@ -25,7 +25,6 @@
  *     AES-256-GCM using the runtime-worker `browser_session` SecretRef data key.
  * ────────────────────────────────────────────────────────────────────────────────────────────────
  */
-import http from "node:http";
 import { pathToFileURL } from "node:url";
 
 import type { FastifyInstance } from "fastify";
@@ -36,119 +35,29 @@ import { ConsoleMetricExporter, PeriodicExportingMetricReader } from "@opentelem
 import { ConsoleSpanExporter } from "@opentelemetry/sdk-trace-base";
 
 import { hmacJwtVerifier, jwksRs256Verifier, JwtAuthenticationBoundary } from "./api/auth";
-import { PgAiGovernanceGatewayGuard } from "./api/ai-governance-enforcement";
 import { buildApiArtifactObjectReader } from "./api/artifact-object-reader-binding";
 import { PgControlPlaneIdempotencyStore } from "./api/idempotency";
-import { createLlmScenarioPlanner, LlmGatewayScenarioPlannerClient } from "./api/llm-scenario-planner";
 import { PgPrincipalDirectory } from "./api/principal-directory";
 import { RoleMatrixRbacMiddleware } from "./api/rbac";
 import { PgPrincipalRoleAssignmentResolver } from "./api/role-assignments";
 import { PgGraphileRunEnqueuer } from "./runtime/run-queue";
-import { BufferedScenarioGenerationArtifactSink } from "./api/scenario-generation-artifacts";
 import { PuppeteerSelectorProbeProvider } from "./api/selector-probe-provider";
-import {
-  PgScenarioGenerationLlmCallIdempotencyStore,
-  type ScenarioGenerationLlmCallCleanup,
-} from "./api/scenario-generation-llm-call-idempotency-store";
 import { PgDurableSecurityAuditDecisionWriter } from "./api/security-audit";
 import { buildServer } from "./api/server";
 import { DenyAllSignedCommandRegistry, SecretStoreSignedCommandRegistry } from "./api/signed-command-registry";
-import { assertArtifactStoreStartupCompatibility, loadAiGovernanceReadinessEnvConfig, loadApiConfig, loadApiLogLevel, loadArtifactLifecycleConsumer, loadCommonConfig, loadRunMode, loadScenarioGenerationLlmV1Config, type ApiConfig, type CommonConfig, type ScenarioGenerationLlmV1Config } from "./config/env";
+import { assertArtifactStoreStartupCompatibility, loadAiGovernanceReadinessEnvConfig, loadApiConfig, loadApiLogLevel, loadArtifactLifecycleConsumer, loadCommonConfig, loadRunMode, loadScenarioGenerationLlmV1Config, type ApiConfig, type CommonConfig } from "./config/env";
 import { createPool, type PgPool } from "./db/pool";
 import { bootstrapMetrics, bootstrapTracing } from "./observability/bootstrap";
-import { AjvStructuredOutputValidator } from "./gateway/ajv-structured-output-validator";
-import { SafeCapabilityGate } from "./gateway/capability-gate";
-import { CodexSseAdapter } from "./gateway/codex-sse-adapter";
-import { FetchCodexSseTransport } from "./gateway/codex-sse-transport";
-import { buildGatewayArtifactObjectStore } from "./gateway/artifact-object-store-binding";
-import { LlmGateway } from "./gateway/llm-gateway";
 import { VaultSecretStore } from "./secrets/vault-secret-store";
 import { VaultSecretStoreBoundary } from "./secrets/vault-secret-store-boundary";
-import type { AuthenticatedPrincipal, PrincipalId, SecretStoreBoundary, TenantId } from "../../ts/security-middleware-contract";
-import { DeterministicGatewayRedactionBoundary } from "../../gateway/redaction-boundary";
-import type { PlainSecret, SecretRef, SecretStore } from "../../ts/core-types";
+import type { SecretStoreBoundary } from "../../ts/security-middleware-contract";
+import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
-import type { ScenarioPlanner } from "./api/scenario-generation-types";
-import type { ScenarioGenerationArtifactBuffer } from "./api/scenario-generation-artifacts";
+import { startHealthServer } from "./main-health";
+import { buildScenarioGenerationPlannerBinding } from "./main-scenario-planner";
 import { buildApiSessionStore, startArtifactLifecycleWorker, startWorker, type ArtifactLifecycleRunner, type StartedWorker } from "./main-worker";
 
-const REQUIRED_SCHEMA_MIGRATION_VERSIONS = ["0001", "0002"] as const;
-
-interface HealthReadiness {
-  readonly ready: boolean;
-  readonly reason?: string;
-}
-
-async function readHealthReadiness(pool: PgPool): Promise<HealthReadiness> {
-  await pool.query("SELECT 1");
-  const ledger = await pool.query<{ schema_migrations_regclass: string | null }>(
-    `SELECT to_regclass('public.schema_migrations')::text AS schema_migrations_regclass`,
-  );
-  if (ledger.rows[0]?.schema_migrations_regclass === null || ledger.rows[0]?.schema_migrations_regclass === undefined) {
-    return { ready: false, reason: "schema_migrations_missing" };
-  }
-
-  const applied = await pool.query<{ applied_count: string }>(
-    `SELECT count(*)::text AS applied_count
-       FROM schema_migrations
-      WHERE version = ANY($1::text[])
-        AND status = 'applied'`,
-    [[...REQUIRED_SCHEMA_MIGRATION_VERSIONS]],
-  );
-  const appliedCount = Number(applied.rows[0]?.applied_count ?? 0);
-  if (appliedCount !== REQUIRED_SCHEMA_MIGRATION_VERSIONS.length) {
-    return { ready: false, reason: "schema_migrations_incomplete" };
-  }
-
-  const role = await pool.query<{ bypasses_rls: string }>(
-    `SELECT COALESCE((SELECT (rolsuper OR rolbypassrls)::text FROM pg_roles WHERE rolname = current_user), 'unknown') AS bypasses_rls`,
-  );
-  if (role.rows[0]?.bypasses_rls !== "false") {
-    return { ready: false, reason: "db_role_bypasses_rls" };
-  }
-  return { ready: true };
-}
-
-/** Unauthenticated health probe server (separate http server — bypasses the Fastify auth/RBAC chain). */
-export function startHealthServer(pool: PgPool, port: number, prometheusExporter?: PrometheusExporter): http.Server {
-  const server = http.createServer((reqMsg, res) => {
-    const url = reqMsg.url ?? "/";
-    if (url === "/livez") {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ status: "live" }));
-      return;
-    }
-    if (url === "/readyz") {
-      readHealthReadiness(pool)
-        .then((readiness) => {
-          if (!readiness.ready) {
-            res.writeHead(503, { "content-type": "application/json" });
-            res.end(JSON.stringify({ status: "not-ready", reason: readiness.reason }));
-            return;
-          }
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ status: "ready" }));
-        })
-        .catch((err: unknown) => {
-          res.writeHead(503, { "content-type": "application/json" });
-          res.end(JSON.stringify({ status: "not-ready", reason: String(err) }));
-        });
-      return;
-    }
-    if (url === "/metrics" && prometheusExporter !== undefined) {
-      prometheusExporter.getMetricsRequestHandler(reqMsg, res);
-      return;
-    }
-    res.writeHead(404, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: "not_found" }));
-  });
-  server.on("error", (err) => {
-    console.error(JSON.stringify({ at: "main", fatal: `health server error: ${err.message}` }));
-    process.exit(1);
-  });
-  server.listen(port, "0.0.0.0");
-  return server;
-}
+export { startHealthServer } from "./main-health";
 
 /** JWT verifier per loaded mode: RS256 via remote JWKS (production) or the v1 HS256 shared secret. */
 function buildJwtVerifier(jwt: ApiConfig["jwt"]) {
@@ -199,124 +108,6 @@ export function buildApiWebhookSecretBoundary(
     audit: new PgDurableSecurityAuditDecisionWriter(pool),
     enforceRefNamespace: true,
   });
-}
-
-interface ScenarioGenerationPlannerBinding {
-  readonly planner: ScenarioPlanner;
-  readonly artifacts: ScenarioGenerationArtifactBuffer;
-  readonly llmCalls: ScenarioGenerationLlmCallCleanup;
-}
-
-async function buildScenarioGenerationPlannerBinding(
-  pool: PgPool,
-  cfg: ScenarioGenerationLlmV1Config,
-  apiCfg: ApiConfig,
-  securityAudit: PgDurableSecurityAuditDecisionWriter,
-): Promise<ScenarioGenerationPlannerBinding> {
-  const gw = cfg.gateway;
-  const apiArtifactStoreSecretStore = buildApiGatewayArtifactSecretStore(gw, apiCfg, securityAudit);
-  const artifactStore = await buildGatewayArtifactObjectStore(
-    gw,
-    apiArtifactStoreSecretStore !== undefined ? { secretStore: apiArtifactStoreSecretStore } : {},
-  );
-  const artifactSink = new BufferedScenarioGenerationArtifactSink(artifactStore, {
-    retentionDays: gw.artifactRetentionDays,
-  });
-  const llmCalls = new PgScenarioGenerationLlmCallIdempotencyStore(pool, {
-    retentionDays: gw.artifactRetentionDays,
-    staleOpenReclaimMs: gw.wallTimeoutMs,
-  });
-  const gateway = new LlmGateway({
-    primary: new CodexSseAdapter(
-      new FetchCodexSseTransport({ baseUrl: gw.codexBaseUrl, apiKey: gw.codexApiKey, model: gw.codexModel }),
-      {
-        model: gw.codexModel,
-        maxContextTokens: gw.codexMaxContextTokens,
-        idleTimeoutMs: gw.idleTimeoutMs,
-        wallTimeoutMs: gw.wallTimeoutMs,
-        pricePer1kInputUsd: gw.pricePer1kInputUsd,
-        pricePer1kOutputUsd: gw.pricePer1kOutputUsd,
-      },
-    ),
-    gate: new SafeCapabilityGate(),
-    validator: new AjvStructuredOutputValidator(),
-    sink: artifactSink,
-    idempotency: llmCalls,
-    securityAudit,
-    redactionBoundary: new DeterministicGatewayRedactionBoundary(),
-    aiGovernance: new PgAiGovernanceGatewayGuard(pool),
-    config: { retryMax: gw.retryMax, fallbackAttempts: gw.fallbackAttempts, repairAttempts: gw.repairAttempts },
-  });
-  return {
-    planner: createLlmScenarioPlanner(
-      new LlmGatewayScenarioPlannerClient(gateway, {
-        model: gw.codexModel,
-        promptTemplateVersion: cfg.promptTemplateVersion,
-        budget: gw.budget,
-      }),
-    ),
-    artifacts: artifactSink,
-    llmCalls,
-  };
-}
-
-function buildApiGatewayArtifactSecretStore(
-  gw: ScenarioGenerationLlmV1Config["gateway"],
-  cfg: ApiConfig,
-  securityAudit: PgDurableSecurityAuditDecisionWriter,
-): SecretStore | undefined {
-  if (gw.artifactStore.mode === "fs") return undefined;
-  const apiArtifactObjectStore = cfg.artifactObjectStore;
-  if (apiArtifactObjectStore === undefined || apiArtifactObjectStore.objectStore.kind !== "s3") {
-    throw new Error(
-      "SCENARIO_GENERATION_LLM_V1 with GATEWAY_ARTIFACT_STORE_MODE=s3 requires ARTIFACT_OBJECT_STORE_KIND=s3 and VAULT_API_* config",
-    );
-  }
-  if (
-    apiArtifactObjectStore.objectStore.endpoint !== gw.artifactStore.endpoint ||
-    apiArtifactObjectStore.objectStore.region !== gw.artifactStore.region ||
-    apiArtifactObjectStore.objectStore.bucket !== gw.artifactStore.bucket ||
-    apiArtifactObjectStore.objectStore.forcePathStyle !== gw.artifactStore.forcePathStyle
-  ) {
-    throw new Error("API artifact S3 reader config must match GATEWAY_ARTIFACT_STORE_MODE=s3 producer config");
-  }
-  const store = new VaultSecretStore({
-    baseUrl: apiArtifactObjectStore.vaultApi.addr,
-    mount: apiArtifactObjectStore.vaultApi.mount,
-    kvApiVersion: 2,
-    appRole: { roleId: apiArtifactObjectStore.vaultApi.roleId, secretId: apiArtifactObjectStore.vaultApi.secretId },
-  });
-  const boundary = new VaultSecretStoreBoundary({
-    store,
-    audit: securityAudit,
-    enforceRefNamespace: true,
-  });
-  return new ObjectStoreBoundarySecretStore(boundary, apiObjectStorePrincipal());
-}
-
-class ObjectStoreBoundarySecretStore implements SecretStore {
-  constructor(
-    private readonly boundary: SecretStoreBoundary,
-    private readonly principal: AuthenticatedPrincipal,
-  ) {}
-
-  resolve(ref: SecretRef): Promise<PlainSecret> {
-    return this.boundary.resolveAuthorized({
-      principal: this.principal,
-      ref,
-      purpose: "object_store",
-    });
-  }
-}
-
-function apiObjectStorePrincipal(): AuthenticatedPrincipal {
-  return {
-    subjectId: "api:scenario-generation-artifacts" as PrincipalId,
-    tenantId: "00000000-0000-0000-0000-000000000000" as TenantId,
-    roles: ["admin"],
-    source: "jwt",
-    claims: { runtime_identity: "api" },
-  };
 }
 
 async function startApi(pool: PgPool, common: CommonConfig, runMode = loadRunMode()): Promise<FastifyInstance> {
