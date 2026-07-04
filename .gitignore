@@ -45,3 +45,6 @@ app/poc/*/capture-*-output.json
 
 # 세션 등록 도우미 단일 실행파일 빌드 산출물(수십 MB 바이너리 — 커밋 금지, 재현은 build:session-capture-exe)
 app/dist/
+
+# Vite 로컬 캐시(의존성 최적화 산출물 — 커밋 금지, 재현은 dev/build로 자동 생성)
+.vite/
