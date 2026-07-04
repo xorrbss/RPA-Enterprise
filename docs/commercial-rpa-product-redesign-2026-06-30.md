@@ -469,7 +469,7 @@ Process/Task Mining Import
 
 ## 12. 화면 IA 재설계
 
-Implementation note (2026-06-30): 현재 `web/` 콘솔의 18개 1차 메뉴 노출은 도입 담당자/운영자 기본 경험에 과하다. 실제 메뉴 노출 정책, 역할별 기본 메뉴, 모바일 drawer 수락 기준은 [Phase 15: RPA 콘솔 단순 IA 설계](rpa-console-simplified-ia-phase15-design-2026-06-30.md)를 우선 적용한다.
+Implementation note (2026-06-30): 현재 `web/` 콘솔의 18개 1차 메뉴 노출은 도입 담당자/운영자 기본 경험에 과하다. 실제 메뉴 노출 정책, 역할별 기본 메뉴, 모바일 drawer 수락 기준은 [Phase 15: RPA 콘솔 단순 IA 설계](rpa-console-simplified-ia-phase15-design-2026-06-30.md)를 우선 적용한다. Phase 15 이후 도입 담당자 첫 화면 신뢰도와 사이트/세션/증빙 패키징은 [RPA Console Adoption Onboarding Design](rpa-console-adoption-onboarding-design-2026-07-01.md)에서 다룬다.
 
 | 상위 메뉴 | 하위 화면 | 사용 목적 |
 |---|---|---|
