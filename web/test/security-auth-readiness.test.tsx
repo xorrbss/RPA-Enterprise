@@ -77,7 +77,7 @@ const HS256_WARNING: AuthReadiness = {
 describe("security auth readiness", () => {
   beforeEach(() => {
     location.hash = "#security?section=access";
-    localStorage.setItem("rpa.token", jwt(["viewer"]));
+    localStorage.setItem("rpa.token", jwt(["admin"]));
   });
 
   test("JWKS 기반 SSO 준비 상태를 현업 문구로 표시한다", async () => {

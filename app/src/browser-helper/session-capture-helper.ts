@@ -10,14 +10,13 @@
  *   HTTPS 본문으로만 전송(중앙 API 가 신뢰경계에서 봉투암호화). 토큰은 env(RPA_OPERATOR_TOKEN)로만 받는다(argv/히스토리 노출 회피).
  *
  * 실행: RPA_OPERATOR_TOKEN=<operator JWT> tsx src/browser-helper/session-capture-helper.ts --api https://rpa.example --site <uuid>
+ *   (운영자 배포는 단일 실행파일 — scripts/build-session-capture-exe.mjs 가 본 CLI 를 Node SEA 로 패키징,
+ *    브라우저 계층은 capture-chrome-session(puppeteer-core 직결)이라 Stagehand/LLM SDK 가 번들에 없음)
  */
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { createStagehandSession, type CdpSession } from "../executor/cdp-session";
+import { launchCaptureChromeSession, type CaptureChromeSession } from "./capture-chrome-session";
 import { awaitLoginCookies, findChrome, DEFAULT_LOGIN_DEADLINE_MS } from "../executor/login-capture";
 import type { RawCookie } from "../executor/raw-cdp";
 
@@ -152,7 +151,7 @@ export async function runSessionCaptureHelper(opts: SessionCaptureHelperOptions,
   return { kind: "captured", captureSessionId: start.capture_session_id, cookieCount: cookies.length };
 }
 
-/** 헤드풀 Chrome 기본 캡처 구현 — findChrome → createStagehandSession(headless:false) → awaitLoginCookies → close. */
+/** 헤드풀 Chrome 기본 캡처 구현 — findChrome → launchCaptureChromeSession(헤드풀) → awaitLoginCookies → close. */
 export function defaultSessionCaptureDeps(chromePath?: string): SessionCaptureHelperDeps {
   return {
     async captureCookies(loginUrl: string, authSelector: string, deadlineMs: number): Promise<RawCookie[] | null> {
@@ -160,15 +159,13 @@ export function defaultSessionCaptureDeps(chromePath?: string): SessionCaptureHe
       if (chrome === null) {
         throw new SessionCaptureHelperError("Chrome 미발견 — --chrome <path> 지정 또는 CHROME_PATH 설정 후 재시도");
       }
-      const downloadDir = mkdtempSync(join(tmpdir(), "op-capture-"));
-      let session: CdpSession | undefined;
+      let session: CaptureChromeSession | undefined;
       try {
-        session = await createStagehandSession({ chromeExecutablePath: chrome, downloadDir, headless: false, initialUrl: loginUrl });
+        session = await launchCaptureChromeSession({ chromeExecutablePath: chrome, initialUrl: loginUrl });
         const loginOrigin = new URL(loginUrl).origin;
         return await awaitLoginCookies(session, authSelector, loginOrigin, deadlineMs);
       } finally {
         if (session !== undefined) await session.close().catch(() => undefined);
-        rmSync(downloadDir, { recursive: true, force: true });
       }
     },
   };
@@ -200,7 +197,8 @@ function parseArgs(argv: readonly string[]): CliArgs {
 }
 
 const USAGE =
-  "사용법: RPA_OPERATOR_TOKEN=<operator JWT> tsx src/browser-helper/session-capture-helper.ts --api <base-url> --site <uuid> [--chrome <path>] [--login-timeout-ms <n>]";
+  "사용법: RPA_OPERATOR_TOKEN=<operator JWT> rpa-session-capture.exe --api <base-url> --site <uuid> [--chrome <path>] [--login-timeout-ms <n>]\n" +
+  "  (개발 환경: RPA_OPERATOR_TOKEN=<operator JWT> tsx src/browser-helper/session-capture-helper.ts <동일 인자>)";
 
 async function cli(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
@@ -220,21 +218,30 @@ async function cli(): Promise<void> {
     },
     defaultSessionCaptureDeps(args.chrome),
   );
+  // ⚠ Chrome 기동 이후 경로는 process.exit() 금지 — puppeteer 자식프로세스/undici keep-alive 핸들 teardown 과
+  // 경쟁하면 Windows libuv assertion(!(handle->flags & UV_HANDLE_CLOSING), exit 0xC0000409)로 성공 직후
+  // 크래시한다(단일 실행파일 실증에서 실측). exitCode 를 지정하고 이벤트루프가 자연 drain 하게 둔다.
   if (result.kind === "captured") {
     console.log(`✓ 세션 캡처 완료 — capture_session=${result.captureSessionId.slice(0, 8)}, 쿠키 ${result.cookieCount}개 봉투암호화 저장됨.`);
-    process.exit(0);
+    process.exitCode = 0;
     return;
   }
   console.error(`로그인 대기 시간 초과 — 캡처 미완료(capture_session=${result.captureSessionId.slice(0, 8)}). 다시 실행해 재시도하세요.`);
-  process.exit(1);
+  process.exitCode = 1;
 }
 
-// run-as-main 가드 — 테스트가 runSessionCaptureHelper 를 import 해도 cli()가 실행되지 않도록.
-const invoked = process.argv[1];
-if (invoked !== undefined && import.meta.url === pathToFileURL(invoked).href) {
+/** CLI 기동 + 최상위 예외 처리. run-as-main 가드(tsx 직접 실행)와 SEA 번들 엔트리(session-capture-helper-main)가 공용. */
+export function runCliMain(): void {
   cli().catch((e: unknown) => {
     const msg = e instanceof Error ? e.message : String(e);
     console.error(`세션 캡처 helper 오류: ${msg}`);
-    process.exit(1);
+    process.exitCode = 1; // Chrome 기동 후 예외 가능 — process.exit() 경쟁 회피(위 주석)
   });
+}
+
+// run-as-main 가드 — 테스트가 runSessionCaptureHelper 를 import 해도 cli()가 실행되지 않도록.
+// (CJS 번들에서는 import.meta.url 이 비어 이 가드가 항상 false — 번들 기동은 session-capture-helper-main 담당.)
+const invoked = process.argv[1];
+if (invoked !== undefined && import.meta.url === pathToFileURL(invoked).href) {
+  runCliMain();
 }

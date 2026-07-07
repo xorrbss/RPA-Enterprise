@@ -443,6 +443,23 @@ export interface MinimalOpsNotificationAttempt {
   legal_hold: boolean;
 }
 
+export interface MinimalOpsAlertNotificationRoute {
+  route_id: string;
+  source: "run_sla" | "human_task_sla" | "trigger_fire" | "failure_spike" | "session_expiry" | null;
+  min_severity: "warning" | "critical";
+  provider_alias: string;
+  endpoint_secret_ref: string;
+  callback_signature_secret_ref: string | null;
+  route_policy_ref: string;
+  recipient_group_ref: string | null;
+  allowed_hosts: readonly string[];
+  enabled: boolean;
+  created_by: string;
+  created_at: string;
+  updated_by: string;
+  updated_at: string;
+}
+
 export interface MinimalGatewayPolicy {
   id: string;
   tenant_id: string;
@@ -625,6 +642,10 @@ export interface MinimalControlPlaneServices {
   listOpsAlertDeliveries(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   recordOpsAlertDelivery(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   sendOpsAlertWebhookDelivery(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  listOpsAlertNotificationRoutes(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  createOpsAlertNotificationRoute(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  updateOpsAlertNotificationRoute(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
+  deleteOpsAlertNotificationRoute(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   getOpsHealth(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   getProductionReadiness(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
   listProductionReadinessEvidence(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse>;
@@ -721,6 +742,8 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
   private readinessEvidenceSequence = 0;
   private opsAlertDeliverySequence = 0;
   private opsAlertAttemptSequence = 0;
+  private opsAlertRouteSequence = 0;
+  private readonly opsAlertNotificationRoutes = new Map<string, MinimalOpsAlertNotificationRoute>();
   private integrationHandoffDispatchSequence = 0;
   private readonly runs = new Map<string, MinimalRun>();
   private readonly humanTasks = new Map<string, MinimalHumanTask>();
@@ -1211,6 +1234,84 @@ export class InMemoryControlPlaneServices implements MinimalControlPlaneServices
       legal_hold: Boolean(body.legal_hold),
     };
     return { status: 202, body: attempt };
+  }
+
+  async listOpsAlertNotificationRoutes(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const prefix = `${tenant(ctx)}:`;
+    const items = [...this.opsAlertNotificationRoutes.entries()]
+      .filter(([mapKey]) => mapKey.startsWith(prefix))
+      .map(([, route]) => route);
+    return page(items);
+  }
+
+  async createOpsAlertNotificationRoute(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const body = requireBody(ctx);
+    const now = new Date().toISOString();
+    const allowedHosts = Array.isArray(body.allowed_hosts)
+      ? body.allowed_hosts.filter((host): host is string => typeof host === "string")
+      : [];
+    const route: MinimalOpsAlertNotificationRoute = {
+      route_id: `ops-alert-route-${++this.opsAlertRouteSequence}`,
+      source: opsAlertRouteSource(body.source),
+      min_severity: body.min_severity === "critical" ? "critical" : "warning",
+      provider_alias: requireString(body, "provider_alias"),
+      endpoint_secret_ref: requireString(body, "endpoint_secret_ref"),
+      callback_signature_secret_ref: optionalString(body, "callback_signature_secret_ref") ?? null,
+      route_policy_ref: requireString(body, "route_policy_ref"),
+      recipient_group_ref: optionalString(body, "recipient_group_ref") ?? null,
+      allowed_hosts: allowedHosts,
+      enabled: body.enabled === undefined ? true : Boolean(body.enabled),
+      created_by: ctx.principal.subjectId,
+      created_at: now,
+      updated_by: ctx.principal.subjectId,
+      updated_at: now,
+    };
+    this.opsAlertNotificationRoutes.set(key(tenant(ctx), route.route_id), route);
+    return { status: 201, body: route };
+  }
+
+  async updateOpsAlertNotificationRoute(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const routeId = requireParam(ctx, "route_id");
+    const existing = this.opsAlertNotificationRoutes.get(key(tenant(ctx), routeId));
+    if (existing === undefined) throw new ApiResponseException("RESOURCE_NOT_FOUND");
+    const body = requireBody(ctx);
+    const updated: MinimalOpsAlertNotificationRoute = {
+      ...existing,
+      ...(Object.prototype.hasOwnProperty.call(body, "source") ? { source: opsAlertRouteSource(body.source) } : {}),
+      ...(body.min_severity !== undefined ? { min_severity: body.min_severity === "critical" ? "critical" as const : "warning" as const } : {}),
+      ...(body.provider_alias !== undefined ? { provider_alias: requireString(body, "provider_alias") } : {}),
+      ...(body.endpoint_secret_ref !== undefined ? { endpoint_secret_ref: requireString(body, "endpoint_secret_ref") } : {}),
+      ...(Object.prototype.hasOwnProperty.call(body, "callback_signature_secret_ref")
+        ? { callback_signature_secret_ref: optionalString(body, "callback_signature_secret_ref") ?? null }
+        : {}),
+      ...(body.route_policy_ref !== undefined ? { route_policy_ref: requireString(body, "route_policy_ref") } : {}),
+      ...(Object.prototype.hasOwnProperty.call(body, "recipient_group_ref")
+        ? { recipient_group_ref: optionalString(body, "recipient_group_ref") ?? null }
+        : {}),
+      ...(Array.isArray(body.allowed_hosts)
+        ? { allowed_hosts: body.allowed_hosts.filter((host): host is string => typeof host === "string") }
+        : {}),
+      ...(body.enabled !== undefined ? { enabled: Boolean(body.enabled) } : {}),
+      updated_by: ctx.principal.subjectId,
+      updated_at: new Date().toISOString(),
+    };
+    this.opsAlertNotificationRoutes.set(key(tenant(ctx), routeId), updated);
+    return { status: 200, body: updated };
+  }
+
+  async deleteOpsAlertNotificationRoute(ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
+    const routeId = requireParam(ctx, "route_id");
+    const mapKey = key(tenant(ctx), routeId);
+    const existing = this.opsAlertNotificationRoutes.get(mapKey);
+    if (existing === undefined) throw new ApiResponseException("RESOURCE_NOT_FOUND");
+    this.opsAlertNotificationRoutes.delete(mapKey);
+    const route: MinimalOpsAlertNotificationRoute = {
+      ...existing,
+      enabled: false,
+      updated_by: ctx.principal.subjectId,
+      updated_at: new Date().toISOString(),
+    };
+    return { status: 200, body: { deleted: true, route } };
   }
 
   async getOpsHealth(_ctx: ControlPlaneRequestContext): Promise<ControlPlaneResponse> {
@@ -2868,6 +2969,10 @@ export function createMinimalControlPlaneHandlers(services: MinimalControlPlaneS
     listOpsAlertDeliveries: bind(services.listOpsAlertDeliveries),
     recordOpsAlertDelivery: bind(services.recordOpsAlertDelivery),
     sendOpsAlertWebhookDelivery: bind(services.sendOpsAlertWebhookDelivery),
+    listOpsAlertNotificationRoutes: bind(services.listOpsAlertNotificationRoutes),
+    createOpsAlertNotificationRoute: bind(services.createOpsAlertNotificationRoute),
+    updateOpsAlertNotificationRoute: bind(services.updateOpsAlertNotificationRoute),
+    deleteOpsAlertNotificationRoute: bind(services.deleteOpsAlertNotificationRoute),
     getOpsHealth: bind(services.getOpsHealth),
     getProductionReadiness: bind(services.getProductionReadiness),
     listProductionReadinessEvidence: bind(services.listProductionReadinessEvidence),
@@ -2960,6 +3065,13 @@ function tenant(ctx: ControlPlaneRequestContext): string {
 
 function page(items: readonly unknown[]): ControlPlaneResponse {
   return { status: 200, body: { items, next_cursor: null } };
+}
+
+function opsAlertRouteSource(value: unknown): MinimalOpsAlertNotificationRoute["source"] {
+  if (value === "run_sla" || value === "human_task_sla" || value === "trigger_fire" || value === "failure_spike" || value === "session_expiry") {
+    return value;
+  }
+  return null;
 }
 
 function optionalConnectorEnvironment(record: Readonly<Record<string, unknown>>): MinimalConnectorProfileEnvironment | undefined {

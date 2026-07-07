@@ -84,6 +84,7 @@ const expectedTables = [
   "events_outbox",
   "ops_alert_acknowledgements",
   "ops_notification_deliveries",
+  "ops_alert_notification_routes",
   "ops_notification_attempts",
   "production_readiness_evidence",
   "dead_letter",

@@ -42,3 +42,6 @@ app/poc/*/capture-*-output.json
 
 # dev console local durable data (run artifacts, local scratch)
 .dev-data/
+
+# 세션 등록 도우미 단일 실행파일 빌드 산출물(수십 MB 바이너리 — 커밋 금지, 재현은 build:session-capture-exe)
+app/dist/

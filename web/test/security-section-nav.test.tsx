@@ -82,4 +82,31 @@ describe("security-section-nav", () => {
     accessTab.focus();
     expect(document.activeElement).toBe(accessTab);
   });
+
+  test("operator deep link shows only the read-only security summary", async () => {
+    localStorage.setItem("rpa.token", jwt(["operator"]));
+    location.hash = "#security?section=sites&site=site-login";
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "보안 읽기 전용 요약" })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "보안 deep link 권한 안내" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "사이트·브라우저 세션 읽기 전용 섹션 요약" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "사이트 접근 정책" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /사이트 등록|세션 등록|운영자 PC 등록|승인/ })).toBeNull();
+    expect(screen.queryByRole("list", { name: "보안/개인정보 섹션" })).toBeNull();
+  });
+
+  test("viewer credential deep link does not render admin panels or secret refs", async () => {
+    localStorage.setItem("rpa.token", jwt(["viewer"]));
+    location.hash = "#security?section=secrets&credential_site=site-a&credential=secret%3A%2F%2Ftenant-a%2Fexecutor";
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "보안 읽기 전용 요약" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "비밀·연결·감사 읽기 전용 섹션 요약" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "보안 연결 사용 현황" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "SecretRef 감사 요약" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Credential 운영" })).toBeNull();
+    expect(document.body.textContent).not.toMatch(/secret:\/\//i);
+    expect(document.body.textContent).not.toContain("tenant-a/executor");
+  });
 });

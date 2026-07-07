@@ -165,6 +165,37 @@ node scripts/mint-operator-token.mjs --tenant <tenant-uuid> --sub <접속 주체
 - 콘솔 접속: 접속 화면의 '접속 코드' 입력란에 stdout 토큰을 붙여넣는다.
 - 만료되면 같은 명령으로 재발급한다(`--expires`로 기간 조정). 토큰은 접속 자격증명이므로 로그/PR/스크린샷에 남기지 않는다.
 
+### 세션 등록 도우미(운영자 PC 단일 실행파일) 빌드·배포
+
+운영 환경의 브라우저 로그인 세션 등록은 운영자 PC에서 등록 도우미를 실행하는 경로가 정식이다(서버측 캡처는 dev 전용). 운영자 PC에 저장소·Node.js 없이 "다운로드 → 실행 → 로그인" 3단계로 완주되도록, 도우미를 단일 실행파일로 빌드해 배포한다.
+
+**빌드(배포 담당자, Windows x64에서 수행)** — Node SEA는 크로스컴파일이 없으므로 배포 대상과 같은 OS/아키텍처에서 빌드한다. 빌드 머신 요구: Node 24(CI와 동일), `npm --prefix app ci` 완료 상태.
+
+```powershell
+npm --prefix app run build:session-capture-exe
+# 산출: app/dist/session-capture/rpa-session-capture.exe (+ 콘솔에 SHA-256 출력)
+```
+
+빌드 스크립트(`app/scripts/build-session-capture-exe.mjs`)는 esbuild 번들 → SEA blob → node 실행파일 복사 → postject 주입 → 무인자 smoke(USAGE + exit 2)까지 자가 검증한다. 산출물은 git에 커밋하지 않는다(`app/dist/` ignore) — 재현은 위 명령.
+
+**배포**: `rpa-session-capture.exe`를 사내 공유 위치(파일 서버/포털)에 게시하고 빌드 시 출력된 SHA-256을 함께 공지한다(운영자는 `Get-FileHash`로 대조 가능). 운영자 실행 3단계는 콘솔의 '세션 등록' 안내 모달과 동일하다:
+
+```powershell
+$env:RPA_OPERATOR_TOKEN="<본인 접속 코드>"; .\rpa-session-capture.exe --api https://<콘솔 주소>/api --site <사이트 UUID>
+```
+
+- 접속 코드(operator 이상 역할)는 위 '최초 접속 토큰 발급' 절 또는 IdP 발급 토큰을 사용한다. 도우미는 DB/암호화키에 접근하지 않고 중앙 API(https 강제, loopback만 http 예외)로만 전송한다.
+- 운영자 PC 전제: Chrome 설치(표준 경로 자동 탐색, 다른 경로는 `--chrome <경로>` 또는 `CHROME_PATH`).
+- 실행파일은 신선한 임시 브라우저 프로필로 로그인 창을 띄우며(개인 프로필 미사용), 완료 시 창이 자동으로 닫히고 프로필은 폐기된다.
+
+**코드 서명(비-코드, 인증서 오너 절차)**: SEA 주입은 복사한 node 실행파일의 기존 서명을 무효화하므로 배포 전 오너 인증서로 재서명한다.
+
+```powershell
+signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /a app\dist\session-capture\rpa-session-capture.exe
+```
+
+미서명(또는 서명 무효) 상태로 배포하면 Windows SmartScreen이 "알 수 없는 게시자" 경고를 띄운다 — 운영자에게 "추가 정보 → 실행" 절차를 안내하거나, 사내 배포 정책(AppLocker/신뢰 게시자 등록)에 따라 예외를 등록한다. 서명 인증서는 오너 소유라 이 절차는 저장소 밖에서 수행한다.
+
 ### 5. Operator verification
 
 정적/단위 확인:

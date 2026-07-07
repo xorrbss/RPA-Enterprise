@@ -90,7 +90,7 @@ async function main(): Promise<void> {
     check("file connector catalog includes document-idp", idpConnector !== undefined, fileConnectors.body);
     check("document-idp records built-in deterministic engine decision", idpConnector?.implementation_state.includes("built_in_deterministic_text_v1") === true, fileConnectors.body);
     check("document-idp P1 does not require external OCR/vision secrets", idpConnector?.required_secret_refs.length === 0, fileConnectors.body);
-    check("document-idp security notes keep document bytes tenant-local", idpConnector?.security_notes.some((note) => note.includes("Document bytes stay inside")) === true, fileConnectors.body);
+    check("document-idp security notes keep document bytes tenant-local", idpConnector?.security_notes.some((note) => note.includes("테넌트 경계 안에 머뭅니다")) === true, fileConnectors.body);
 
     const notificationConnectors = await app.inject({ method: "GET", url: "/v1/connectors?kind=notification", headers: { authorization: `Bearer ${viewer}` } });
     check("viewer list notification connectors -> 200", notificationConnectors.statusCode === 200, notificationConnectors.body);
@@ -121,7 +121,7 @@ async function main(): Promise<void> {
     const httpTemplates = await app.inject({ method: "GET", url: "/v1/templates?connector_id=http-api", headers: { authorization: `Bearer ${viewer}` } });
     check("viewer list http-api templates -> 200", httpTemplates.statusCode === 200, httpTemplates.body);
     const httpTemplateBody = JSON.parse(httpTemplates.body) as { items: Array<{ template_id: string; produced_ir_pattern: string; success_criteria: string }> };
-    check("http-api template advertises implemented http_status verify", httpTemplateBody.items.some((item) => item.template_id === "http-api-status-check" && item.produced_ir_pattern.includes("verify(http_status)") && item.success_criteria.includes("future connector profile")), httpTemplates.body);
+    check("http-api template advertises implemented http_status verify", httpTemplateBody.items.some((item) => item.template_id === "http-api-status-check" && item.produced_ir_pattern.includes("verify(http_status)") && item.success_criteria.includes("향후 커넥터 프로필 계약")), httpTemplates.body);
 
     const apiConnectors = await app.inject({ method: "GET", url: "/v1/connectors?kind=api", headers: { authorization: `Bearer ${viewer}` } });
     check("viewer list api connectors -> 200", apiConnectors.statusCode === 200, apiConnectors.body);
@@ -184,7 +184,7 @@ async function main(): Promise<void> {
         item.status === "available" &&
         item.required_secret_refs.every((ref) => ref.startsWith("secret://")) &&
         item.produced_ir_pattern.includes("/v1/ops-alerts") &&
-        item.success_criteria.includes("delivered requires provider receipt"),
+        item.success_criteria.includes("제공자 접수/회신 증빙이 필요"),
       ),
       notificationTemplates.body,
     );

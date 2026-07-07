@@ -1,5 +1,5 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
-import { useState, type ComponentProps } from "react";
+import { useEffect, useRef, useState, type ComponentProps } from "react";
 
 import { useApiClient } from "../api/context";
 import { ROLE_LABELS, useCan, useRoles } from "../api/permissions";
@@ -11,10 +11,12 @@ import { Sparkline, type SparklinePoint } from "../components/Sparkline";
 import { EmptyState, ErrorState, desktopStateForError } from "../components/states";
 import { StatusBadge, errorCodeLabel, kindLabel } from "../components/badges";
 import { getInternalNavFlags, type NavPolicyFlags } from "../navPolicy";
-import { navigate, type ViewKey } from "../router";
+import { navigate, useHashParam, type ViewKey } from "../router";
 import { formatDeadline } from "../util/time";
 import { isActiveHumanTask } from "./humanTaskFilters";
 import type {
+  AuditLogItem,
+  AuditLogSummary,
   AutomationPerformanceReport,
   AutomationPerformanceReportExportFormat,
   AutomationPerformanceRunMode,
@@ -22,6 +24,8 @@ import type {
   AutomationPerformanceRoiSourceLineage,
   AutomationPerformanceRoiStage,
   AuthReadiness,
+  ConnectorCatalogItem,
+  AiGovernanceEvidenceSummary,
   DeadLetterItem,
   HumanTaskItem,
   OpsAlertItem,
@@ -34,6 +38,7 @@ import type {
   RunTrendPoint,
   RunTrends,
   ScenarioItem,
+  ScimProviderItem,
   SiteItem,
 } from "../api/types";
 
@@ -90,6 +95,23 @@ function queryPendingDetail(query: { readonly isFetching: boolean; readonly data
 function queryErrorDetail(error: unknown): string {
   const state = desktopStateForError(error);
   return `${state.title}: ${state.message}`;
+}
+
+function productionGateStatus(production: ProductionReadiness): GateStatus {
+  if (production.summary.controlled_prod_ready) return "ready";
+  if (production.summary.blocker_count > 0 || production.status === "blocked") return "blocked";
+  if (production.summary.warning_count > 0 || production.status === "warning") return "needs";
+  if (production.summary.deferred_count > 0) return "deferred";
+  return "needs";
+}
+
+function productionGateDetail(production: ProductionReadiness): string {
+  const counts = `차단 ${production.summary.blocker_count}건, 경고 ${production.summary.warning_count}건, 보류 ${production.summary.deferred_count}건`;
+  if (production.summary.controlled_prod_ready) return `summary.controlled_prod_ready=true. ${counts}.`;
+  if (production.summary.warning_count > 0 || production.status === "warning") return `${counts}. 운영 전 경고 해소 필요.`;
+  if (production.summary.deferred_count > 0) return `${counts}. 담당자 증빙이 남아 있어 운영 전환은 보류입니다.`;
+  if (production.summary.blocker_count > 0 || production.status === "blocked") return `${counts}. 운영 전환 차단 항목을 먼저 해소해야 합니다.`;
+  return `${counts}. summary.controlled_prod_ready=false이므로 운영 전환 준비로 표시하지 않습니다.`;
 }
 
 function buildReadinessGates(args: {
@@ -227,13 +249,10 @@ function buildReadinessGates(args: {
         : {
             key: "support",
             label: "지원 체계",
-            status: args.production.data.status === "ready" ? "ready" : args.production.data.status === "blocked" ? "blocked" : "needs",
-            detail:
-              args.production.data.status === "ready"
-                ? "운영 전환 증빙이 준비되어 있습니다."
-                : `차단 ${args.production.data.summary.blocker_count}건, 보류 ${args.production.data.summary.deferred_count}건`,
+            status: productionGateStatus(args.production.data),
+            detail: productionGateDetail(args.production.data),
             action:
-              args.production.data.status === "ready"
+              args.production.data.summary.controlled_prod_ready
                 ? { label: "운영 증빙 보기", view: "automationOps", params: { section: "readiness" } }
                 : { label: "운영 증빙 확인", view: "automationOps", params: { section: "readiness" }, requiredAction: "ops_readiness.manage" },
           },
@@ -305,6 +324,232 @@ function AdoptionReadinessPanel(props: {
           })}
         </ul>
       )}
+    </section>
+  );
+}
+
+interface AdminSetupItem {
+  readonly key: string;
+  readonly label: string;
+  readonly status: GateStatus;
+  readonly detail: string;
+  readonly action: ReadinessAction;
+}
+
+function adminSetupItems(args: {
+  readonly auth: UseQueryResult<AuthReadiness>;
+  readonly production: UseQueryResult<ProductionReadiness>;
+  readonly sites: UseQueryResult<Paginated<SiteItem>>;
+  readonly scenarios: UseQueryResult<Paginated<ScenarioItem>>;
+  readonly summary: UseQueryResult<RunSummary>;
+  readonly recent: UseQueryResult<Paginated<RunItem>>;
+  readonly artifacts: UseQueryResult<Paginated<RunArtifactItem>>;
+  readonly scimProviders: UseQueryResult<Paginated<ScimProviderItem>>;
+  readonly secretAudit: UseQueryResult<Paginated<AuditLogItem>>;
+  readonly connectors: UseQueryResult<Paginated<ConnectorCatalogItem>>;
+}): readonly AdminSetupItem[] {
+  const auth = args.auth.data;
+  const sites = args.sites.data?.items ?? [];
+  const loginSites = sites.filter((site) => site.login_capable === true);
+  const missingSession = loginSites.find((site) => site.session_ready !== true);
+  const scenarios = args.scenarios.data?.items ?? [];
+  const scimCount = args.scimProviders.data?.items.length ?? 0;
+  const latestArtifacts = args.artifacts.data?.items ?? [];
+  const secretAuditSummary = summarizeAdminSecretAudit(args.secretAudit.data?.items ?? []);
+  const connectorSecretRefCount = countConnectorSecretRefs(args.connectors.data?.items ?? []);
+
+  return [
+    {
+      key: "access",
+      label: "접속과 역할",
+      status: args.auth.isError
+        ? "needs"
+        : auth === undefined
+          ? "deferred"
+          : auth.enterprise_sso_ready && auth.role_mapping.configured && auth.role_mapping.mapped_values > 0
+            ? "ready"
+            : auth.status === "blocked"
+              ? "blocked"
+              : "needs",
+      detail: auth === undefined
+        ? "SSO, JWT claim mapping, RBAC matrix를 확인 중입니다."
+        : auth.enterprise_sso_ready && auth.role_mapping.configured
+          ? `${auth.role_mapping.mapped_values}개 역할 매핑이 준비되어 있습니다. 첫 관리자 bootstrap은 runbook 상태 링크만 제공합니다.`
+          : "SSO, claim mapping, RBAC matrix, 첫 관리자 bootstrap runbook 확인이 필요합니다.",
+      action: { label: "접속·권한 열기", view: "security", params: { section: "access" }, requiredAction: "rbac.grant" },
+    },
+    {
+      key: "people",
+      label: "사람과 조직",
+      status: args.scimProviders.isError ? "needs" : args.scimProviders.data === undefined ? "deferred" : scimCount > 0 ? "ready" : "needs",
+      detail: args.scimProviders.data === undefined
+        ? "Principal directory, SCIM provider, group-role mapping을 확인 중입니다."
+        : scimCount > 0
+          ? `${scimCount}개 SCIM provider metadata가 있습니다. 그룹 의미는 추정하지 않고 매핑 행만 신뢰합니다.`
+          : "SCIM provider와 group-role mapping metadata가 필요합니다.",
+      action: { label: "SCIM 설정 열기", view: "security", params: { section: "access" }, requiredAction: "scim.sync" },
+    },
+    {
+      key: "secrets",
+      label: "비밀과 연결",
+      status: args.secretAudit.isError || args.connectors.isError
+        ? "needs"
+        : args.secretAudit.data === undefined || args.connectors.data === undefined
+          ? "deferred"
+          : secretAuditSummary.deniedOrBlocked > 0 || secretAuditSummary.errors > 0
+            ? "blocked"
+            : secretAuditSummary.total > 0 && connectorSecretRefCount > 0
+              ? "ready"
+              : connectorSecretRefCount > 0
+                ? "needs"
+                : "deferred",
+      detail: args.secretAudit.data === undefined || args.connectors.data === undefined
+        ? "SecretRef audit, credential registration, connector profile metadata를 확인 중입니다. 비밀값 입력·표시는 제공하지 않습니다."
+        : `SecretRef audit ${secretAuditSummary.total} rows, allow ${secretAuditSummary.allowed}, deny/block ${secretAuditSummary.deniedOrBlocked}, error ${secretAuditSummary.errors}, connector SecretRefs ${connectorSecretRefCount}. 비밀값 입력·표시는 제공하지 않습니다.`,
+      action: { label: "SecretRef 감사 열기", view: "security", params: { section: "secrets" }, requiredAction: "credential.manage" },
+    },
+    {
+      key: "sites",
+      label: "사이트와 세션",
+      status: args.sites.isError
+        ? "needs"
+        : args.sites.data === undefined
+          ? "deferred"
+          : sites.length === 0
+            ? "needs"
+            : missingSession === undefined
+              ? "ready"
+              : "needs",
+      detail: args.sites.data === undefined
+        ? "사이트 등록과 브라우저 세션 준비 상태를 확인 중입니다."
+        : sites.length === 0
+          ? "파일럿 사이트 등록이 필요합니다."
+          : missingSession === undefined
+            ? `${sites.length}개 사이트와 필요한 세션이 준비되어 있습니다.`
+            : `${missingSession.name ?? "대상 사이트"} 세션 등록이 필요합니다.`,
+      action: { label: "사이트·세션 열기", view: "security", params: { section: "sites" }, requiredAction: "session.capture" },
+    },
+    {
+      key: "first-automation",
+      label: "첫 자동화",
+      status: args.scenarios.isError || args.summary.isError
+        ? "needs"
+        : args.scenarios.data === undefined || args.summary.data === undefined
+          ? "deferred"
+          : scenarios.length > 0 && args.summary.data.total > 0
+            ? "ready"
+            : "needs",
+      detail: args.scenarios.data === undefined || args.summary.data === undefined
+        ? "scenario draft, validation, test run을 확인 중입니다."
+        : scenarios.length > 0 && args.summary.data.total > 0
+          ? `${scenarios.length}개 자동화와 ${args.summary.data.total}건 실행 기록이 있습니다.`
+          : "scenario draft와 test run 증빙이 필요합니다.",
+      action: { label: "자동화 만들기", view: "scenarioStudio", requiredAction: "scenario.create" },
+    },
+    {
+      key: "readiness",
+      label: "운영 준비 증빙",
+      status: args.production.isError ? "needs" : args.production.data === undefined ? "deferred" : productionGateStatus(args.production.data),
+      detail: args.production.data === undefined
+        ? "controlled-prod readiness owner evidence를 확인 중입니다."
+        : productionGateDetail(args.production.data),
+      action: { label: "운영 증빙 열기", view: "automationOps", params: { section: "readiness" }, requiredAction: "ops_readiness.manage" },
+    },
+    {
+      key: "packet",
+      label: "증빙 패킷",
+      status: args.recent.data === undefined || args.artifacts.data === undefined
+        ? "deferred"
+        : args.recent.data.items.length > 0 && latestArtifacts.length > 0
+          ? "ready"
+          : "deferred",
+      detail: args.recent.data === undefined || args.artifacts.data === undefined
+        ? "audit, readiness, ROI, support evidence metadata packet을 확인 중입니다."
+        : args.recent.data.items.length > 0 && latestArtifacts.length > 0
+          ? `최근 실행 ${args.recent.data.items.length}건과 artifact metadata ${latestArtifacts.length}건을 dashboard 증빙 패킷에서 묶습니다.`
+          : "최근 실행과 artifact metadata가 생기면 dashboard embedded evidence packet에 연결됩니다.",
+      action: { label: "증빙 패킷 보기", view: "dashboard", params: { focus: "evidence-packet" } },
+    },
+  ];
+}
+
+function summarizeAdminSecretAudit(items: readonly AuditLogItem[]): {
+  readonly total: number;
+  readonly allowed: number;
+  readonly deniedOrBlocked: number;
+  readonly errors: number;
+} {
+  let allowed = 0;
+  let deniedOrBlocked = 0;
+  let errors = 0;
+  for (const item of items) {
+    if (item.outcome === "allow") allowed += 1;
+    if (item.outcome === "deny" || item.outcome === "blocked") deniedOrBlocked += 1;
+    if (item.outcome === "error") errors += 1;
+  }
+  return { total: items.length, allowed, deniedOrBlocked, errors };
+}
+
+function countConnectorSecretRefs(items: readonly ConnectorCatalogItem[]): number {
+  const refs = new Set<string>();
+  for (const item of items) {
+    for (const ref of item.required_secret_refs) {
+      if (ref.trim().length > 0) refs.add(ref);
+    }
+    for (const ref of item.manifest_permissions.secret_refs) {
+      if (ref.trim().length > 0) refs.add(ref);
+    }
+  }
+  return refs.size;
+}
+
+function AdminAdoptionSetup(props: {
+  readonly roles: readonly string[];
+  readonly can: (action: string) => boolean;
+  readonly auth: UseQueryResult<AuthReadiness>;
+  readonly production: UseQueryResult<ProductionReadiness>;
+  readonly sites: UseQueryResult<Paginated<SiteItem>>;
+  readonly scenarios: UseQueryResult<Paginated<ScenarioItem>>;
+  readonly summary: UseQueryResult<RunSummary>;
+  readonly recent: UseQueryResult<Paginated<RunItem>>;
+  readonly artifacts: UseQueryResult<Paginated<RunArtifactItem>>;
+  readonly scimProviders: UseQueryResult<Paginated<ScimProviderItem>>;
+  readonly secretAudit: UseQueryResult<Paginated<AuditLogItem>>;
+  readonly connectors: UseQueryResult<Paginated<ConnectorCatalogItem>>;
+}): JSX.Element | null {
+  if (!props.roles.includes("admin")) return null;
+  const items = adminSetupItems(props);
+  const unresolved = items.filter((item) => item.status !== "ready").length;
+  return (
+    <section className="panel admin-adoption-setup" aria-label="관리자 도입 설정">
+      <div className="panel-head">
+        <div>
+          <h2>관리자 도입 설정</h2>
+          <p className="subtle">dashboard 안에서 SSO, RBAC, SCIM, SecretRef, 사이트·세션, 운영 증빙을 한 번에 추적합니다. 쓰기 화면은 기존 보안/운영 route로만 연결합니다.</p>
+        </div>
+        <span className={`badge ${unresolved === 0 ? "green" : "amber"}`}>{unresolved === 0 ? "관리 준비됨" : `${unresolved}개 미해소`}</span>
+      </div>
+      <ul className="adoption-gates">
+        {items.map((item) => {
+          const allowed = item.action.requiredAction === undefined || props.can(item.action.requiredAction);
+          return (
+            <li key={item.key}>
+              <span className={`badge ${gateTone(item.status)}`}>{GATE_LABELS[item.status]}</span>
+              <div>
+                <strong>{item.label}</strong>
+                <span className="subtle">{item.detail}</span>
+              </div>
+              {allowed ? (
+                <button className="btn" type="button" onClick={() => navigate(item.action.view, item.action.params)}>
+                  {item.action.label}
+                </button>
+              ) : (
+                <span className="subtle">권한 있는 담당자에게 요청</span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
     </section>
   );
 }
@@ -1432,6 +1677,9 @@ export function DashboardView(): JSX.Element {
   const api = useApiClient();
   const can = useCan();
   const roles = useRoles();
+  const focusTarget = useHashParam("focus");
+  const evidencePacketRef = useRef<HTMLDivElement | null>(null);
+  const automationReportRef = useRef<HTMLDivElement | null>(null);
   const [reportMonth, setReportMonth] = useState(currentReportMonth);
   const [reportRunMode, setReportRunMode] = useState<AutomationPerformanceRunMode>("prod");
   const [reportExportState, setReportExportState] = useState<ReportExportState>("idle");
@@ -1464,6 +1712,19 @@ export function DashboardView(): JSX.Element {
   const readinessScenarios = useQuery({ queryKey: ["scenarios", "adoption-readiness"], queryFn: () => api.listScenarios({ limit: 50 }), refetchInterval: 30_000 });
   const authReadiness = useQuery({ queryKey: ["auth-readiness", "dashboard"], queryFn: () => api.getAuthReadiness(), refetchInterval: 60_000 });
   const productionReadiness = useQuery({ queryKey: ["production-readiness", "dashboard"], queryFn: () => api.getProductionReadiness(), refetchInterval: 60_000 });
+  const scimProviders = useQuery({ queryKey: ["scim-providers", "dashboard-admin"], queryFn: () => api.listScimProviders(), enabled: roles.includes("admin"), refetchInterval: 60_000 });
+  const secretAudit = useQuery({ queryKey: ["audit-log", "secret-resolve", "dashboard-evidence"], queryFn: () => api.listAuditLog({ action: "secret.resolve", limit: 100 }), refetchInterval: 30_000 });
+  const secretAuditSummary = useQuery<AuditLogSummary>({
+    queryKey: ["audit-log-summary", "secret-resolve", "dashboard-evidence"],
+    queryFn: () => api.getAuditLogSummary({ action: "secret.resolve" }),
+    refetchInterval: 30_000,
+  });
+  const aiGovernanceEvidenceSummary = useQuery<AiGovernanceEvidenceSummary>({
+    queryKey: ["ai-governance-evidence-summary", "dashboard-evidence"],
+    queryFn: () => api.getAiGovernanceEvidenceSummary(),
+    refetchInterval: 60_000,
+  });
+  const connectorCatalog = useQuery({ queryKey: ["connectors", "dashboard-admin-setup"], queryFn: () => api.listConnectors({ limit: 100 }), enabled: roles.includes("admin"), refetchInterval: 60_000 });
   const latestRunId = recent.data?.items[0]?.run_id;
   const latestRunArtifacts = useQuery<Paginated<RunArtifactItem>>({
     queryKey: ["run-artifacts", "adoption-evidence", latestRunId],
@@ -1522,7 +1783,30 @@ export function DashboardView(): JSX.Element {
   if (sinkDlq.isError) dashboardErrors.push({ label: "외부 전달 재처리", error: sinkDlq.error, onRetry: () => void sinkDlq.refetch() });
   if (opsHealth.isError) dashboardErrors.push({ label: "운영 헬스", error: opsHealth.error, onRetry: () => void opsHealth.refetch() });
   if (opsAlerts.isError) dashboardErrors.push({ label: "운영 알림", error: opsAlerts.error, onRetry: () => void opsAlerts.refetch() });
+  if (authReadiness.isError) dashboardErrors.push({ label: "도입 SSO/RBAC 준비도", error: authReadiness.error, onRetry: () => void authReadiness.refetch() });
+  if (readinessSites.isError) dashboardErrors.push({ label: "도입 사이트 준비도", error: readinessSites.error, onRetry: () => void readinessSites.refetch() });
+  if (readinessScenarios.isError) dashboardErrors.push({ label: "도입 시나리오 준비도", error: readinessScenarios.error, onRetry: () => void readinessScenarios.refetch() });
+  if (productionReadiness.isError) dashboardErrors.push({ label: "운영 전환 준비도", error: productionReadiness.error, onRetry: () => void productionReadiness.refetch() });
+  if (performanceReport.isError) dashboardErrors.push({ label: "ROI 실제 증거", error: performanceReport.error, onRetry: () => void performanceReport.refetch() });
+  if (secretAudit.isError) dashboardErrors.push({ label: "SecretRef 감사 요약", error: secretAudit.error, onRetry: () => void secretAudit.refetch() });
+  if (secretAuditSummary.isError) dashboardErrors.push({ label: "SecretRef 감사 summary", error: secretAuditSummary.error, onRetry: () => void secretAuditSummary.refetch() });
+  if (aiGovernanceEvidenceSummary.isError) dashboardErrors.push({ label: "AI 거버넌스 summary", error: aiGovernanceEvidenceSummary.error, onRetry: () => void aiGovernanceEvidenceSummary.refetch() });
+  if (latestRunArtifacts.isError) dashboardErrors.push({ label: "최근 실행 artifact 증거", error: latestRunArtifacts.error, onRetry: () => void latestRunArtifacts.refetch() });
+  if (scimProviders.isError) dashboardErrors.push({ label: "SCIM 도입 설정", error: scimProviders.error, onRetry: () => void scimProviders.refetch() });
+  if (connectorCatalog.isError) dashboardErrors.push({ label: "커넥터 SecretRef 설정", error: connectorCatalog.error, onRetry: () => void connectorCatalog.refetch() });
   const dashboardErrorKind = environmentErrorKind(dashboardErrors);
+
+  useEffect(() => {
+    const target =
+      focusTarget === "evidence-packet"
+        ? evidencePacketRef.current
+        : focusTarget === "automation-report"
+          ? automationReportRef.current
+          : null;
+    if (target === null) return;
+    target.scrollIntoView?.({ block: "start" });
+    target.focus({ preventScroll: true });
+  }, [focusTarget]);
 
   return (
     <>
@@ -1548,14 +1832,34 @@ export function DashboardView(): JSX.Element {
         performance={performanceReport}
         can={can}
       />
-      <AdoptionEvidencePacket
+      <AdminAdoptionSetup
+        roles={roles}
+        can={can}
         auth={authReadiness}
         production={productionReadiness}
         sites={readinessSites}
+        scenarios={readinessScenarios}
         summary={summary}
         recent={recent}
         artifacts={latestRunArtifacts}
+        scimProviders={scimProviders}
+        secretAudit={secretAudit}
+        connectors={connectorCatalog}
       />
+      <div id="dashboard-focus-evidence-packet" ref={evidencePacketRef} tabIndex={-1} data-dashboard-focus="evidence-packet">
+        <AdoptionEvidencePacket
+          auth={authReadiness}
+          production={productionReadiness}
+          sites={readinessSites}
+          scenarios={readinessScenarios}
+          summary={summary}
+          recent={recent}
+          artifacts={latestRunArtifacts}
+          performance={performanceReport}
+          secretAuditSummary={secretAuditSummary}
+          aiGovernanceEvidenceSummary={aiGovernanceEvidenceSummary}
+        />
+      </div>
       <RoleWorkbench roles={roles} can={can} />
       <OpsSignalPanel
         health={opsHealth.data}
@@ -1583,32 +1887,34 @@ export function DashboardView(): JSX.Element {
         isError={trends.isError}
         error={trends.error}
       />
-      <AutomationPerformancePanel
-        report={performanceReport.data}
-        month={reportMonth}
-        runMode={reportRunMode}
-        exportState={reportExportState}
-        exportFormat={reportExportFormat}
-        isLoading={performanceReport.data === undefined && performanceReport.isFetching}
-        isError={performanceReport.isError}
-        error={performanceReport.error}
-        onMonthChange={(month) => {
-          setReportMonth(month);
-          setReportExportState("idle");
-          setReportExportFormat(null);
-        }}
-        onRunModeChange={(runMode) => {
-          setReportRunMode(runMode);
-          setReportExportState("idle");
-          setReportExportFormat(null);
-        }}
-        onRetry={() => void performanceReport.refetch()}
-        onExportCsv={() => void exportPerformanceReportCsv()}
-        onExportXlsx={() => void exportPerformanceReportXlsx()}
-        onExportPocMarkdown={() => void exportPerformanceReportPocMarkdown()}
-        canExportXlsx={api.exportAutomationPerformanceReportXlsx !== undefined}
-        canExportPocMarkdown={api.exportAutomationPerformanceReportPocMarkdown !== undefined}
-      />
+      <div id="dashboard-focus-automation-report" ref={automationReportRef} tabIndex={-1} data-dashboard-focus="automation-report">
+        <AutomationPerformancePanel
+          report={performanceReport.data}
+          month={reportMonth}
+          runMode={reportRunMode}
+          exportState={reportExportState}
+          exportFormat={reportExportFormat}
+          isLoading={performanceReport.data === undefined && performanceReport.isFetching}
+          isError={performanceReport.isError}
+          error={performanceReport.error}
+          onMonthChange={(month) => {
+            setReportMonth(month);
+            setReportExportState("idle");
+            setReportExportFormat(null);
+          }}
+          onRunModeChange={(runMode) => {
+            setReportRunMode(runMode);
+            setReportExportState("idle");
+            setReportExportFormat(null);
+          }}
+          onRetry={() => void performanceReport.refetch()}
+          onExportCsv={() => void exportPerformanceReportCsv()}
+          onExportXlsx={() => void exportPerformanceReportXlsx()}
+          onExportPocMarkdown={() => void exportPerformanceReportPocMarkdown()}
+          canExportXlsx={api.exportAutomationPerformanceReportXlsx !== undefined}
+          canExportPocMarkdown={api.exportAutomationPerformanceReportPocMarkdown !== undefined}
+        />
+      </div>
       <ActionQueue
         items={collectActionItems({
           failedBiz: failedBiz.data?.items ?? [],

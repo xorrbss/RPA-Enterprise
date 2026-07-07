@@ -54,7 +54,9 @@ describe("전용 워커 풀 패널 (DG-3b)", () => {
   test("operator 는 워커 풀 패널 미노출(worker_pool.manage admin 전용)", async () => {
     localStorage.setItem("rpa.token", jwt(["operator"]));
     renderApp(fakeClient({ listWorkerPools: async () => wpList([PA], null) }));
-    expect(await screen.findByText("권한 확인 필요")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "보안 읽기 전용 요약" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "운영 인프라 읽기 전용 섹션 요약" })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "보안 deep link 권한 안내" })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "전용 워커 풀" })).toBeNull();
   });
 

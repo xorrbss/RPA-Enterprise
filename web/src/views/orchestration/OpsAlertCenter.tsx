@@ -1,9 +1,9 @@
 import { useState, type FormEvent } from "react";
 
 import type { OpsAlertItem, OpsNotificationAttempt, OpsNotificationDelivery } from "../../api/types";
-import { statusLabel as commonStatusLabel } from "../../components/badges";
+import { statusLabel as commonStatusLabel, kindLabel as commonKindLabel } from "../../components/badges";
 import { formatDateTime } from "./format";
-import type { AlertSeverityFilter, AlertSourceFilter } from "./trigger-helpers";
+import { isDnsHost, isSecretRef, parseAllowedHosts, type AlertSeverityFilter, type AlertSourceFilter } from "./trigger-helpers";
 
 export interface OpsWebhookSendDraft {
   readonly endpointSecretRef: string;
@@ -94,6 +94,7 @@ export function OpsAlertCenter({
             <option value="human_task_sla">사람 작업 SLA</option>
             <option value="trigger_fire">트리거 발화</option>
             <option value="failure_spike">실패 급증</option>
+            <option value="session_expiry">로그인 세션 만료</option>
             <option value="dlq">재처리 대기</option>
             <option value="bot_pool">Bot Pool</option>
             <option value="scim_secret_rotation">SCIM SecretRef</option>
@@ -405,26 +406,6 @@ function DeliveryReceiptPanel({
   );
 }
 
-function parseAllowedHosts(value: string): string[] {
-  return [...new Set(value.split(/[\s,]+/).map((part) => part.trim().toLowerCase()).filter(Boolean))];
-}
-
-function isDnsHost(host: string): boolean {
-  if (host === "localhost" || host.includes("/") || host.includes(":")) return false;
-  const labels = host.split(".");
-  return labels.length >= 2 && labels.every((label) =>
-    label.length > 0 &&
-    label.length <= 63 &&
-    /^[a-z0-9-]+$/i.test(label) &&
-    !label.startsWith("-") &&
-    !label.endsWith("-"),
-  );
-}
-
-function isSecretRef(value: string): boolean {
-  return value.startsWith("secret://") && value.length > "secret://".length;
-}
-
 interface OpsAlertGroup {
   readonly representative: OpsAlertItem;
   readonly count: number;
@@ -445,10 +426,15 @@ function groupOpsAlerts(alerts: readonly OpsAlertItem[]): OpsAlertGroup[] {
 }
 
 function localizeStatusText(value: string): string {
-  return value.replace(
-    /\b(queued|claimed|running|suspending|suspended|resume_requested|resuming|completed|cancelled|failed_business|failed_system|pending|sending|sent|delivered|failed|dead_letter|open|acknowledged)\b/g,
-    (status) => commonStatusLabel(status),
-  );
+  // 알림 detail 문장 내 raw enum → 운영자 한국어. 상태(run/human-task state·발송 상태)에 더해 사람 확인 종류(kind)도
+  // 치환한다: human_task_sla detail 은 `${kind}/${state}` 형식(ops-alerts.ts)이라 state 만 라벨화하면 "exception/열림"
+  // 처럼 kind 가 영문으로 남는다. kind enum(approval/validation/exception/captcha/mfa)은 상태 enum 과 겹치지 않아 안전.
+  return value
+    .replace(
+      /\b(queued|claimed|running|suspending|suspended|resume_requested|resuming|completed|cancelled|failed_business|failed_system|pending|sending|sent|delivered|failed|dead_letter|open|acknowledged)\b/g,
+      (status) => commonStatusLabel(status),
+    )
+    .replace(/\b(approval|validation|exception|captcha|mfa)\b/g, (kind) => commonKindLabel(kind));
 }
 
 function notificationStatusLabel(status: OpsNotificationAttempt["status"] | OpsNotificationDelivery["status"]): string {
@@ -500,6 +486,7 @@ function opsAlertSourceLabel(source: OpsAlertItem["source"]): string {
   if (source === "human_task_sla") return "사람 작업 SLA";
   if (source === "trigger_fire") return "트리거 발화";
   if (source === "failure_spike") return "실패 급증";
+  if (source === "session_expiry") return "로그인 세션 만료";
   if (source === "bot_pool") return "Bot Pool";
   if (source === "scim_secret_rotation") return "SCIM SecretRef";
   if (source === "readiness_evidence") return "운영 전환 준비";
@@ -532,6 +519,8 @@ function opsAlertActionLabel(alert: OpsAlertItem): string {
       return "운영 전환 준비";
     case "audit_verifier":
       return "감사 검증 보기";
+    case "browser_session":
+      return "세션 다시 등록";
     default:
       return "자세히 보기";
   }

@@ -159,20 +159,122 @@ describe("coe pipeline view", () => {
         actual_failure_rate: 0,
         human_intervention_minutes: 0,
         reprocessing_minutes: 0,
+        metadata: { measurement_method: "manual_pilot_reconciliation" },
       }),
       expect.any(String),
     ));
+  });
+
+  test("자동화 연결 아이디어: 제안값 불러오기 → 건수/실패율 프리필 + 제안 배지 + 확정 저장 귀속", async () => {
+    const linkedIdea = { ...ideaFixture("operate"), scenario_id: "00000000-0000-4000-8000-0000000000a1" };
+    const getRoiActualSuggestion = vi.fn(fakeClient().getRoiActualSuggestion);
+    const recordRoiActualEvidence = vi.fn(fakeClient().recordRoiActualEvidence);
+    renderApp(fakeClient({
+      listAutomationIdeas: async () => ({ items: [linkedIdea], next_cursor: null }),
+      getRoiActualSuggestion,
+      recordRoiActualEvidence,
+    }));
+
+    await screen.findAllByText("Assess Ready Idea");
+    const loadButton = await screen.findByRole("button", { name: "운영 실행 실적 제안값 불러오기" });
+    expect(loadButton).toBeEnabled();
+    fireEvent.click(loadButton);
+
+    await waitFor(() => expect(getRoiActualSuggestion).toHaveBeenCalledWith(
+      "idea-approve",
+      expect.objectContaining({ period_start: expect.any(String), period_end: expect.any(String) }),
+    ));
+    // 프리필: 건수/실패율만(개입/재처리 시간은 run 통계로 도출 불가 — 사람 입력 유지).
+    await screen.findByText("제안값");
+    expect(screen.getByText(/운영 실행 완료 12건·실패 2건 기준 제안/)).toBeInTheDocument();
+    expect(screen.getByText(/저장 시 본인이 확정한 수치로 기록됩니다/)).toBeInTheDocument();
+    const grid = screen.getByText("실제 처리 건수").closest(".coe-roi-grid") as HTMLElement;
+    expect((within(grid).getByLabelText("실제 처리 건수") as HTMLInputElement).value).toBe("12");
+    expect((within(grid).getByLabelText("실제 실패율") as HTMLInputElement).value).toBe("0.1429");
+    expect((within(grid).getByLabelText("사람 개입 시간(분)") as HTMLInputElement).value).toBe("0");
+
+    // 프리필 그대로 저장 → 확정은 사람의 저장이며 출처는 제안값으로 정직 귀속.
+    fireEvent.click(screen.getByRole("button", { name: "실제값 저장" }));
+    await waitFor(() => expect(recordRoiActualEvidence).toHaveBeenCalledWith(
+      "idea-approve",
+      expect.objectContaining({
+        actual_transaction_count: 12,
+        actual_failure_rate: 0.1429,
+        metadata: { measurement_method: "prod_run_stats_prefill_operator_confirmed" },
+      }),
+      expect.any(String),
+    ));
+  });
+
+  test("제안값을 사람이 고치면 배지가 사라지고 수기 확정으로 귀속된다", async () => {
+    const linkedIdea = { ...ideaFixture("operate"), scenario_id: "00000000-0000-4000-8000-0000000000a1" };
+    const recordRoiActualEvidence = vi.fn(fakeClient().recordRoiActualEvidence);
+    renderApp(fakeClient({
+      listAutomationIdeas: async () => ({ items: [linkedIdea], next_cursor: null }),
+      recordRoiActualEvidence,
+    }));
+
+    await screen.findAllByText("Assess Ready Idea");
+    fireEvent.click(await screen.findByRole("button", { name: "운영 실행 실적 제안값 불러오기" }));
+    await screen.findByText("제안값");
+
+    const grid = screen.getByText("실제 처리 건수").closest(".coe-roi-grid") as HTMLElement;
+    fireEvent.change(within(grid).getByLabelText("실제 처리 건수"), { target: { value: "11" } });
+    await waitFor(() => expect(screen.queryByText("제안값")).toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "실제값 저장" }));
+    await waitFor(() => expect(recordRoiActualEvidence).toHaveBeenCalledWith(
+      "idea-approve",
+      expect.objectContaining({
+        actual_transaction_count: 11,
+        metadata: { measurement_method: "manual_pilot_reconciliation" },
+      }),
+      expect.any(String),
+    ));
+  });
+
+  test("미연결 아이디어는 제안값 버튼이 비활성 + 연결 안내, 종결 0건이면 제안 없음 안내(값 미변경)", async () => {
+    const getRoiActualSuggestion = vi.fn(async (ideaId: string, p: { period_start: string; period_end: string }) => ({
+      automation_idea_id: ideaId,
+      scenario_id: "00000000-0000-4000-8000-0000000000a1",
+      period_start: p.period_start,
+      period_end: p.period_end,
+      run_mode: "prod" as const,
+      total_runs: 1,
+      completed_runs: 0,
+      failed_runs: 0,
+      suggested_actual_transaction_count: null,
+      suggested_actual_failure_rate: null,
+    }));
+    const { unmount } = renderApp(fakeClient());
+    await screen.findAllByText("거래처 포털 지급 상태 확인"); // 기본 fixture는 scenario 미연결
+    const disabledButton = await screen.findByRole("button", { name: "운영 실행 실적 제안값 불러오기" });
+    expect(disabledButton).toBeDisabled();
+    expect(screen.getByText(/자동화를 연결하면 운영 실행 통계로 제안값을 채울 수 있습니다/)).toBeInTheDocument();
+    unmount();
+
+    const linkedIdea = { ...ideaFixture("operate"), scenario_id: "00000000-0000-4000-8000-0000000000a1" };
+    renderApp(fakeClient({
+      listAutomationIdeas: async () => ({ items: [linkedIdea], next_cursor: null }),
+      getRoiActualSuggestion,
+    }));
+    await screen.findAllByText("Assess Ready Idea");
+    fireEvent.click(await screen.findByRole("button", { name: "운영 실행 실적 제안값 불러오기" }));
+    await screen.findByText(/이 기간에 집계할 종결된 운영 실행이 없어 제안값이 없습니다/);
+    const grid = screen.getByText("실제 처리 건수").closest(".coe-roi-grid") as HTMLElement;
+    expect((within(grid).getByLabelText("실제 처리 건수") as HTMLInputElement).value).toBe("0"); // 0 합성 없이 기본값 유지
+    expect(screen.queryByText("제안값")).toBeNull();
   });
 
   test("pilot readiness evidence is shown and can be recorded", async () => {
     const recordAutomationAdoptionEvidence = vi.fn(fakeClient().recordAutomationAdoptionEvidence);
     renderApp(fakeClient({ recordAutomationAdoptionEvidence }));
 
-    expect(await screen.findByRole("heading", { name: "Pilot readiness evidence" })).toBeInTheDocument();
-    expect(screen.getAllByText("Pilot charter").length).toBeGreaterThan(0);
+    expect(await screen.findByRole("heading", { name: "파일럿 준비도 증빙" })).toBeInTheDocument();
+    expect(screen.getAllByText("파일럿 차터").length).toBeGreaterThan(0);
     expect(await screen.findByText("ticket:PILOT-123")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Record evidence" }));
+    fireEvent.click(screen.getByRole("button", { name: "증빙 기록" }));
 
     await waitFor(() => expect(recordAutomationAdoptionEvidence).toHaveBeenCalledWith(
       "61000000-0000-4000-8000-000000000001",
@@ -180,7 +282,7 @@ describe("coe pipeline view", () => {
         evidence_type: "pilot_charter_signoff",
         status: "valid",
         evidence_ref: "ticket:PILOT-123",
-        summary: "Pilot readiness evidence reviewed by the CoE owner.",
+        summary: "CoE 담당자가 검토한 파일럿 준비도 증빙입니다.",
         metadata: { source: "coe_pipeline" },
       }),
       expect.any(String),

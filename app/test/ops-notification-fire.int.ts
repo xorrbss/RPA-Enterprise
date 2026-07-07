@@ -1,13 +1,17 @@
 /**
- * Integration test for S4a ops-alert auto-fire producer (runOpsNotificationFire).
+ * Integration test for S4a/S4b ops-alert auto-fire producer (runOpsNotificationFire).
  *
  * Run with:
  *   node scripts/db-temp-postgres-gate.mjs -- npm --prefix app exec tsx -- app/test/ops-notification-fire.int.ts
  *
  * 검증: (1) 정체된 run 의 run_sla 알림이 매칭 라우트로 pending attempt + 발송 잡 인큐로 발화된다,
  *      (2) 같은 세대는 두 번째 틱에서 재발화되지 않는다(멱등), (3) min_severity 필터,
- *      (4) 라우트 없음 no-op, (5) 라우트 있는데 대상 테넌트 없음 → 휴면 loud 경고.
+ *      (4) 라우트 없음 no-op, (5) 라우트 있는데 대상 테넌트 없음 → 휴면 loud 경고,
+ *      (6) S4b 테넌트 저장형 라우트(ops_alert_notification_routes)가 env 라우트 없이도 발화된다
+ *          (disabled/soft-deleted 는 제외), (7) 저장형 라우트 테넌트가 maintenance 테넌트 발견에 포함된다,
+ *      (8) session_expiry 소스가 attempt 파이프라인(source/subject_type CHECK 포함)으로 발화된다.
  */
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -16,6 +20,7 @@ import type { PoolClient } from "pg";
 import type { OpsNotificationSendEnqueueInput } from "../src/api/run-queue";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { runOpsNotificationFire, type OpsNotificationFireEnqueuer } from "../src/worker/ops-notification-fire";
+import { resolveMaintenanceTenantIds } from "../src/worker/maintenance-scheduler";
 import type { OpsAlertRoute } from "../src/api/ops-alert-routes";
 import {
   insertOpsNotificationAttempt,
@@ -30,6 +35,14 @@ const TENANT_A = "00000000-0000-4000-8000-0000000000a1";
 const SCEN_A = "9a000000-0000-4000-8000-000000000001";
 const SVER_A = "9a000000-0000-4000-8000-000000000002";
 const RUN_STUCK = "9a100000-0000-4000-8000-000000000001";
+const SITE_A = "9a200000-0000-4000-8000-000000000001";
+const IDENTITY_A = "9a200000-0000-4000-8000-000000000002";
+const STORED_ROUTE_ENABLED = "9a300000-0000-4000-8000-000000000001";
+const STORED_ROUTE_DISABLED = "9a300000-0000-4000-8000-000000000002";
+const STORED_ROUTE_DELETED = "9a300000-0000-4000-8000-000000000003";
+// 테스트 전용 BYPASSRLS 역할(rpa_lifecycle_bypass 패턴) — maintenance 테넌트 발견 쿼리 검증용.
+const LIFECYCLE_BYPASS_ROLE = "rpa_ops_fire_bypass";
+const LIFECYCLE_BYPASS_PASSWORD = "rpa_ops_fire_bypass";
 
 const ROUTE_ALL_WARNING: OpsAlertRoute = {
   minSeverity: "warning",
@@ -114,19 +127,75 @@ async function seed(pool: Pool): Promise<void> {
   });
 }
 
+// maintenance 테넌트 발견 쿼리는 전용 non-superuser BYPASSRLS 역할로만 실행된다(assertLifecycleBypassUse).
+async function createLifecycleBypassRole(): Promise<void> {
+  const admin = createPool({
+    host: process.env.PGHOST,
+    port: process.env.PGPORT === undefined ? undefined : Number(process.env.PGPORT),
+    database: process.env.PGDATABASE,
+    user: "postgres",
+    // CI(비밀번호 인증)는 superuser 비밀번호 필요(PGADMIN_PASSWORD). 로컬 temp-PG(trust)는 무시.
+    password: process.env.PGADMIN_PASSWORD,
+    options: `-c search_path=${SCHEMA},public`,
+  });
+  try {
+    await admin.query(`DROP ROLE IF EXISTS ${LIFECYCLE_BYPASS_ROLE}`);
+    await admin.query(
+      `CREATE ROLE ${LIFECYCLE_BYPASS_ROLE}
+         LOGIN
+         PASSWORD '${LIFECYCLE_BYPASS_PASSWORD}'
+         NOSUPERUSER
+         NOCREATEDB
+         NOCREATEROLE
+         NOINHERIT
+         BYPASSRLS`,
+    );
+    await admin.query(`GRANT USAGE ON SCHEMA ${SCHEMA} TO ${LIFECYCLE_BYPASS_ROLE}`);
+    await admin.query(`GRANT SELECT ON ALL TABLES IN SCHEMA ${SCHEMA} TO ${LIFECYCLE_BYPASS_ROLE}`);
+  } finally {
+    await admin.end();
+  }
+}
+
+async function insertStoredRoute(
+  pool: Pool,
+  routeId: string,
+  providerAlias: string,
+  state: "enabled" | "disabled" | "deleted",
+): Promise<void> {
+  await withTenantTx(pool, TENANT_A, async (client) => {
+    await client.query(
+      `INSERT INTO ops_alert_notification_routes (
+         id, tenant_id, source, min_severity, provider_alias, endpoint_secret_ref,
+         route_policy_ref, allowed_hosts, enabled, created_by, updated_by, deleted_at
+       )
+       VALUES ($1::uuid,$2::uuid,NULL,'warning',$3,$4,'route:stored',$5::text[],$6,'ops-test','ops-test',$7)`,
+      [
+        routeId,
+        TENANT_A,
+        providerAlias,
+        `secret://ops/${providerAlias}`,
+        ["hooks.example.com"],
+        state === "enabled",
+        state === "deleted" ? new Date().toISOString() : null,
+      ],
+    );
+  });
+}
+
 async function main(): Promise<void> {
   const pool = createPool({ options: `-c search_path=${SCHEMA},public` });
   try {
     await seed(pool);
 
-    // 1) 라우트 없음 → no-op(자동 통지 미설정).
+    // 1) env·저장 라우트 모두 없음 → 발화 0. S4b 부터는 저장형 라우트 확인을 위해 테넌트를 방문한다(tenantsProcessed 1).
     const noRoutes = await runOpsNotificationFire(pool, {
       tenantIds: [TENANT_A],
       routes: [],
       enqueuer: capturingEnqueuer([]),
       correlationId: () => "corr-none",
     });
-    check("no routes → no-op (created 0, tenantsProcessed 0)", noRoutes.created === 0 && noRoutes.tenantsProcessed === 0, JSON.stringify(noRoutes));
+    check("no routes anywhere → visits tenant, creates nothing", noRoutes.created === 0 && noRoutes.skipped === 0 && noRoutes.tenantsProcessed === 1, JSON.stringify(noRoutes));
     check("no routes → no attempts persisted", (await attemptRows(pool)).length === 0);
 
     // 2) 라우트 있는데 대상 테넌트 없음 → 휴면 loud 경고 + no-op.
@@ -217,6 +286,126 @@ async function main(): Promise<void> {
     check("critical route matches critical run_sla → created 1 (new provider)", fire3.created === 1, JSON.stringify(fire3));
     const rows3 = await attemptRows(pool);
     check("now 2 attempts across 2 providers (per-provider generation)", rows3.length === 2 && rows3.some((r) => r.provider_alias === "oncall-critical"), JSON.stringify(rows3.map((r) => r.provider_alias)));
+
+    // 7) S4b — 저장형 라우트 테넌트의 maintenance 발견(실 PG 쿼리, BYPASSRLS 역할).
+    await createLifecycleBypassRole();
+    const lifecycleBypassPool = createPool({
+      host: process.env.PGHOST,
+      port: process.env.PGPORT === undefined ? undefined : Number(process.env.PGPORT),
+      database: process.env.PGDATABASE,
+      user: LIFECYCLE_BYPASS_ROLE,
+      password: LIFECYCLE_BYPASS_PASSWORD,
+      options: `-c search_path=${SCHEMA},public`,
+    });
+    try {
+      const beforeRoutes = await resolveMaintenanceTenantIds(pool, [], new Date(), { lifecycleBypassPool });
+      check("tenant without stored routes or due work is not discovered", !beforeRoutes.includes(TENANT_A), JSON.stringify(beforeRoutes));
+
+      // 8) 저장형 라우트 3종: enabled(발화) / disabled / soft-deleted(발화 금지).
+      await insertStoredRoute(pool, STORED_ROUTE_ENABLED, "stored-webhook", "enabled");
+      await insertStoredRoute(pool, STORED_ROUTE_DISABLED, "stored-disabled", "disabled");
+      await insertStoredRoute(pool, STORED_ROUTE_DELETED, "stored-deleted", "deleted");
+
+      const afterRoutes = await resolveMaintenanceTenantIds(pool, [], new Date(), { lifecycleBypassPool });
+      check("stored-route tenant is discovered for maintenance/fire poll", afterRoutes.includes(TENANT_A), JSON.stringify(afterRoutes));
+
+      // 9) env 라우트 없이 저장형 라우트만으로 발화된다(S4b 코어).
+      const enqueuedStored: OpsNotificationSendEnqueueInput[] = [];
+      const fireStored = await runOpsNotificationFire(pool, {
+        tenantIds: [TENANT_A],
+        routes: [],
+        enqueuer: capturingEnqueuer(enqueuedStored),
+        correlationId: () => "corr-stored-1",
+      });
+      check("stored route fires without env routes → created 1", fireStored.created === 1 && enqueuedStored.length === 1, JSON.stringify(fireStored));
+      const storedRows = await attemptRows(pool);
+      check("stored route attempt persisted with stored refs", storedRows.some((r) =>
+        r.provider_alias === "stored-webhook" &&
+        r.status === "pending" &&
+        r.endpoint_secret_ref === "secret://ops/stored-webhook" &&
+        r.requested_by === "system:ops-alert-auto-fire",
+      ), JSON.stringify(storedRows.map((r) => r.provider_alias)));
+      check("disabled/deleted stored routes never fire", !storedRows.some((r) => r.provider_alias === "stored-disabled" || r.provider_alias === "stored-deleted"), JSON.stringify(storedRows.map((r) => r.provider_alias)));
+
+      // 10) 저장형 라우트도 세대 멱등(두 번째 틱 재발화 없음).
+      const fireStored2 = await runOpsNotificationFire(pool, {
+        tenantIds: [TENANT_A],
+        routes: [],
+        enqueuer: capturingEnqueuer([]),
+        correlationId: () => "corr-stored-2",
+      });
+      check("stored route second tick idempotent", fireStored2.created === 0 && fireStored2.skipped >= 1, JSON.stringify(fireStored2));
+
+      // 11) 저장형 라우트 soft-delete → 발화·발견 모두 제외.
+      await withTenantTx(pool, TENANT_A, async (client) => {
+        await client.query(
+          `UPDATE ops_alert_notification_routes SET enabled=false, deleted_at=now() WHERE tenant_id=$1::uuid AND id=$2::uuid`,
+          [TENANT_A, STORED_ROUTE_ENABLED],
+        );
+      });
+      const fireAfterDelete = await runOpsNotificationFire(pool, {
+        tenantIds: [TENANT_A],
+        routes: [],
+        enqueuer: capturingEnqueuer([]),
+        correlationId: () => "corr-stored-3",
+      });
+      check("soft-deleted stored route stops firing", fireAfterDelete.created === 0, JSON.stringify(fireAfterDelete));
+      const afterDelete = await resolveMaintenanceTenantIds(pool, [], new Date(), { lifecycleBypassPool });
+      check("soft-deleted stored route leaves maintenance discovery", !afterDelete.includes(TENANT_A), JSON.stringify(afterDelete));
+    } finally {
+      await lifecycleBypassPool.end();
+    }
+
+    // 12) session_expiry — 만료 임박 세션이 attempt 파이프라인으로 발화된다(DDL source/subject_type CHECK 실증).
+    const sessionExpiresAt = isoMinutesFromNow(360);
+    await withTenantTx(pool, TENANT_A, async (client) => {
+      await client.query(`INSERT INTO site_profiles (id, tenant_id, name, url_pattern) VALUES ($1,$2,'ops-fire-site','https://ops-fire.example/*')`, [SITE_A, TENANT_A]);
+      await client.query(`INSERT INTO browser_identities (id, tenant_id, site_profile_id, label) VALUES ($1,$2,$3,'ops-fire')`, [IDENTITY_A, TENANT_A, SITE_A]);
+      await client.query(
+        `INSERT INTO browser_sessions (tenant_id, site_profile_id, browser_identity_id, identity_key, ciphertext, enc_kid, expires_at)
+         VALUES ($1,$2,$3,'',$4::bytea,'dev-plaintext-v1',$5::timestamptz)`,
+        [TENANT_A, SITE_A, IDENTITY_A, Buffer.from([0]), sessionExpiresAt],
+      );
+    });
+    const sessionRoute: OpsAlertRoute = {
+      source: "session_expiry",
+      minSeverity: "warning",
+      providerAlias: "session-webhook",
+      endpointSecretRef: "secret://ops/session-webhook",
+      allowedHosts: ["hooks.example.com"],
+      routePolicyRef: "route:session",
+    };
+    const enqueuedSession: OpsNotificationSendEnqueueInput[] = [];
+    const fireSession = await runOpsNotificationFire(pool, {
+      tenantIds: [TENANT_A],
+      routes: [sessionRoute],
+      enqueuer: capturingEnqueuer(enqueuedSession),
+      correlationId: () => "corr-session-1",
+    });
+    check("session_expiry route fires due-soon session → created 1", fireSession.created === 1 && enqueuedSession.length === 1, JSON.stringify(fireSession));
+    const sessionRows = (await attemptRows(pool)).filter((r) => r.provider_alias === "session-webhook");
+    check("session_expiry attempt persists browser_session subject through DDL CHECK", sessionRows.length === 1
+      && sessionRows[0]!.alert_id === `session_expiry:${SITE_A}:${IDENTITY_A}:d41d8cd98f00b204e9800998ecf8427e`
+      && sessionRows[0]!.detected_at.toISOString() === sessionExpiresAt
+      && sessionRows[0]!.metadata?.source === "session_expiry", JSON.stringify(sessionRows[0]));
+    const sessionSubject = await withTenantTx(pool, TENANT_A, async (client) => {
+      const result = await client.query<{ source: string; subject_type: string; subject_id: string | null }>(
+        `SELECT source, subject_type, subject_id FROM ops_notification_attempts WHERE tenant_id=$1::uuid AND provider_alias='session-webhook'`,
+        [TENANT_A],
+      );
+      return result.rows[0];
+    });
+    check("session_expiry attempt row source/subject_type/subject_id are contract values", sessionSubject !== undefined
+      && sessionSubject.source === "session_expiry"
+      && sessionSubject.subject_type === "browser_session"
+      && sessionSubject.subject_id === SITE_A, JSON.stringify(sessionSubject));
+    const fireSession2 = await runOpsNotificationFire(pool, {
+      tenantIds: [TENANT_A],
+      routes: [sessionRoute],
+      enqueuer: capturingEnqueuer([]),
+      correlationId: () => "corr-session-2",
+    });
+    check("session_expiry second tick idempotent (stable expires_at generation)", fireSession2.created === 0 && fireSession2.skipped >= 1, JSON.stringify(fireSession2));
   } finally {
     await pool.end();
   }

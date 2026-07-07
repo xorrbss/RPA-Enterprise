@@ -423,6 +423,10 @@ for (const operationId of [
   "listOpsAlertDeliveries",
   "recordOpsAlertDelivery",
   "sendOpsAlertWebhookDelivery",
+  "listOpsAlertNotificationRoutes",
+  "createOpsAlertNotificationRoute",
+  "updateOpsAlertNotificationRoute",
+  "deleteOpsAlertNotificationRoute",
   "getOpsHealth",
   "getProductionReadiness",
   "listProductionReadinessEvidence",
@@ -515,6 +519,10 @@ assert.equal(registry.getOperation("resumeRunTrigger").requiresIdempotencyKey, t
 assert.equal(registry.getOperation("ackOpsAlert").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("recordOpsAlertDelivery").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("sendOpsAlertWebhookDelivery").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("listOpsAlertNotificationRoutes").requiresIdempotencyKey, false);
+assert.equal(registry.getOperation("createOpsAlertNotificationRoute").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("updateOpsAlertNotificationRoute").requiresIdempotencyKey, true);
+assert.equal(registry.getOperation("deleteOpsAlertNotificationRoute").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("recordProductionReadinessEvidence").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("recordAiGovernanceEvidence").requiresIdempotencyKey, true);
 assert.equal(registry.getOperation("createProcessMiningImport").requiresIdempotencyKey, true);
@@ -564,6 +572,10 @@ assert.equal(staticRbacAction("ackOpsAlert"), "ops_alert.ack");
 assert.equal(staticRbacAction("listOpsAlertDeliveries"), "ops_alert.read");
 assert.equal(staticRbacAction("recordOpsAlertDelivery"), "ops_alert.deliver");
 assert.equal(staticRbacAction("sendOpsAlertWebhookDelivery"), "ops_alert.deliver");
+assert.equal(staticRbacAction("listOpsAlertNotificationRoutes"), "ops_alert.read");
+assert.equal(staticRbacAction("createOpsAlertNotificationRoute"), "ops_alert.deliver");
+assert.equal(staticRbacAction("updateOpsAlertNotificationRoute"), "ops_alert.deliver");
+assert.equal(staticRbacAction("deleteOpsAlertNotificationRoute"), "ops_alert.deliver");
 assert.equal(staticRbacAction("getOpsHealth"), "ops_alert.read");
 assert.equal(staticRbacAction("getProductionReadiness"), "ops_alert.read");
 assert.equal(staticRbacAction("listProductionReadinessEvidence"), "ops_alert.read");
@@ -817,6 +829,66 @@ assert.equal(registry.getBodyValidator("sendOpsAlertWebhookDelivery")?.validate(
   allowed_hosts: ["alerts.example.com"],
   metadata: { endpoint_url: "https://hooks.example.com/services/T000" },
 }).valid, false);
+assert.equal(registry.getBodyValidator("createOpsAlertNotificationRoute")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("createOpsAlertNotificationRoute")?.validate({
+  source: "session_expiry",
+  min_severity: "warning",
+  provider_alias: "oncall-webhook",
+  endpoint_secret_ref: "secret://tenant-a/notification/webhook/ops-primary",
+  callback_signature_secret_ref: "secret://tenant-a/notification/webhook/callback-signing",
+  route_policy_ref: "ops-alerts-primary",
+  recipient_group_ref: "ops-primary-oncall",
+  allowed_hosts: ["hooks.example.com"],
+}).valid, true);
+assert.equal(registry.getBodyValidator("createOpsAlertNotificationRoute")?.validate({
+  source: null,
+  min_severity: "critical",
+  provider_alias: "oncall-webhook",
+  endpoint_secret_ref: "secret://tenant-a/notification/webhook/ops-primary",
+  route_policy_ref: "ops-alerts-primary",
+  allowed_hosts: ["hooks.example.com"],
+}).valid, true);
+assert.equal(registry.getBodyValidator("createOpsAlertNotificationRoute")?.validate({
+  source: "bot_pool",
+  min_severity: "warning",
+  provider_alias: "oncall-webhook",
+  endpoint_secret_ref: "secret://tenant-a/notification/webhook/ops-primary",
+  route_policy_ref: "ops-alerts-primary",
+  allowed_hosts: ["hooks.example.com"],
+}).valid, false);
+assert.equal(registry.getBodyValidator("createOpsAlertNotificationRoute")?.validate({
+  min_severity: "info",
+  provider_alias: "oncall-webhook",
+  endpoint_secret_ref: "secret://tenant-a/notification/webhook/ops-primary",
+  route_policy_ref: "ops-alerts-primary",
+  allowed_hosts: ["hooks.example.com"],
+}).valid, false);
+assert.equal(registry.getBodyValidator("createOpsAlertNotificationRoute")?.validate({
+  min_severity: "warning",
+  provider_alias: "oncall-webhook",
+  endpoint_secret_ref: "https://hooks.example.com/services/T000",
+  route_policy_ref: "ops-alerts-primary",
+  allowed_hosts: ["hooks.example.com"],
+}).valid, false);
+assert.equal(registry.getBodyValidator("createOpsAlertNotificationRoute")?.validate({
+  min_severity: "warning",
+  provider_alias: "oncall-webhook",
+  endpoint_secret_ref: "secret://tenant-a/notification/webhook/ops-primary",
+  route_policy_ref: "ops-alerts-primary",
+  allowed_hosts: ["https://hooks.example.com/services/T000"],
+}).valid, false);
+assert.equal(registry.getBodyValidator("createOpsAlertNotificationRoute")?.validate({
+  min_severity: "warning",
+  provider_alias: "oncall-webhook",
+  endpoint_secret_ref: "secret://tenant-a/notification/webhook/ops-primary",
+  route_policy_ref: "ops-alerts-primary",
+  allowed_hosts: ["hooks.example.com"],
+  endpoint_url: "https://hooks.example.com/services/T000",
+}).valid, false);
+assert.equal(registry.getBodyValidator("updateOpsAlertNotificationRoute")?.validate({}).valid, false);
+assert.equal(registry.getBodyValidator("updateOpsAlertNotificationRoute")?.validate({ enabled: false }).valid, true);
+assert.equal(registry.getBodyValidator("updateOpsAlertNotificationRoute")?.validate({ min_severity: "critical", source: null }).valid, true);
+assert.equal(registry.getBodyValidator("updateOpsAlertNotificationRoute")?.validate({ endpoint_secret_ref: "https://hooks.example.com/x" }).valid, false);
 assert.equal(registry.getBodyValidator("createIntegrationHandoff")?.validate({}).valid, false);
 assert.equal(registry.getBodyValidator("createIntegrationHandoff")?.validate({
   provider_alias: "uipath-primary",
@@ -1212,6 +1284,9 @@ assert.equal(registry.getParamsValidator("ackOpsAlert")?.validate({ alert_id: "b
 assert.equal(registry.getParamsValidator("listOpsAlertDeliveries")?.validate({ alert_id: "bot_pool:browser-default" }).valid, true);
 assert.equal(registry.getParamsValidator("recordOpsAlertDelivery")?.validate({ alert_id: "bot_pool:browser-default" }).valid, true);
 assert.equal(registry.getParamsValidator("sendOpsAlertWebhookDelivery")?.validate({ alert_id: "bot_pool:browser-default" }).valid, true);
+assert.equal(registry.getParamsValidator("updateOpsAlertNotificationRoute")?.validate({ route_id: "9a300000-0000-4000-8000-000000000001" }).valid, true);
+assert.equal(registry.getParamsValidator("updateOpsAlertNotificationRoute")?.validate({}).valid, false);
+assert.equal(registry.getParamsValidator("deleteOpsAlertNotificationRoute")?.validate({ route_id: "9a300000-0000-4000-8000-000000000001" }).valid, true);
 assert.equal(registry.getParamsValidator("dispatchIntegrationHandoff")?.validate({ handoff_id: "00000000-0000-4000-8000-0000000000a1" }).valid, true);
 assert.equal(registry.getParamsValidator("recordIntegrationHandoffCallback")?.validate({ handoff_id: "00000000-0000-4000-8000-0000000000a1" }).valid, true);
 assert.equal(registry.getParamsValidator("recordExternalDocumentExtraction")?.validate({ job_id: "00000000-0000-4000-8000-0000000000d1" }).valid, true);
@@ -1223,7 +1298,9 @@ assert.equal(registry.getQueryValidator("listOpsAlerts")?.validate({ severity: "
 assert.equal(registry.getQueryValidator("listOpsAlerts")?.validate({ source: "bot_pool", status: "acknowledged" }).valid, true);
 assert.equal(registry.getQueryValidator("listOpsAlerts")?.validate({ source: "audit_verifier", status: "open" }).valid, true);
 assert.equal(registry.getQueryValidator("listOpsAlerts")?.validate({ source: "readiness_evidence", status: "open" }).valid, true);
+assert.equal(registry.getQueryValidator("listOpsAlerts")?.validate({ source: "session_expiry", status: "open" }).valid, true);
 assert.equal(registry.getQueryValidator("listOpsAlertDeliveries")?.validate({ limit: 10 }).valid, true);
+assert.equal(registry.getQueryValidator("listOpsAlertNotificationRoutes")?.validate({ limit: 50 }).valid, true);
 assert.equal(registry.getQueryValidator("listProductionReadinessEvidence")?.validate({ evidence_type: "external_alert_delivery", limit: 10 }).valid, true);
 assert.equal(registry.getQueryValidator("listProductionReadinessEvidence")?.validate({ evidence_type: "managed_backup_restore_drill", limit: 10 }).valid, true);
 assert.equal(registry.getQueryValidator("listProductionReadinessEvidence")?.validate({ evidence_type: "slo_oncall_signoff", limit: 10 }).valid, true);
@@ -1434,6 +1511,53 @@ const alertWebhookQueued = await handlers.sendOpsAlertWebhookDelivery!(ctx("send
 assert.equal(alertWebhookQueued.status, 202);
 assert.equal((alertWebhookQueued.body as { status: string }).status, "pending");
 assert.equal((alertWebhookQueued.body as { callback_signature_secret_ref: string }).callback_signature_secret_ref, "secret://tenant-a/notification/webhook/callback-signing");
+const alertRouteCreated = await handlers.createOpsAlertNotificationRoute!(ctx("createOpsAlertNotificationRoute", {
+  method: "POST",
+  path: "/v1/ops-alert-routes",
+  body: {
+    source: "session_expiry",
+    min_severity: "warning",
+    provider_alias: "oncall-webhook",
+    endpoint_secret_ref: "secret://tenant-a/notification/webhook/ops-primary",
+    route_policy_ref: "ops-alerts-primary",
+    recipient_group_ref: "ops-primary-oncall",
+    allowed_hosts: ["hooks.example.com"],
+  },
+}));
+assert.equal(alertRouteCreated.status, 201);
+const alertRouteCreatedBody = alertRouteCreated.body as { route_id: string; source: string | null; min_severity: string; enabled: boolean };
+assert.equal(alertRouteCreatedBody.source, "session_expiry");
+assert.equal(alertRouteCreatedBody.min_severity, "warning");
+assert.equal(alertRouteCreatedBody.enabled, true);
+const alertRouteList = await handlers.listOpsAlertNotificationRoutes!(ctx("listOpsAlertNotificationRoutes", {
+  method: "GET",
+  path: "/v1/ops-alert-routes",
+  query: { limit: "50" },
+}));
+assert.equal((alertRouteList.body as { items: Array<{ route_id: string }> }).items.some((item) => item.route_id === alertRouteCreatedBody.route_id), true);
+const alertRouteUpdated = await handlers.updateOpsAlertNotificationRoute!(ctx("updateOpsAlertNotificationRoute", {
+  method: "PATCH",
+  path: "/v1/ops-alert-routes/{route_id}",
+  params: { route_id: alertRouteCreatedBody.route_id },
+  body: { min_severity: "critical", enabled: false },
+}));
+assert.equal(alertRouteUpdated.status, 200);
+assert.equal((alertRouteUpdated.body as { min_severity: string }).min_severity, "critical");
+assert.equal((alertRouteUpdated.body as { enabled: boolean }).enabled, false);
+const alertRouteDeleted = await handlers.deleteOpsAlertNotificationRoute!(ctx("deleteOpsAlertNotificationRoute", {
+  method: "DELETE",
+  path: "/v1/ops-alert-routes/{route_id}",
+  params: { route_id: alertRouteCreatedBody.route_id },
+}));
+assert.equal(alertRouteDeleted.status, 200);
+assert.equal((alertRouteDeleted.body as { deleted: boolean; route: { enabled: boolean } }).deleted, true);
+assert.equal((alertRouteDeleted.body as { route: { enabled: boolean } }).route.enabled, false);
+const alertRouteListAfterDelete = await handlers.listOpsAlertNotificationRoutes!(ctx("listOpsAlertNotificationRoutes", {
+  method: "GET",
+  path: "/v1/ops-alert-routes",
+  query: { limit: "50" },
+}));
+assert.equal((alertRouteListAfterDelete.body as { items: unknown[] }).items.length, 0);
 const opsHealth = await handlers.getOpsHealth!(ctx("getOpsHealth", {
   method: "GET",
   path: "/v1/ops/health",

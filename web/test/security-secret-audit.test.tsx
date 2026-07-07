@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { App } from "../src/App";
@@ -54,7 +54,7 @@ describe("security SecretRef audit panel", () => {
     localStorage.setItem("rpa.token", jwt(["operator"]));
   });
 
-  test("secret.resolve 감사 로그를 비밀값 없이 요약한다", async () => {
+  test("operator secret deep link shows read-only summary without fetching SecretRef audit details", async () => {
     const listAuditLog = vi.fn(async () => ({
       items: [
         auditItem({ audit_id: "audit-allow", outcome: "allow", actor: { subject_id: "runtime-a", roles: ["operator"] } }),
@@ -66,19 +66,13 @@ describe("security SecretRef audit panel", () => {
 
     renderApp(fakeClient({ listAuditLog }));
 
-    expect(await screen.findByRole("heading", { name: "SecretRef 감사 요약" })).toBeInTheDocument();
-    await waitFor(() => expect(listAuditLog).toHaveBeenCalledWith({ action: "secret.resolve", limit: 100 }));
-    expect(await screen.findByText("최근 3건")).toBeInTheDocument();
-    expect(screen.getByText("거부·차단")).toBeInTheDocument();
-    expect(screen.getAllByText("오류").length).toBeGreaterThan(0);
-    expect(screen.getByText("처리자 범위")).toBeInTheDocument();
-    expect(screen.getByText("평문 비밀값과 audit payload 본문은 표시하지 않습니다.")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "감사 이력" })).toHaveAttribute("href", "#auditExplorer?action=secret.resolve");
-    expect(screen.getAllByText("처리자 확인됨").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText("운영자").length).toBeGreaterThan(0);
-    expect(screen.getByText("등록 외 역할")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "보안 읽기 전용 요약" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "비밀·연결·감사 읽기 전용 섹션 요약" })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "보안 deep link 권한 안내" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "SecretRef 감사 요약" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "보안 연결 사용 현황" })).toBeNull();
+    expect(listAuditLog).not.toHaveBeenCalled();
     expect(screen.queryByText("runtime-a")).toBeNull();
     expect(screen.queryByText("runtime-b")).toBeNull();
-    expect(screen.getByText("처리자 미확인")).toBeInTheDocument();
   });
 });

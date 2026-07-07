@@ -198,6 +198,68 @@ describe("HttpApiClient 계약", () => {
     });
   });
 
+  test("ops alert notification route CRUD uses /v1/ops-alert-routes with idempotency keys", async () => {
+    const routeBody = {
+      route_id: "9a300000-0000-4000-8000-000000000001",
+      source: "session_expiry",
+      min_severity: "warning",
+      provider_alias: "webhook-primary",
+      endpoint_secret_ref: "secret://tenant-a/notification/webhook/ops-primary",
+      callback_signature_secret_ref: null,
+      route_policy_ref: "ops-alerts-primary",
+      recipient_group_ref: "ops-primary-oncall",
+      allowed_hosts: ["hooks.example.com"],
+      enabled: true,
+      created_by: "admin-a",
+      created_at: "2026-07-02T00:00:00.000Z",
+      updated_by: "admin-a",
+      updated_at: "2026-07-02T00:00:00.000Z",
+    };
+
+    const listHarness = harness({ body: { items: [routeBody], next_cursor: null } });
+    await listHarness.client.listOpsAlertNotificationRoutes({ limit: 50 });
+    expect(listHarness.calls[0]?.method).toBe("GET");
+    expect(listHarness.calls[0]?.url).toBe("http://api.test/v1/ops-alert-routes?limit=50");
+
+    const createHarness = harness({ body: routeBody });
+    const created = await createHarness.client.createOpsAlertNotificationRoute({
+      source: "session_expiry",
+      min_severity: "warning",
+      provider_alias: "webhook-primary",
+      endpoint_secret_ref: "secret://tenant-a/notification/webhook/ops-primary",
+      route_policy_ref: "ops-alerts-primary",
+      recipient_group_ref: "ops-primary-oncall",
+      allowed_hosts: ["hooks.example.com"],
+    }, "route-create-1");
+    expect(created.route_id).toBe(routeBody.route_id);
+    expect(createHarness.calls[0]?.method).toBe("POST");
+    expect(createHarness.calls[0]?.url).toBe("http://api.test/v1/ops-alert-routes");
+    expect(createHarness.calls[0]?.headers.get("idempotency-key")).toBe("route-create-1");
+    expect(createHarness.calls[0]?.body).toEqual({
+      source: "session_expiry",
+      min_severity: "warning",
+      provider_alias: "webhook-primary",
+      endpoint_secret_ref: "secret://tenant-a/notification/webhook/ops-primary",
+      route_policy_ref: "ops-alerts-primary",
+      recipient_group_ref: "ops-primary-oncall",
+      allowed_hosts: ["hooks.example.com"],
+    });
+
+    const patchHarness = harness({ body: { ...routeBody, enabled: false } });
+    await patchHarness.client.updateOpsAlertNotificationRoute(routeBody.route_id, { enabled: false }, "route-toggle-1");
+    expect(patchHarness.calls[0]?.method).toBe("PATCH");
+    expect(patchHarness.calls[0]?.url).toBe(`http://api.test/v1/ops-alert-routes/${routeBody.route_id}`);
+    expect(patchHarness.calls[0]?.headers.get("idempotency-key")).toBe("route-toggle-1");
+    expect(patchHarness.calls[0]?.body).toEqual({ enabled: false });
+
+    const deleteHarness = harness({ body: { deleted: true, route: { ...routeBody, enabled: false } } });
+    const deleted = await deleteHarness.client.deleteOpsAlertNotificationRoute(routeBody.route_id, "route-delete-1");
+    expect(deleted.deleted).toBe(true);
+    expect(deleteHarness.calls[0]?.method).toBe("DELETE");
+    expect(deleteHarness.calls[0]?.url).toBe(`http://api.test/v1/ops-alert-routes/${routeBody.route_id}`);
+    expect(deleteHarness.calls[0]?.headers.get("idempotency-key")).toBe("route-delete-1");
+  });
+
   test("integration handoff routes use SecretRef-only request and receipt metadata", async () => {
     const listHarness = harness({ body: { items: [], next_cursor: null } });
     await listHarness.client.listIntegrationHandoffs({ provider_alias: "uipath-primary", status: "deferred", limit: 5 });
@@ -460,6 +522,27 @@ describe("HttpApiClient 계약", () => {
     });
   });
 
+  test("AI governance evidence summary → GET /v1/ai-governance/evidence/summary + filters", async () => {
+    const { calls, client } = harness({
+      body: {
+        total_count: 1,
+        status_counts: { valid: 1, deferred: 0, failed: 0 },
+        expired_valid_count: 0,
+        latest: null,
+        type_status_counts: [],
+        filters: { evidence_type: "model_registry", status: "valid", subject_ref: "model:codex-prod-primary" },
+      },
+    });
+    await client.getAiGovernanceEvidenceSummary({
+      evidence_type: "model_registry",
+      status: "valid",
+      subject_ref: "model:codex-prod-primary",
+    });
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/ai-governance/evidence/summary?evidence_type=model_registry&status=valid&subject_ref=model%3Acodex-prod-primary");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
+  });
+
   test("automation adoption evidence list and record routes", async () => {
     const listHarness = harness({ body: { items: [], next_cursor: null } });
     await listHarness.client.listAutomationAdoptionEvidence("idea-123", {
@@ -699,6 +782,23 @@ describe("HttpApiClient 계약", () => {
     });
     expect(calls[0]?.method).toBe("GET");
     expect(calls[0]?.url).toBe("http://api.test/v1/audit-log?action=artifact.read&outcome=allow&actor=viewer-a&occurred_at_from=2026-06-01T00%3A00%3A00.000Z&occurred_at_to=2026-06-30T23%3A59%3A59.999Z&limit=25");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
+  });
+
+  test("getAuditLogSummary → GET /v1/audit-log/summary + 필터 쿼리", async () => {
+    const { calls, client } = harness({
+      body: {
+        total_count: 1,
+        outcome_counts: { allow: 1, deny: 0, blocked: 0, error: 0 },
+        hash_linked_count: 1,
+        legal_hold_count: 0,
+        latest: null,
+        filters: { action: "secret.resolve", outcome: "allow", actor: "admin-a", correlation_id: null, occurred_at_from: null, occurred_at_to: null },
+      },
+    });
+    await client.getAuditLogSummary({ action: "secret.resolve", outcome: "allow", actor: "admin-a" });
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/audit-log/summary?action=secret.resolve&outcome=allow&actor=admin-a");
     expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
   });
 

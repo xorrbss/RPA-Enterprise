@@ -4,6 +4,8 @@ import {
   type AiGovernanceEvidence,
   type AiGovernanceEvidenceListParams,
   type AiGovernanceEvidenceRequest,
+  type AiGovernanceEvidenceSummaryParams,
+  type AiGovernanceEvidenceSummary,
   type AiGovernanceRuntimePolicy,
   type AiGovernanceRuntimePolicyEnvelope,
   type AiGovernanceRuntimePolicyRequest,
@@ -16,6 +18,8 @@ import {
   type BotPoolItem,
   type AuditLogItem,
   type AuditLogExportParams,
+  type AuditLogSummaryParams,
+  type AuditLogSummary,
   type AuditVerificationRun,
   type AuditVerificationRunListParams,
   type AutomationPerformanceReport,
@@ -71,6 +75,10 @@ import {
   type IntegrationHandoffDispatchRequest,
   type IntegrationHandoffListParams,
   type ListParams,
+  type OpsAlertNotificationRoute,
+  type OpsAlertNotificationRouteCreateRequest,
+  type OpsAlertNotificationRouteDeleteResult,
+  type OpsAlertNotificationRouteUpdateRequest,
   type OpsNotificationAttempt,
   type OpsNotificationDelivery,
   type OpsNotificationDeliveryRequest,
@@ -90,6 +98,7 @@ import {
   type PrioritizeRunResult,
   type RoiActualEvidence,
   type RoiActualEvidenceRequest,
+  type RoiActualSuggestion,
   type RoiEstimate,
   type RoiEstimateRequest,
   type RerunRunBody,
@@ -188,11 +197,16 @@ export interface ApiClient {
   listOpsAlertDeliveries(alertId: string, p?: ListParams): Promise<Paginated<OpsNotificationDelivery>>;
   recordOpsAlertDelivery(alertId: string, body: OpsNotificationDeliveryRequest, idempotencyKey: string): Promise<OpsNotificationDelivery>;
   sendOpsAlertWebhookDelivery(alertId: string, body: OpsNotificationWebhookSendRequest, idempotencyKey: string): Promise<OpsNotificationAttempt>;
+  listOpsAlertNotificationRoutes(p?: ListParams): Promise<Paginated<OpsAlertNotificationRoute>>;
+  createOpsAlertNotificationRoute(body: OpsAlertNotificationRouteCreateRequest, idempotencyKey: string): Promise<OpsAlertNotificationRoute>;
+  updateOpsAlertNotificationRoute(routeId: string, body: OpsAlertNotificationRouteUpdateRequest, idempotencyKey: string): Promise<OpsAlertNotificationRoute>;
+  deleteOpsAlertNotificationRoute(routeId: string, idempotencyKey: string): Promise<OpsAlertNotificationRouteDeleteResult>;
   getOpsHealth(): Promise<OpsHealth>;
   getProductionReadiness(): Promise<ProductionReadiness>;
   listProductionReadinessEvidence(p?: ListParams & { evidence_type?: ProductionReadinessEvidenceType }): Promise<Paginated<ProductionReadinessEvidence>>;
   recordProductionReadinessEvidence(body: ProductionReadinessEvidenceRequest, idempotencyKey: string): Promise<ProductionReadinessEvidence>;
   listAiGovernanceEvidence(p?: AiGovernanceEvidenceListParams): Promise<Paginated<AiGovernanceEvidence>>;
+  getAiGovernanceEvidenceSummary(p?: AiGovernanceEvidenceSummaryParams): Promise<AiGovernanceEvidenceSummary>;
   recordAiGovernanceEvidence(body: AiGovernanceEvidenceRequest, idempotencyKey: string): Promise<AiGovernanceEvidence>;
   getAiGovernanceRuntimePolicy(): Promise<AiGovernanceRuntimePolicyEnvelope>;
   upsertAiGovernanceRuntimePolicy(body: AiGovernanceRuntimePolicyRequest, idempotencyKey: string): Promise<AiGovernanceRuntimePolicy>;
@@ -205,6 +219,7 @@ export interface ApiClient {
   createProcessMiningImport(body: ProcessMiningImportCreateBody, idempotencyKey: string): Promise<ProcessMiningImportItem>;
   listAutomationIdeas(p?: AutomationIdeaListParams): Promise<Paginated<AutomationIdeaItem>>;
   listAuditLog(p?: AuditLogListParams): Promise<Paginated<AuditLogItem>>;
+  getAuditLogSummary(p?: AuditLogSummaryParams): Promise<AuditLogSummary>;
   exportAuditLogCsv(p?: AuditLogExportParams): Promise<string>;
   listAuditVerificationRuns(p?: AuditVerificationRunListParams): Promise<Paginated<AuditVerificationRun>>;
   runAuditVerification(idempotencyKey: string, body?: { legal_hold?: boolean }): Promise<AuditVerificationRun>;
@@ -242,6 +257,7 @@ export interface ApiClient {
   ): Promise<AutomationAdoptionEvidenceItem>;
   listRoiActualEvidence(ideaId: string, p?: ListParams): Promise<Paginated<RoiActualEvidence>>;
   recordRoiActualEvidence(ideaId: string, body: RoiActualEvidenceRequest, idempotencyKey: string): Promise<RoiActualEvidence>;
+  getRoiActualSuggestion(ideaId: string, p: { period_start: string; period_end: string }): Promise<RoiActualSuggestion>;
   listSites(p?: ListParams): Promise<Paginated<SiteItem>>;
   listSiteElements(siteId: string, p?: SiteElementListParams): Promise<Paginated<SiteElementItem>>;
   createSiteElement(siteId: string, body: SiteElementCreateBody, idempotencyKey: string): Promise<SiteElementItem>;
@@ -468,10 +484,10 @@ function parseEtagVersion(value: string | null): number | undefined {
   return Number.isInteger(n) && n >= 1 ? n : undefined;
 }
 
-function queryString(p?: ListParams): string {
+function queryString<T extends object>(p?: T): string {
   if (p === undefined) return "";
   const sp = new URLSearchParams();
-  for (const [k, v] of Object.entries(p)) {
+  for (const [k, v] of Object.entries(p as Record<string, string | number | boolean | null | undefined>)) {
     if (v !== undefined && v !== null) sp.set(k, String(v));
   }
   const s = sp.toString();
@@ -561,7 +577,9 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       method,
       headers: {
         Accept: "application/json",
-        "Content-Type": "application/json",
+        // 본문이 있을 때만 Content-Type 부여 — 무본문 변이(DELETE·bodyless PUT)에서 ct=json + 빈 본문이
+        // 나가면 서버 JSON 파서가 FST_ERR_CTP_EMPTY_JSON_BODY 를 던져 500 이 된다(빈 본문에 ct 미부여).
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
         ...(extraHeaders ?? {}),
         ...authHeaders(),
       },
@@ -657,11 +675,18 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       post(`/v1/ops-alerts/${encodeURIComponent(alertId)}/deliveries`, idempotencyKey, body),
     sendOpsAlertWebhookDelivery: (alertId, body, idempotencyKey) =>
       post(`/v1/ops-alerts/${encodeURIComponent(alertId)}/deliveries/send-webhook`, idempotencyKey, body),
+    listOpsAlertNotificationRoutes: (p) => get(`/v1/ops-alert-routes${queryString(p)}`),
+    createOpsAlertNotificationRoute: (body, idempotencyKey) => post(`/v1/ops-alert-routes`, idempotencyKey, body),
+    updateOpsAlertNotificationRoute: (routeId, body, idempotencyKey) =>
+      send("PATCH", `/v1/ops-alert-routes/${encodeURIComponent(routeId)}`, body, { "Idempotency-Key": idempotencyKey }),
+    deleteOpsAlertNotificationRoute: (routeId, idempotencyKey) =>
+      send("DELETE", `/v1/ops-alert-routes/${encodeURIComponent(routeId)}`, undefined, { "Idempotency-Key": idempotencyKey }),
     getOpsHealth: () => get(`/v1/ops/health`),
     getProductionReadiness: () => get(`/v1/ops/production-readiness`),
     listProductionReadinessEvidence: (p) => get(`/v1/ops/production-readiness/evidence${queryString(p)}`),
     recordProductionReadinessEvidence: (body, idempotencyKey) => post(`/v1/ops/production-readiness/evidence`, idempotencyKey, body),
     listAiGovernanceEvidence: (p) => get(`/v1/ai-governance/evidence${queryString(p)}`),
+    getAiGovernanceEvidenceSummary: (p) => get(`/v1/ai-governance/evidence/summary${queryString(p)}`),
     recordAiGovernanceEvidence: (body, idempotencyKey) => post(`/v1/ai-governance/evidence`, idempotencyKey, body),
     getAiGovernanceRuntimePolicy: () => get(`/v1/ai-governance/runtime-policy`),
     upsertAiGovernanceRuntimePolicy: (body, idempotencyKey) =>
@@ -685,6 +710,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     createProcessMiningImport: (body, key) => post(`/v1/process-mining/imports`, key, body),
     listAutomationIdeas: (p) => get(`/v1/automation-ideas${queryString(p)}`),
     listAuditLog: (p) => get(`/v1/audit-log${queryString(p)}`),
+    getAuditLogSummary: (p) => get(`/v1/audit-log/summary${queryString(p)}`),
     exportAuditLogCsv: (p) => getText(`/v1/audit-log/export${queryString({ ...p, format: "csv" })}`, "text/csv"),
     listAuditVerificationRuns: (p) => get(`/v1/audit-log/verification-runs${queryString(p)}`),
     runAuditVerification: (idempotencyKey, body) => post(`/v1/audit-log/verification-runs/verify`, idempotencyKey, body ?? {}),
@@ -722,6 +748,10 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       post(`/v1/automation-ideas/${ideaId}/adoption-evidence`, key, body),
     listRoiActualEvidence: (ideaId, p) => get(`/v1/automation-ideas/${ideaId}/roi-actuals${queryString(p)}`),
     recordRoiActualEvidence: (ideaId, body, key) => post(`/v1/automation-ideas/${ideaId}/roi-actuals`, key, body),
+    getRoiActualSuggestion: (ideaId, p) =>
+      get(
+        `/v1/automation-ideas/${ideaId}/roi-actuals/suggestion?period_start=${encodeURIComponent(p.period_start)}&period_end=${encodeURIComponent(p.period_end)}`,
+      ),
     listSites: (p) => get(`/v1/sites${queryString(p)}`),
     listSiteElements: (siteId, p) => get(`/v1/sites/${siteId}/elements${queryString(p)}`),
     createSiteElement: (siteId, body, key) => post(`/v1/sites/${siteId}/elements`, key, body),

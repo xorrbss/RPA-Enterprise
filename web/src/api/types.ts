@@ -773,7 +773,18 @@ export type OpsAlertSource =
   | "bot_pool"
   | "scim_secret_rotation"
   | "audit_verifier"
-  | "readiness_evidence";
+  | "readiness_evidence"
+  | "session_expiry";
+export type OpsAlertSubjectType =
+  | "run"
+  | "human_task"
+  | "run_trigger"
+  | "dlq"
+  | "bot_pool"
+  | "scim_provider"
+  | "audit_verifier"
+  | "readiness_evidence"
+  | "browser_session";
 export type OpsAlertStatus = "open" | "acknowledged";
 export type OpsNotificationChannel = "teams" | "slack" | "email" | "webhook";
 export type OpsNotificationDeliveryStatus = "sent" | "delivered" | "failed";
@@ -797,7 +808,7 @@ export interface OpsAlertItem {
   readonly source: OpsAlertSource;
   readonly title: string;
   readonly detail: string;
-  readonly subject_type: "run" | "human_task" | "run_trigger" | "dlq" | "bot_pool" | "scim_provider" | "audit_verifier" | "readiness_evidence";
+  readonly subject_type: OpsAlertSubjectType;
   readonly subject_id: string | null;
   readonly status: OpsAlertStatus;
   readonly delivery: OpsAlertDelivery;
@@ -819,7 +830,7 @@ export interface OpsNotificationDelivery {
   readonly alert_id: string;
   readonly detected_at: string;
   readonly source: OpsAlertSource;
-  readonly subject_type: "run" | "human_task" | "run_trigger" | "dlq" | "bot_pool" | "scim_provider" | "audit_verifier" | "readiness_evidence";
+  readonly subject_type: OpsAlertSubjectType;
   readonly subject_id: string | null;
   readonly channel: OpsNotificationChannel;
   readonly provider_alias: string;
@@ -856,6 +867,61 @@ export interface OpsNotificationDeliveryRequest {
   readonly error_code?: string | null;
   readonly metadata?: Record<string, unknown>;
   readonly legal_hold?: boolean;
+}
+
+// S4b 저장형 자동 알림 라우팅(/v1/ops-alert-routes). source 는 자동 발화 대상 소스만, null=전체 유형.
+export type OpsAlertNotificationRouteSource =
+  | "run_sla"
+  | "human_task_sla"
+  | "trigger_fire"
+  | "failure_spike"
+  | "session_expiry";
+export type OpsAlertNotificationRouteSeverity = "warning" | "critical";
+
+export interface OpsAlertNotificationRoute {
+  readonly route_id: string;
+  readonly source: OpsAlertNotificationRouteSource | null;
+  readonly min_severity: OpsAlertNotificationRouteSeverity;
+  readonly provider_alias: string;
+  readonly endpoint_secret_ref: string;
+  readonly callback_signature_secret_ref: string | null;
+  readonly route_policy_ref: string;
+  readonly recipient_group_ref: string | null;
+  readonly allowed_hosts: readonly string[];
+  readonly enabled: boolean;
+  readonly created_by: string;
+  readonly created_at: string;
+  readonly updated_by: string;
+  readonly updated_at: string;
+}
+
+export interface OpsAlertNotificationRouteCreateRequest {
+  readonly source?: OpsAlertNotificationRouteSource | null;
+  readonly min_severity: OpsAlertNotificationRouteSeverity;
+  readonly provider_alias: string;
+  readonly endpoint_secret_ref: string;
+  readonly callback_signature_secret_ref?: string | null;
+  readonly route_policy_ref: string;
+  readonly recipient_group_ref?: string | null;
+  readonly allowed_hosts: readonly string[];
+  readonly enabled?: boolean;
+}
+
+export interface OpsAlertNotificationRouteUpdateRequest {
+  readonly source?: OpsAlertNotificationRouteSource | null;
+  readonly min_severity?: OpsAlertNotificationRouteSeverity;
+  readonly provider_alias?: string;
+  readonly endpoint_secret_ref?: string;
+  readonly callback_signature_secret_ref?: string | null;
+  readonly route_policy_ref?: string;
+  readonly recipient_group_ref?: string | null;
+  readonly allowed_hosts?: readonly string[];
+  readonly enabled?: boolean;
+}
+
+export interface OpsAlertNotificationRouteDeleteResult {
+  readonly deleted: boolean;
+  readonly route: OpsAlertNotificationRoute;
 }
 
 export type OpsNotificationAttemptStatus = "pending" | "sending" | "sent" | "failed" | "dead_letter";
@@ -1122,6 +1188,41 @@ export interface AiGovernanceEvidenceListParams extends ListParams {
   readonly subject_ref?: string;
 }
 
+export interface AiGovernanceEvidenceSummaryParams {
+  readonly evidence_type?: AiGovernanceEvidenceType;
+  readonly status?: AiGovernanceEvidenceStatus;
+  readonly subject_ref?: string;
+}
+
+export interface AiGovernanceEvidenceSummary {
+  readonly total_count: number;
+  readonly status_counts: {
+    readonly valid: number;
+    readonly deferred: number;
+    readonly failed: number;
+  };
+  readonly expired_valid_count: number;
+  readonly latest: null | {
+    readonly evidence_type: AiGovernanceEvidenceType;
+    readonly status: AiGovernanceEvidenceStatus;
+    readonly subject_ref: string | null;
+    readonly evidence_at: string | null;
+    readonly recorded_at: string | null;
+  };
+  readonly type_status_counts: readonly {
+    readonly evidence_type: AiGovernanceEvidenceType;
+    readonly total_count: number;
+    readonly valid: number;
+    readonly deferred: number;
+    readonly failed: number;
+  }[];
+  readonly filters: {
+    readonly evidence_type: AiGovernanceEvidenceType | null;
+    readonly status: AiGovernanceEvidenceStatus | null;
+    readonly subject_ref: string | null;
+  };
+}
+
 export type AiGovernanceRuntimePolicyMode = "observe" | "warn" | "block";
 
 export interface AiGovernanceRuntimePolicy {
@@ -1377,6 +1478,23 @@ export interface RoiActualEvidenceRequest {
   readonly legal_hold?: boolean;
 }
 
+/**
+ * ROI 실적 프리필 제안(read-only) — 연결 자동화의 기간 내 prod 실행 통계 기반 **제안일 뿐 증거가 아니다**.
+ * 미연결/종결 0건이면 집계·제안 필드가 null(0으로 합성 금지). 확정은 사람이 실적 저장(POST)할 때만.
+ */
+export interface RoiActualSuggestion {
+  readonly automation_idea_id: string;
+  readonly scenario_id: string | null;
+  readonly period_start: string;
+  readonly period_end: string;
+  readonly run_mode: "prod";
+  readonly total_runs: number | null;
+  readonly completed_runs: number | null;
+  readonly failed_runs: number | null;
+  readonly suggested_actual_transaction_count: number | null;
+  readonly suggested_actual_failure_rate: number | null;
+}
+
 export interface RoiActualEvidence {
   readonly roi_actual_id: string;
   readonly automation_idea_id: string;
@@ -1426,6 +1544,41 @@ export interface AuditLogListParams extends ListParams {
   readonly correlation_id?: string;
   readonly occurred_at_from?: string;
   readonly occurred_at_to?: string;
+}
+
+export interface AuditLogSummaryParams {
+  readonly action?: string;
+  readonly outcome?: AuditOutcome;
+  readonly actor?: string;
+  readonly correlation_id?: string;
+  readonly occurred_at_from?: string;
+  readonly occurred_at_to?: string;
+}
+
+export interface AuditLogSummary {
+  readonly total_count: number;
+  readonly outcome_counts: {
+    readonly allow: number;
+    readonly deny: number;
+    readonly blocked: number;
+    readonly error: number;
+  };
+  readonly hash_linked_count: number;
+  readonly legal_hold_count: number;
+  readonly latest: null | {
+    readonly sequence_no: number;
+    readonly occurred_at: string | null;
+    readonly hash: string | null;
+    readonly previous_hash: string | null;
+  };
+  readonly filters: {
+    readonly action: string | null;
+    readonly outcome: AuditOutcome | null;
+    readonly actor: string | null;
+    readonly correlation_id: string | null;
+    readonly occurred_at_from: string | null;
+    readonly occurred_at_to: string | null;
+  };
 }
 
 export interface AuditLogExportParams extends AuditLogListParams {

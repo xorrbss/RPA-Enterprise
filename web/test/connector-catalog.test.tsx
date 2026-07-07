@@ -118,7 +118,7 @@ describe("connector catalog view", () => {
     expect(screen.queryByText("secret://tenant-a/connector/http-api/bearer")).not.toBeInTheDocument();
 
     const form = document.querySelector(".connector-profile-form") as HTMLFormElement;
-    fireEvent.change(within(form).getByPlaceholderText("HTTP API staging"), { target: { value: "Ops API" } });
+    fireEvent.change(within(form).getByPlaceholderText("HTTP API 스테이징"), { target: { value: "Ops API" } });
     fireEvent.change(within(form).getByPlaceholderText("secret://tenant/connector/name/key"), {
       target: { value: "secret://tenant-a/connector/http-api/ops" },
     });

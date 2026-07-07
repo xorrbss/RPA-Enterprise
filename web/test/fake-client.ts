@@ -364,6 +364,58 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       requested_at: "2026-06-23T00:01:00.000Z",
       legal_hold: body.legal_hold ?? false,
     }),
+    listOpsAlertNotificationRoutes: empty,
+    createOpsAlertNotificationRoute: async (body) => ({
+      route_id: "ops-alert-route-fake",
+      source: body.source ?? null,
+      min_severity: body.min_severity,
+      provider_alias: body.provider_alias,
+      endpoint_secret_ref: body.endpoint_secret_ref,
+      callback_signature_secret_ref: body.callback_signature_secret_ref ?? null,
+      route_policy_ref: body.route_policy_ref,
+      recipient_group_ref: body.recipient_group_ref ?? null,
+      allowed_hosts: body.allowed_hosts,
+      enabled: body.enabled ?? true,
+      created_by: "admin-a",
+      created_at: "2026-06-23T00:00:00.000Z",
+      updated_by: "admin-a",
+      updated_at: "2026-06-23T00:00:00.000Z",
+    }),
+    updateOpsAlertNotificationRoute: async (routeId, body) => ({
+      route_id: routeId,
+      source: body.source ?? null,
+      min_severity: body.min_severity ?? "warning",
+      provider_alias: body.provider_alias ?? "webhook-primary",
+      endpoint_secret_ref: body.endpoint_secret_ref ?? "secret://tenant-a/notification/webhook/ops-primary",
+      callback_signature_secret_ref: body.callback_signature_secret_ref ?? null,
+      route_policy_ref: body.route_policy_ref ?? "ops-alerts-primary",
+      recipient_group_ref: body.recipient_group_ref ?? null,
+      allowed_hosts: body.allowed_hosts ?? ["hooks.example.com"],
+      enabled: body.enabled ?? true,
+      created_by: "admin-a",
+      created_at: "2026-06-23T00:00:00.000Z",
+      updated_by: "admin-a",
+      updated_at: "2026-06-23T00:01:00.000Z",
+    }),
+    deleteOpsAlertNotificationRoute: async (routeId) => ({
+      deleted: true,
+      route: {
+        route_id: routeId,
+        source: null,
+        min_severity: "warning",
+        provider_alias: "webhook-primary",
+        endpoint_secret_ref: "secret://tenant-a/notification/webhook/ops-primary",
+        callback_signature_secret_ref: null,
+        route_policy_ref: "ops-alerts-primary",
+        recipient_group_ref: null,
+        allowed_hosts: ["hooks.example.com"],
+        enabled: false,
+        created_by: "admin-a",
+        created_at: "2026-06-23T00:00:00.000Z",
+        updated_by: "admin-a",
+        updated_at: "2026-06-23T00:02:00.000Z",
+      },
+    }),
     getOpsHealth: async () => ({
       status: "ok",
       detected_at: "2026-06-23T00:00:00.000Z",
@@ -529,6 +581,45 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
           (params?.subject_ref === undefined || item.subject_ref === params.subject_ref),
         ),
         next_cursor: null,
+      };
+    },
+    getAiGovernanceEvidenceSummary: async (params) => {
+      const page = await fakeClient().listAiGovernanceEvidence(params === undefined ? undefined : {
+        evidence_type: params.evidence_type,
+        status: params.status,
+        subject_ref: params.subject_ref,
+      });
+      const items = page.items;
+      return {
+        total_count: items.length,
+        status_counts: {
+          valid: items.filter((item) => item.status === "valid").length,
+          deferred: items.filter((item) => item.status === "deferred").length,
+          failed: items.filter((item) => item.status === "failed").length,
+        },
+        expired_valid_count: items.filter((item) => item.status === "valid" && item.expires_at !== null && Date.parse(item.expires_at) <= Date.now()).length,
+        latest: items[0] === undefined ? null : {
+          evidence_type: items[0].evidence_type,
+          status: items[0].status,
+          subject_ref: items[0].subject_ref,
+          evidence_at: items[0].evidence_at,
+          recorded_at: items[0].recorded_at,
+        },
+        type_status_counts: ["cost_control", "model_registry", "prompt_registry", "eval_result", "human_override"].flatMap((evidenceType) => {
+          const typed = items.filter((item) => item.evidence_type === evidenceType);
+          return typed.length === 0 ? [] : [{
+            evidence_type: evidenceType as AiGovernanceEvidence["evidence_type"],
+            total_count: typed.length,
+            valid: typed.filter((item) => item.status === "valid").length,
+            deferred: typed.filter((item) => item.status === "deferred").length,
+            failed: typed.filter((item) => item.status === "failed").length,
+          }];
+        }),
+        filters: {
+          evidence_type: params?.evidence_type ?? null,
+          status: params?.status ?? null,
+          subject_ref: params?.subject_ref ?? null,
+        },
       };
     },
     recordAiGovernanceEvidence: async (body) => ({
@@ -742,6 +833,41 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       ],
       next_cursor: null,
     }),
+    getAuditLogSummary: async (p) => {
+      const page = await fakeClient().listAuditLog(p === undefined ? undefined : {
+        action: p.action,
+        outcome: p.outcome,
+        actor: p.actor,
+        correlation_id: p.correlation_id,
+        occurred_at_from: p.occurred_at_from,
+        occurred_at_to: p.occurred_at_to,
+      });
+      return {
+        total_count: page.items.length,
+        outcome_counts: {
+          allow: page.items.filter((item) => item.outcome === "allow").length,
+          deny: page.items.filter((item) => item.outcome === "deny").length,
+          blocked: page.items.filter((item) => item.outcome === "blocked").length,
+          error: page.items.filter((item) => item.outcome === "error").length,
+        },
+        hash_linked_count: page.items.filter((item) => item.hash.length > 0).length,
+        legal_hold_count: page.items.filter((item) => item.legal_hold).length,
+        latest: page.items[0] === undefined ? null : {
+          sequence_no: page.items[0].sequence_no,
+          occurred_at: page.items[0].occurred_at,
+          hash: page.items[0].hash,
+          previous_hash: page.items[0].previous_hash,
+        },
+        filters: {
+          action: p?.action ?? null,
+          outcome: p?.outcome ?? null,
+          actor: p?.actor ?? null,
+          correlation_id: p?.correlation_id ?? null,
+          occurred_at_from: p?.occurred_at_from ?? null,
+          occurred_at_to: p?.occurred_at_to ?? null,
+        },
+      };
+    },
     exportAuditLogCsv: async () => "audit_id,sequence_no,action,outcome\n81000000-0000-4000-8000-0000000000a1,2,artifact.read,allow\n",
     listAuditVerificationRuns: async () => ({
       items: [
@@ -1773,6 +1899,18 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       recorded_by: "operator",
       recorded_at: "2026-06-30T00:00:00.000Z",
       legal_hold: body.legal_hold ?? false,
+    }),
+    getRoiActualSuggestion: async (ideaId, p) => ({
+      automation_idea_id: ideaId,
+      scenario_id: "00000000-0000-4000-8000-0000000000a1",
+      period_start: p.period_start,
+      period_end: p.period_end,
+      run_mode: "prod",
+      total_runs: 14,
+      completed_runs: 12,
+      failed_runs: 2,
+      suggested_actual_transaction_count: 12,
+      suggested_actual_failure_rate: 0.1429,
     }),
     listSiteElements: async () => ({
       items: [

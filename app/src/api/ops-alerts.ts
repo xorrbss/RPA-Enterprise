@@ -34,7 +34,8 @@ export type OpsAlertSource =
   | "bot_pool"
   | "scim_secret_rotation"
   | "audit_verifier"
-  | "readiness_evidence";
+  | "readiness_evidence"
+  | "session_expiry";
 type OpsAlertSubjectType =
   | "run"
   | "human_task"
@@ -43,7 +44,8 @@ type OpsAlertSubjectType =
   | "bot_pool"
   | "scim_provider"
   | "audit_verifier"
-  | "readiness_evidence";
+  | "readiness_evidence"
+  | "browser_session";
 type OpsAlertStatus = "open" | "acknowledged";
 type OpsAlertListStatus = OpsAlertStatus | "all";
 type ProductionReadinessEvidenceAlertType =
@@ -316,6 +318,16 @@ interface ProductionReadinessEvidenceAlertRow {
   recorded_at: Date;
 }
 
+interface BrowserSessionExpiryRow {
+  site_profile_id: string;
+  site_name: string;
+  url_pattern: string;
+  browser_identity_id: string;
+  identity_hash: string;
+  expires_at: Date;
+  due_minutes: number;
+}
+
 interface OpsAlertAckRow {
   alert_id: string;
   detected_at: Date;
@@ -340,6 +352,7 @@ const SOURCE_SET: Record<OpsAlertSource, true> = {
   scim_secret_rotation: true,
   audit_verifier: true,
   readiness_evidence: true,
+  session_expiry: true,
 };
 
 const STATUS_SET: Record<OpsAlertListStatus, true> = {
@@ -356,6 +369,7 @@ const SEVERITY_RANK: Record<OpsAlertSeverity, number> = {
 
 const AUDIT_VERIFIER_STALE_AFTER_MS = 75 * 60 * 1000;
 const READINESS_EVIDENCE_DUE_SOON_DAYS = 14;
+const SESSION_EXPIRY_DUE_SOON_HOURS = 24;
 const OPS_NOTIFICATION_DELIVERY_RETENTION_DAYS = 365;
 const OPS_NOTIFICATION_CALLBACK_TIMESTAMP_SKEW_MS = 5 * 60 * 1000;
 const OPS_NOTIFICATION_CALLBACK_EVENT_ID_RE = /^[A-Za-z0-9._:-]{1,200}$/;
@@ -591,6 +605,9 @@ export async function readComputedOpsAlerts(
   const readinessEvidenceAlerts = source === undefined || source === "readiness_evidence"
     ? await readReadinessEvidenceAlerts(client, tenantId, sourceQueryLimit)
     : [];
+  const sessionExpiryAlerts = source === undefined || source === "session_expiry"
+    ? await readSessionExpiryAlerts(client, tenantId, sourceQueryLimit)
+    : [];
 
   return [
     ...runRows.rows.map(mapRunSlaAlert),
@@ -602,6 +619,7 @@ export async function readComputedOpsAlerts(
     ...scimSecretRotationAlerts,
     ...auditVerifierAlerts,
     ...readinessEvidenceAlerts,
+    ...sessionExpiryAlerts,
   ];
 }
 
@@ -673,6 +691,9 @@ async function readComputedOpsAlertById(
   if (alertId.startsWith("readiness_evidence:")) {
     const evidenceType = alertId.slice("readiness_evidence:".length);
     return readReadinessEvidenceAlertByType(client, tenantId, evidenceType);
+  }
+  if (alertId.startsWith("session_expiry:")) {
+    return readSessionExpiryAlertById(client, tenantId, alertId);
   }
   return null;
 }
@@ -942,6 +963,67 @@ async function readReadinessEvidenceAlertByType(
   return result.rows[0] === undefined ? null : mapReadinessEvidenceAlert(result.rows[0]);
 }
 
+async function readSessionExpiryAlerts(
+  client: PoolClient,
+  tenantId: string,
+  sourceQueryLimit: number,
+): Promise<ComputedOpsAlert[]> {
+  const result = await client.query<BrowserSessionExpiryRow>(
+    `SELECT bs.site_profile_id::text AS site_profile_id,
+            s.name AS site_name,
+            s.url_pattern,
+            bs.browser_identity_id::text AS browser_identity_id,
+            md5(bs.identity_key) AS identity_hash,
+            bs.expires_at,
+            floor(extract(epoch FROM (bs.expires_at - now())) / 60)::int AS due_minutes
+       FROM browser_sessions bs
+       JOIN site_profiles s
+         ON s.tenant_id = bs.tenant_id
+        AND s.id = bs.site_profile_id
+      WHERE bs.tenant_id = $1::uuid
+        AND bs.expires_at IS NOT NULL
+        AND bs.expires_at <= now() + ($2::int * interval '1 hour')
+      ORDER BY (bs.expires_at <= now()) DESC, bs.expires_at ASC, bs.site_profile_id ASC, bs.browser_identity_id ASC, bs.identity_key ASC
+      LIMIT $3`,
+    [tenantId, SESSION_EXPIRY_DUE_SOON_HOURS, sourceQueryLimit],
+  );
+  return result.rows.map(mapSessionExpiryAlert);
+}
+
+async function readSessionExpiryAlertById(
+  client: PoolClient,
+  tenantId: string,
+  alertId: string,
+): Promise<ComputedOpsAlert | null> {
+  const parts = alertId.split(":");
+  if (parts.length !== 4) return null;
+  const [, siteProfileId, browserIdentityId, identityHash] = parts;
+  if (!UUID_RE.test(siteProfileId) || !UUID_RE.test(browserIdentityId) || !/^[a-f0-9]{32}$/.test(identityHash)) {
+    return null;
+  }
+  const result = await client.query<BrowserSessionExpiryRow>(
+    `SELECT bs.site_profile_id::text AS site_profile_id,
+            s.name AS site_name,
+            s.url_pattern,
+            bs.browser_identity_id::text AS browser_identity_id,
+            md5(bs.identity_key) AS identity_hash,
+            bs.expires_at,
+            floor(extract(epoch FROM (bs.expires_at - now())) / 60)::int AS due_minutes
+       FROM browser_sessions bs
+       JOIN site_profiles s
+         ON s.tenant_id = bs.tenant_id
+        AND s.id = bs.site_profile_id
+      WHERE bs.tenant_id = $1::uuid
+        AND bs.site_profile_id = $2::uuid
+        AND bs.browser_identity_id = $3::uuid
+        AND md5(bs.identity_key) = $4
+        AND bs.expires_at IS NOT NULL
+        AND bs.expires_at <= now() + ($5::int * interval '1 hour')`,
+    [tenantId, siteProfileId, browserIdentityId, identityHash, SESSION_EXPIRY_DUE_SOON_HOURS],
+  );
+  return result.rows[0] === undefined ? null : mapSessionExpiryAlert(result.rows[0]);
+}
+
 function mapRunSlaAlert(row: RunSlaRow): ComputedOpsAlert {
   const critical = row.age_minutes >= 240;
   return {
@@ -972,6 +1054,26 @@ function mapHumanTaskSlaAlert(row: HumanTaskSlaRow): ComputedOpsAlert {
     subject_id: row.id,
     recommended_action: "담당자를 배정하거나 검증 워크벤치에서 판정하세요.",
     route: `#humanTasks?ht=${encodeURIComponent(row.id)}`,
+    detected_at: row.expires_at.toISOString(),
+    due_at: row.expires_at.toISOString(),
+  };
+}
+
+function mapSessionExpiryAlert(row: BrowserSessionExpiryRow): ComputedOpsAlert {
+  const overdue = row.due_minutes < 0;
+  const siteLabel = `${row.site_name} (${row.url_pattern})`;
+  return {
+    alert_id: `session_expiry:${row.site_profile_id}:${row.browser_identity_id}:${row.identity_hash}`,
+    severity: overdue ? "critical" : "warning",
+    source: "session_expiry",
+    title: overdue ? "로그인 세션 만료" : "로그인 세션 만료 임박",
+    detail: overdue
+      ? `${siteLabel} 세션이 ${Math.abs(row.due_minutes)}분 전에 만료되었습니다.`
+      : `${siteLabel} 세션이 ${row.due_minutes}분 뒤 만료됩니다.`,
+    subject_type: "browser_session",
+    subject_id: row.site_profile_id,
+    recommended_action: "보안 설정에서 해당 사이트의 세션을 다시 등록하세요.",
+    route: `#security?section=sites&site=${encodeURIComponent(row.site_profile_id)}`,
     detected_at: row.expires_at.toISOString(),
     due_at: row.expires_at.toISOString(),
   };
@@ -1043,7 +1145,7 @@ function mapBotPoolAlert(pool: BotPoolItem, detectedAt: string): ComputedOpsAler
     subject_type: "bot_pool",
     subject_id: pool.bot_pool_id,
     recommended_action: "Bot Pool 용량, 만료 lease, worker heartbeat/circuit 상태를 확인하세요.",
-    route: "#orchestration?panel=botPools",
+    route: "#automationOps?section=queue",
     detected_at: detectedAt,
     due_at: null,
   };
@@ -1073,7 +1175,7 @@ function mapScimSecretRotationAlert(row: ScimSecretRotationAlertRow | undefined)
     subject_type: "scim_provider",
     subject_id: row.provider_key,
     recommended_action: "Patch the provider to a newly issued signature_secret_ref, or set secret_rotation_policy=manual only with owner-approved evidence.",
-    route: `#security?panel=scim&provider=${encodeURIComponent(row.provider_key)}`,
+    route: `#security?section=access&provider=${encodeURIComponent(row.provider_key)}`,
     detected_at: detectedAt.toISOString(),
     due_at: dueAt.toISOString(),
   }];
@@ -1147,7 +1249,7 @@ function mapReadinessEvidenceAlert(row: ProductionReadinessEvidenceAlertRow): Co
     subject_type: "readiness_evidence",
     subject_id: row.evidence_type,
     recommended_action: "Open production readiness and record fresh valid owner/platform evidence before controlled-prod release.",
-    route: "#automationOps?panel=productionReadiness",
+    route: "#automationOps?section=readiness",
     detected_at: detectedAt.toISOString(),
     due_at: row.expires_at?.toISOString() ?? null,
   };

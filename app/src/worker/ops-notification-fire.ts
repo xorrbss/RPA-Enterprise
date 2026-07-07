@@ -1,10 +1,12 @@
 /**
- * 무인 운영 알림 자동 발화 (S4a) — producer.
+ * 무인 운영 알림 자동 발화 (S4a/S4b) — producer.
  *
  * 감사 alerts-console-pull-only(P1): 운영 알림이 콘솔 조회 시점에만 계산되고 외부 발송은 건별 수동 폼뿐이라,
  *   무인 시간대(야간·주말) 장애가 어디에도 통지되지 않았다. 전달 파이프라인(ops_notification_attempts → 워커
  *   ops_notification_send → deliverOpsNotificationAttempt)은 이미 완성돼 있으므로, 이 모듈이 빠져 있던 producer 를
- *   채운다: 계산된 알림을 env 라우팅 규칙에 매칭해 pending attempt 를 만들고 발송 잡을 인큐한다.
+ *   채운다: 계산된 알림을 라우팅 규칙에 매칭해 pending attempt 를 만들고 발송 잡을 인큐한다.
+ *   라우팅 규칙은 두 출처의 합집합이다 — 배포-소유 env `OPS_ALERT_ROUTES`(S4a) + 테넌트 저장형
+ *   `ops_alert_notification_routes`(S4b, fireForTenant 안에서 테넌트별로 읽음).
  *
  * 멱등: 같은 세대(tenant+alert_id+detected_at+provider)에 대해 non-deleted attempt 가 이미 있으면 건너뛴다.
  *   detected_at 은 행 타임스탬프(안정)라 같은 장애가 반복 틱마다 재발화되지 않는다(폭주 방지). 조건이 실제로 바뀌면
@@ -21,6 +23,7 @@ import {
   type OpsAlertSeverity,
   type OpsNotificationWebhookSendInput,
 } from "../api/ops-alerts";
+import { readActiveOpsAlertNotificationRoutes } from "../api/ops-alert-notification-routes";
 import type { OpsNotificationSendEnqueueInput } from "../api/run-queue";
 import { withTenantTx, type PgPool } from "../db/pool";
 import { OPS_ALERT_AUTO_FIRE_SOURCES, type OpsAlertRoute } from "../api/ops-alert-routes";
@@ -113,6 +116,14 @@ async function fireForTenant(
   const enqueueBound = enqueue.bind(input.enqueuer);
 
   return withTenantTx(pool, tenantId, async (client) => {
+    const tenantRoutes = [
+      ...routes,
+      ...(await readActiveOpsAlertNotificationRoutes(client, tenantId)),
+    ];
+    if (tenantRoutes.length === 0) {
+      return { created: 0, skipped: 0 };
+    }
+
     // 자동 발화 대상 소스만 계산(detected_at 안정). source=undefined 로 전 소스 계산 후 allowlist 필터해도 되지만,
     // 소스별 계산 비용을 아끼려 대상 소스만 순회 계산한다.
     const alerts: ComputedOpsAlert[] = [];
@@ -124,7 +135,7 @@ async function fireForTenant(
     let created = 0;
     let skipped = 0;
     for (const alert of alerts) {
-      for (const route of routes) {
+      for (const route of tenantRoutes) {
         if (!routeMatchesAlert(route, alert)) continue;
         const already = await generationAlreadyNotified(
           client,
@@ -157,18 +168,19 @@ async function fireForTenant(
 }
 
 /**
- * 라우트 규칙에 따라 대상 테넌트의 계산 알림을 자동 발화한다. 라우트가 없으면 no-op(자동 통지 미설정).
- * 라우트가 있는데 대상 테넌트가 없으면 loud 경고(휴면 방지) 후 no-op.
+ * 라우트 규칙(env + 테넌트 저장형)에 따라 대상 테넌트의 계산 알림을 자동 발화한다.
+ * env·저장 라우트가 모두 없으면 no-op(자동 통지 미설정). env 라우트가 있는데 대상 테넌트가 없으면
+ * loud 경고(휴면 방지) 후 no-op — 저장형 라우트 테넌트는 maintenance 테넌트 발견에 포함되므로 이 분기에 오지 않는다.
  */
 export async function runOpsNotificationFire(
   pool: PgPool,
   input: OpsNotificationFireInput,
 ): Promise<OpsNotificationFireSummary> {
   const warn = input.onWarn ?? ((message: string) => console.error(JSON.stringify({ at: "ops_notification_fire", warn: message })));
-  if (input.routes.length === 0) {
-    return { created: 0, skipped: 0, tenantsProcessed: 0 };
-  }
   if (input.tenantIds.length === 0) {
+    if (input.routes.length === 0) {
+      return { created: 0, skipped: 0, tenantsProcessed: 0 };
+    }
     warn(
       "OPS_ALERT_ROUTES is configured but no maintenance tenants are set (MAINTENANCE_TENANT_IDS empty): " +
         "automatic ops notifications will NOT fire. Set MAINTENANCE_TENANT_IDS to the tenant(s) to notify.",

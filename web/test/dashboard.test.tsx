@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
-import type { AuthReadiness, AutomationPerformanceRoiSourceLineage, DeadLetterItem, ListParams, Paginated, ProductionReadiness } from "../src/api/types";
+import type { AuthReadiness, AutomationPerformanceRoiSourceLineage, DeadLetterItem, ListParams, Paginated } from "../src/api/types";
 import { fakeClient } from "./fake-client";
 
 // 대시보드 관찰성 지표: run outcome 정확 집계(getRunSummary by_status) + run_success_rate + 절단 정직성(여전히
@@ -228,6 +228,53 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     expect(within(panel).getAllByText("권한 있는 담당자에게 요청").length).toBeGreaterThanOrEqual(5);
   });
 
+  test("adoption-readiness treats controlled_prod_ready as the production source of truth", async () => {
+    renderApp(dashboardClient({
+      getAuthReadiness: async () => ({
+        ...AUTH_SETUP_NEEDED,
+        status: "ok",
+        enterprise_sso_ready: true,
+        role_mapping: { configured: true, mapped_values: 5 },
+        operational_gaps: [],
+      }),
+      getProductionReadiness: async () => {
+        const base = await fakeClient().getProductionReadiness();
+        return {
+          ...base,
+          status: "ready",
+          summary: { controlled_prod_ready: false, status: "ready", blocker_count: 0, warning_count: 1, deferred_count: 0 },
+          gates: base.gates.map((gate) => ({ ...gate, status: "pass" as const, reason_code: null, detail: "ready", required_action: null })),
+        };
+      },
+      listSites: async () => ({
+        items: [{
+          site_profile_id: "site-login",
+          name: "Login Site",
+          risk: "green",
+          approval_status: "approved",
+          circuit_status: "closed",
+          login_capable: true,
+          session_ready: true,
+        }],
+        next_cursor: null,
+      }),
+      listScenarios: async () => ({
+        items: [{ scenario_id: "scenario-ready", name: "Invoice lookup", version: 3, latest_version_id: "version-ready", promotion_status: "approved" }],
+        next_cursor: null,
+      }),
+      listRuns: async () => ({
+        items: [{ run_id: "run-ready", status: "completed", scenario_name: "Invoice lookup", current_node: null, as_of: "2026-06-30T03:00:00.000Z", failure_reason: null }],
+        next_cursor: null,
+      }),
+      getRunSummary: async () => ({ by_status: { completed: 1 }, success_rate: 1, total: 1, cache: { by_mode: { hit: 1 }, hit_rate: 1 } }),
+    }));
+
+    const panel = await screen.findByRole("region", { name: "파일럿 준비 상태" });
+    await waitFor(() => expect(panel).toHaveTextContent("경고 1건"));
+    expect(panel).toHaveTextContent("운영 전 경고 해소 필요");
+    expect(panel).not.toHaveTextContent("9/9 준비");
+  });
+
   test("adoption-readiness collapses gate details when all checks are ready", async () => {
     renderApp(dashboardClient({
       getAuthReadiness: async () => ({
@@ -275,6 +322,30 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     expect(within(panel).queryAllByRole("listitem")).toHaveLength(0);
   });
 
+  test("AdminAdoptionSetup is an admin-only dashboard panel with existing route links", async () => {
+    localStorage.setItem("rpa.token", jwt(["viewer"]));
+    renderApp(dashboardClient());
+    await screen.findByRole("region", { name: "파일럿 준비 상태" });
+    expect(screen.queryByRole("region", { name: "관리자 도입 설정" })).toBeNull();
+
+    localStorage.setItem("rpa.token", jwt(["admin"]));
+    renderApp(dashboardClient({
+      listScimProviders: async () => ({ items: [], next_cursor: null }),
+    }));
+
+    const panels = await screen.findAllByRole("region", { name: "관리자 도입 설정" });
+    const panel = panels[panels.length - 1];
+    if (panel === undefined) throw new Error("admin adoption setup panel not found");
+    expect(within(panel).getByText("접속과 역할")).toBeInTheDocument();
+    expect(within(panel).getByText("사람과 조직")).toBeInTheDocument();
+    expect(within(panel).getByText("비밀과 연결")).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "접속·권한 열기" })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "SCIM 설정 열기" })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "운영 증빙 열기" })).toBeInTheDocument();
+    expect(panel).not.toHaveTextContent("AdminAdoptionSetup");
+    expect(panel).not.toHaveTextContent("token");
+  });
+
   test("adoption evidence packet summarizes metadata without raw secret or audit payload", async () => {
     renderApp(dashboardClient({
       listSites: async () => ({
@@ -307,22 +378,46 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
         next_cursor: null,
       }),
       getProductionReadiness: async () => ({
+        ...(await fakeClient().getProductionReadiness()),
         status: "warning",
-        summary: { blocker_count: 0, deferred_count: 1, ready_count: 1 },
-        signals: {},
-      } as unknown as ProductionReadiness),
+        summary: { controlled_prod_ready: false, status: "warning", blocker_count: 0, warning_count: 1, deferred_count: 1 },
+      }),
     }));
 
     const panel = await screen.findByRole("region", { name: "도입 증빙 패킷" });
+    expect(within(panel).getByText(/Dashboard embedded panel/)).toBeInTheDocument();
+    expect(within(panel).getByText(/Negative proof/)).toBeInTheDocument();
+    expect(within(panel).getByText(/automationOps\?section=readiness/)).toBeInTheDocument();
     expect(within(panel).getByText("세션 저장 암호화")).toBeInTheDocument();
     expect(await within(panel).findByText(/KMS envelope kid/)).toBeInTheDocument();
     await waitFor(() => expect(panel).toHaveTextContent("S11"));
+    expect(within(panel).getByText(/SecretRef audit summary: 1 metadata rows/)).toBeInTheDocument();
     expect(within(panel).getByText("artifact redaction 상태")).toBeInTheDocument();
     expect(within(panel).getByText(/1\/1개 artifact/)).toBeInTheDocument();
+    expect(within(panel).getByText("scenario certification/release")).toBeInTheDocument();
+    expect(within(panel).getByText(/scenario certification: 0 scenarios/)).toBeInTheDocument();
     expect(within(panel).getByText("AI 데이터 반출 경계")).toBeInTheDocument();
-    expect(within(panel).getByText(/실행별 redaction proof는 S11/)).toBeInTheDocument();
+    expect(within(panel).getByText(/AI governance evidence: valid 1, deferred 1, failed 0/)).toBeInTheDocument();
+    expect(within(panel).getByText("controlled-prod gate summary")).toBeInTheDocument();
+    expect(within(panel).getByText(/차단 0건, 경고 1건, 보류 1건은 모두 미해소/)).toBeInTheDocument();
     expect(panel).not.toHaveTextContent("must-not-leak");
     expect(panel).not.toHaveTextContent("payload");
+    fireEvent.click(within(panel).getByRole("button", { name: "AI 증거 열기" }));
+    await waitFor(() => expect(location.hash).toBe("#security?section=ai"));
+  });
+
+  test("dashboard focus hash targets evidence packet and automation report anchors", async () => {
+    location.hash = "#dashboard?focus=evidence-packet";
+    renderApp(dashboardClient());
+
+    const evidence = await screen.findByRole("region", { name: "도입 증빙 패킷" });
+    const evidenceAnchor = evidence.closest("[data-dashboard-focus='evidence-packet']");
+    await waitFor(() => expect(document.activeElement).toBe(evidenceAnchor));
+
+    location.hash = "#dashboard?focus=automation-report";
+    const report = await screen.findByRole("region", { name: "월간 자동화 성과 리포트" });
+    const reportAnchor = report.closest("[data-dashboard-focus='automation-report']");
+    await waitFor(() => expect(document.activeElement).toBe(reportAnchor));
   });
 
   // (a) run outcome 정확 집계: 카드 값은 getRunSummary.by_status에서 온다(서버 GROUP BY, 클라 50건 필터 아님).

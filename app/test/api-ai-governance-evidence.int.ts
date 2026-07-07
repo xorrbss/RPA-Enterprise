@@ -425,6 +425,45 @@ async function main(): Promise<void> {
         (humanOverride.json() as { expires_at: string | null }).expires_at === null,
       humanOverride.body);
 
+    const summary = await app.inject({
+      method: "GET",
+      url: "/v1/ai-governance/evidence/summary",
+      headers: { authorization: `Bearer ${viewer}` },
+    });
+    const summaryBody = summary.json() as {
+      total_count: number;
+      status_counts: { valid: number; deferred: number; failed: number };
+      expired_valid_count: number;
+      latest: { evidence_type: string; status: string; subject_ref: string | null } | null;
+      type_status_counts: Array<{ evidence_type: string; total_count: number; valid: number }>;
+    };
+    check("AI governance summary returns full status/type counts",
+      summary.statusCode === 200 &&
+        summaryBody.total_count === 2 &&
+        summaryBody.status_counts.valid === 2 &&
+        summaryBody.status_counts.deferred === 0 &&
+        summaryBody.status_counts.failed === 0 &&
+        summaryBody.expired_valid_count === 0 &&
+        summaryBody.type_status_counts.some((item) => item.evidence_type === "model_registry" && item.valid === 1) &&
+        summaryBody.type_status_counts.some((item) => item.evidence_type === "human_override" && item.valid === 1),
+      summary.body);
+    check("AI governance summary omits evidence summaries and metadata bodies",
+      !summary.body.includes("Model registry approval recorded") &&
+        !summary.body.includes("Reviewer rejected AI output") &&
+        !summary.body.includes("provider_alias"),
+      summary.body);
+
+    const modelSummary = await app.inject({
+      method: "GET",
+      url: "/v1/ai-governance/evidence/summary?evidence_type=model_registry&status=valid&subject_ref=model:codex-prod-primary",
+      headers: { authorization: `Bearer ${viewer}` },
+    });
+    check("AI governance summary honors filters",
+      modelSummary.statusCode === 200 &&
+        (modelSummary.json() as { total_count: number; status_counts: { valid: number } }).total_count === 1 &&
+        (modelSummary.json() as { status_counts: { valid: number } }).status_counts.valid === 1,
+      modelSummary.body);
+
     if (failures > 0) {
       console.error(`\nFAIL: ${failures} AI governance evidence check(s) failed`);
       process.exit(1);

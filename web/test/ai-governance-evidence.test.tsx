@@ -109,7 +109,7 @@ describe("AI governance evidence panel", () => {
     location.hash = "#security?section=ai";
   });
 
-  test("viewer filters AI governance evidence by status and subject", async () => {
+  test("viewer AI governance deep link shows the read-only security summary only", async () => {
     localStorage.setItem("rpa.token", jwt(["viewer"]));
     const listAiGovernanceEvidence = vi.fn(async (params?: AiGovernanceEvidenceListParams) => ({
       items: filterEvidence(params),
@@ -117,23 +117,12 @@ describe("AI governance evidence panel", () => {
     }));
     renderApp(fakeClient({ listAiGovernanceEvidence }));
 
-    const panel = await screen.findByRole("region", { name: "AI governance evidence" });
-    expect(await within(panel).findByText("Model registry approval recorded with policy and audit linkage")).toBeInTheDocument();
-    expect(within(panel).getByText("Cost control owner evidence pending")).toBeInTheDocument();
-
-    fireEvent.change(within(panel).getByLabelText("Status"), { target: { value: "deferred" } });
-    await waitFor(() => expect(listAiGovernanceEvidence).toHaveBeenLastCalledWith({ limit: 25, status: "deferred" }));
-    expect(await within(panel).findByText("Cost control owner evidence pending")).toBeInTheDocument();
-
-    fireEvent.change(within(panel).getByLabelText("Subject"), { target: { value: "budget:ai-gateway/controlled-prod" } });
-    fireEvent.click(within(panel).getByRole("button", { name: "Apply" }));
-    await waitFor(() =>
-      expect(listAiGovernanceEvidence).toHaveBeenLastCalledWith({
-        limit: 25,
-        status: "deferred",
-        subject_ref: "budget:ai-gateway/controlled-prod",
-      }),
-    );
+    expect(await screen.findByRole("heading", { name: "보안 읽기 전용 요약" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "AI 거버넌스 읽기 전용 섹션 요약" })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "보안 deep link 권한 안내" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "AI governance evidence" })).toBeNull();
+    expect(screen.queryByText("Model registry approval recorded with policy and audit linkage")).toBeNull();
+    expect(listAiGovernanceEvidence).not.toHaveBeenCalled();
   });
 
   test("admin records a valid model registry evidence template with refs only", async () => {

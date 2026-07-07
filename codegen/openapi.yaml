@@ -224,6 +224,45 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /ai-governance/evidence/summary:
+    get:
+      tags: [AIGovernance]
+      operationId: getAiGovernanceEvidenceSummary
+      summary: Summarize AI governance evidence
+      description: >
+        Return metadata-only aggregate counts for tenant-scoped AI governance evidence. The summary avoids
+        page truncation and never returns raw prompts, model outputs, endpoint URLs, tokens, passwords,
+        provider credentials, or resolved SecretRef values.
+      parameters:
+        - name: evidence_type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AiGovernanceEvidenceType'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AiGovernanceEvidenceStatus'
+        - name: subject_ref
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 300
+      responses:
+        '200':
+          description: AI governance evidence aggregate summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiGovernanceEvidenceSummary'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
   # ============================================================
   # 1. Runs (실행 제어) — api-surface §1
   # ============================================================
@@ -770,8 +809,10 @@ paths:
       operationId: listOpsAlerts
       description: >
         List computed tenant-scoped operations alerts from current runs, human tasks, trigger fires, DLQ rows,
-        Bot Pool health, SCIM SecretRef rotation, and audit verifier evidence health. Product Open v1 delivery is console-only; acknowledgement state is persisted
-        by alert generation, while Teams/Slack/email/webhook notifications remain unopened.
+        Bot Pool health, SCIM SecretRef rotation, audit verifier evidence health, readiness evidence, and
+        browser login-session expiry. Acknowledgement state is persisted by alert generation. External delivery
+        is the generic webhook sender only: per-alert manual send plus automatic firing driven by env
+        OPS_ALERT_ROUTES and stored /v1/ops-alert-routes rules.
       summary: 운영 알림 목록
       parameters:
         - name: severity
@@ -947,6 +988,136 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/OpsNotificationAttempt'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /ops-alert-routes:
+    get:
+      tags: [OpsAlerts]
+      operationId: listOpsAlertNotificationRoutes
+      summary: 저장형 자동 알림 경로 목록
+      description: >
+        List tenant-managed stored automatic notification routes. Routes carry SecretRef aliases, allowed host
+        names, and non-secret routing metadata only; raw endpoint URLs, provider tokens, and resolved SecretRef
+        values never appear. The maintenance producer unions these stored routes with env OPS_ALERT_ROUTES when
+        it auto-fires computed alerts into the durable webhook attempt pipeline.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Stored automatic notification route page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpsAlertNotificationRoutePage'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [OpsAlerts]
+      operationId: createOpsAlertNotificationRoute
+      summary: 저장형 자동 알림 경로 생성
+      description: >
+        Create a tenant-managed stored automatic notification route (admin-only, ops_alert.deliver, Idempotency-Key).
+        source is restricted to auto-fire sources with stable detected_at generations
+        (run_sla, human_task_sla, trigger_fire, failure_spike, session_expiry) or omitted/null for all of them.
+        endpoint_secret_ref and callback_signature_secret_ref must be SecretRef aliases; allowed_hosts are DNS
+        host names only. Raw URLs, tokens, and secret material are rejected fail-closed.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpsAlertNotificationRouteCreateRequest'
+      responses:
+        '201':
+          description: Stored automatic notification route created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpsAlertNotificationRoute'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /ops-alert-routes/{route_id}:
+    patch:
+      tags: [OpsAlerts]
+      operationId: updateOpsAlertNotificationRoute
+      summary: 저장형 자동 알림 경로 수정
+      description: >
+        Partially update a stored automatic notification route (admin-only, ops_alert.deliver, Idempotency-Key).
+        Provided fields are validated with the same fail-closed rules as creation; an empty patch body is rejected.
+        Setting enabled=false pauses automatic firing for the route without deleting it.
+      parameters:
+        - name: route_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpsAlertNotificationRouteUpdateRequest'
+      responses:
+        '200':
+          description: Stored automatic notification route updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpsAlertNotificationRoute'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [OpsAlerts]
+      operationId: deleteOpsAlertNotificationRoute
+      summary: 저장형 자동 알림 경로 삭제
+      description: >
+        Soft-delete a stored automatic notification route (admin-only, ops_alert.deliver, Idempotency-Key).
+        The route is disabled and excluded from listing and automatic firing; audit metadata rows are retained.
+      parameters:
+        - name: route_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Stored automatic notification route soft-deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpsAlertNotificationRouteDeleteResponse'
         '403':
           $ref: '#/components/responses/Error'
         '404':
@@ -1379,6 +1550,41 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /automation-ideas/{idea_id}/roi-actuals/suggestion:
+    parameters:
+      - $ref: '#/components/parameters/AutomationIdeaId'
+    get:
+      tags: [AutomationIdeas]
+      operationId: getRoiActualSuggestion
+      summary: Get ROI actual prefill suggestion from prod run statistics
+      description: >
+        Compute a read-only ROI actual prefill suggestion from prod-mode run statistics of the linked
+        scenario for the requested period (all scenario versions, Asia/Seoul day boundaries). This is a
+        proposal only - it records nothing, and the human-confirmed roi-actuals POST remains the sole
+        evidence write path consumed by performance reports and expand decisions.
+      parameters:
+        - name: period_start
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: period_end
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: ROI actual prefill suggestion (aggregates null when unlinked or no settled runs).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoiActualSuggestion'
+        default:
+          $ref: '#/components/responses/Error'
+
   /automation-ideas/{idea_id}/adoption-evidence:
     parameters:
       - $ref: '#/components/parameters/AutomationIdeaId'
@@ -1560,6 +1766,50 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuditLogPage'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /audit-log/summary:
+    get:
+      tags: [AuditLog]
+      operationId: getAuditLogSummary
+      description: Summarize tenant-scoped immutable audit records without exposing payload bodies.
+      summary: Summarize audit log records
+      parameters:
+        - name: action
+          in: query
+          required: false
+          schema: { type: string, minLength: 1 }
+        - name: outcome
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AuditOutcome'
+        - name: actor
+          in: query
+          required: false
+          schema: { type: string, minLength: 1 }
+        - name: correlation_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: occurred_at_from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Inclusive lower bound for occurred_at.
+        - name: occurred_at_to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Inclusive upper bound for occurred_at.
+      responses:
+        '200':
+          description: Tenant-scoped audit log aggregate summary. Payload bodies are intentionally omitted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogSummary'
         default:
           $ref: '#/components/responses/Error'
 
@@ -4334,6 +4584,7 @@ components:
         - scim_secret_rotation
         - audit_verifier
         - readiness_evidence
+        - session_expiry
     OpsAlertSubjectType:
       type: string
       enum:
@@ -4345,6 +4596,7 @@ components:
         - scim_provider
         - audit_verifier
         - readiness_evidence
+        - browser_session
     OpsAlertStatus:
       type: string
       enum:
@@ -4404,6 +4656,206 @@ components:
           maximum: 100
         cursor:
           type: string
+    OpsAlertNotificationRouteSource:
+      type: string
+      description: Auto-fire alert sources with stable detected_at generations. Other alert sources stay console-only.
+      enum:
+        - run_sla
+        - human_task_sla
+        - trigger_fire
+        - failure_spike
+        - session_expiry
+    OpsAlertNotificationRouteListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+        cursor:
+          type: string
+    OpsAlertNotificationRoutePathParams:
+      type: object
+      additionalProperties: false
+      required: [route_id]
+      properties:
+        route_id:
+          type: string
+          format: uuid
+    OpsAlertNotificationRoute:
+      type: object
+      additionalProperties: false
+      description: >
+        Tenant-managed stored automatic notification route. SecretRef aliases and non-secret routing metadata only;
+        resolved secret values, raw endpoint URLs, and provider tokens never appear.
+      required:
+        - route_id
+        - source
+        - min_severity
+        - provider_alias
+        - endpoint_secret_ref
+        - callback_signature_secret_ref
+        - route_policy_ref
+        - recipient_group_ref
+        - allowed_hosts
+        - enabled
+        - created_by
+        - created_at
+        - updated_by
+        - updated_at
+      properties:
+        route_id:
+          type: string
+          format: uuid
+        source:
+          oneOf:
+            - $ref: '#/components/schemas/OpsAlertNotificationRouteSource'
+            - type: "null"
+          description: Matching alert source; null matches every auto-fire source.
+        min_severity:
+          type: string
+          enum: [warning, critical]
+        provider_alias:
+          type: string
+          minLength: 1
+          maxLength: 120
+        endpoint_secret_ref:
+          $ref: '#/components/schemas/SecretRefIdentifier'
+        callback_signature_secret_ref:
+          oneOf:
+            - $ref: '#/components/schemas/SecretRefIdentifier'
+            - type: "null"
+        route_policy_ref:
+          type: string
+          minLength: 1
+          maxLength: 200
+        recipient_group_ref:
+          type: [string, "null"]
+          maxLength: 200
+        allowed_hosts:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
+        enabled:
+          type: boolean
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_by:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+    OpsAlertNotificationRouteCreateRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - min_severity
+        - provider_alias
+        - endpoint_secret_ref
+        - route_policy_ref
+        - allowed_hosts
+      properties:
+        source:
+          oneOf:
+            - $ref: '#/components/schemas/OpsAlertNotificationRouteSource'
+            - type: "null"
+        min_severity:
+          type: string
+          enum: [warning, critical]
+        provider_alias:
+          type: string
+          minLength: 1
+          maxLength: 120
+        endpoint_secret_ref:
+          $ref: '#/components/schemas/SecretRefIdentifier'
+        callback_signature_secret_ref:
+          oneOf:
+            - $ref: '#/components/schemas/SecretRefIdentifier'
+            - type: "null"
+        route_policy_ref:
+          type: string
+          minLength: 1
+          maxLength: 200
+        recipient_group_ref:
+          type: [string, "null"]
+          maxLength: 200
+        allowed_hosts:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
+        enabled:
+          type: boolean
+    OpsAlertNotificationRouteUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        source:
+          oneOf:
+            - $ref: '#/components/schemas/OpsAlertNotificationRouteSource'
+            - type: "null"
+        min_severity:
+          type: string
+          enum: [warning, critical]
+        provider_alias:
+          type: string
+          minLength: 1
+          maxLength: 120
+        endpoint_secret_ref:
+          $ref: '#/components/schemas/SecretRefIdentifier'
+        callback_signature_secret_ref:
+          oneOf:
+            - $ref: '#/components/schemas/SecretRefIdentifier'
+            - type: "null"
+        route_policy_ref:
+          type: string
+          minLength: 1
+          maxLength: 200
+        recipient_group_ref:
+          type: [string, "null"]
+          maxLength: 200
+        allowed_hosts:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
+        enabled:
+          type: boolean
+    OpsAlertNotificationRoutePage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OpsAlertNotificationRoute'
+        next_cursor:
+          type: [string, "null"]
+    OpsAlertNotificationRouteDeleteResponse:
+      type: object
+      additionalProperties: false
+      required: [deleted, route]
+      properties:
+        deleted:
+          type: boolean
+        route:
+          $ref: '#/components/schemas/OpsAlertNotificationRoute'
     SecretRefIdentifier:
       type: string
       minLength: 10
@@ -6279,6 +6731,72 @@ components:
             $ref: '#/components/schemas/AiGovernanceEvidence'
         next_cursor:
           type: [string, "null"]
+    AiGovernanceEvidenceSummary:
+      type: object
+      additionalProperties: false
+      required: [total_count, status_counts, expired_valid_count, latest, type_status_counts, filters]
+      properties:
+        total_count:
+          type: integer
+          minimum: 0
+        status_counts:
+          type: object
+          additionalProperties: false
+          required: [valid, deferred, failed]
+          properties:
+            valid: { type: integer, minimum: 0 }
+            deferred: { type: integer, minimum: 0 }
+            failed: { type: integer, minimum: 0 }
+        expired_valid_count:
+          type: integer
+          minimum: 0
+        latest:
+          oneOf:
+            - type: "null"
+            - type: object
+              additionalProperties: false
+              required: [evidence_type, status, subject_ref, evidence_at, recorded_at]
+              properties:
+                evidence_type:
+                  $ref: '#/components/schemas/AiGovernanceEvidenceType'
+                status:
+                  $ref: '#/components/schemas/AiGovernanceEvidenceStatus'
+                subject_ref:
+                  type: [string, "null"]
+                evidence_at:
+                  type: [string, "null"]
+                  format: date-time
+                recorded_at:
+                  type: [string, "null"]
+                  format: date-time
+        type_status_counts:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [evidence_type, total_count, valid, deferred, failed]
+            properties:
+              evidence_type:
+                $ref: '#/components/schemas/AiGovernanceEvidenceType'
+              total_count: { type: integer, minimum: 0 }
+              valid: { type: integer, minimum: 0 }
+              deferred: { type: integer, minimum: 0 }
+              failed: { type: integer, minimum: 0 }
+        filters:
+          type: object
+          additionalProperties: false
+          required: [evidence_type, status, subject_ref]
+          properties:
+            evidence_type:
+              oneOf:
+                - type: "null"
+                - $ref: '#/components/schemas/AiGovernanceEvidenceType'
+            status:
+              oneOf:
+                - type: "null"
+                - $ref: '#/components/schemas/AiGovernanceEvidenceStatus'
+            subject_ref:
+              type: [string, "null"]
     AiGovernanceEvidenceListQuery:
       type: object
       additionalProperties: false
@@ -6636,6 +7154,66 @@ components:
           items: { $ref: '#/components/schemas/AuditLog' }
         next_cursor:
           type: [string, "null"]
+    AuditLogSummary:
+      type: object
+      additionalProperties: false
+      required: [total_count, outcome_counts, hash_linked_count, legal_hold_count, latest, filters]
+      properties:
+        total_count:
+          type: integer
+          minimum: 0
+        outcome_counts:
+          type: object
+          additionalProperties: false
+          required: [allow, deny, blocked, error]
+          properties:
+            allow: { type: integer, minimum: 0 }
+            deny: { type: integer, minimum: 0 }
+            blocked: { type: integer, minimum: 0 }
+            error: { type: integer, minimum: 0 }
+        hash_linked_count:
+          type: integer
+          minimum: 0
+        legal_hold_count:
+          type: integer
+          minimum: 0
+        latest:
+          oneOf:
+            - type: "null"
+            - type: object
+              additionalProperties: false
+              required: [sequence_no, occurred_at, hash, previous_hash]
+              properties:
+                sequence_no:
+                  type: integer
+                  minimum: 1
+                occurred_at:
+                  type: [string, "null"]
+                  format: date-time
+                hash:
+                  type: [string, "null"]
+                previous_hash:
+                  type: [string, "null"]
+        filters:
+          type: object
+          additionalProperties: false
+          required: [action, outcome, actor, correlation_id, occurred_at_from, occurred_at_to]
+          properties:
+            action: { type: [string, "null"] }
+            outcome:
+              oneOf:
+                - type: "null"
+                - $ref: '#/components/schemas/AuditOutcome'
+            actor: { type: [string, "null"] }
+            correlation_id:
+              type: [string, "null"]
+              format: uuid
+            occurred_at_from:
+              type: [string, "null"]
+              format: date-time
+            occurred_at_to:
+              type: [string, "null"]
+              format: date-time
     AuditLogListQuery:
       type: object
       additionalProperties: false
@@ -7657,6 +8235,60 @@ components:
           type: integer
           minimum: 1
           maximum: 100
+
+    RoiActualSuggestion:
+      type: object
+      additionalProperties: false
+      description: >
+        Read-only ROI actual prefill suggestion computed from prod-mode run statistics of the linked
+        scenario (all versions, Asia/Seoul day boundaries). It is a proposal only - nothing is recorded;
+        the human-confirmed POST to roi-actuals remains the sole evidence write path, so performance
+        reports and expand decisions never consume suggestions. When the idea has no linked scenario or
+        the period has no settled (completed or failed) runs, the aggregate and suggested fields are
+        null instead of fabricated zeros.
+      required:
+        - automation_idea_id
+        - scenario_id
+        - period_start
+        - period_end
+        - run_mode
+        - total_runs
+        - completed_runs
+        - failed_runs
+        - suggested_actual_transaction_count
+        - suggested_actual_failure_rate
+      properties:
+        automation_idea_id:
+          type: string
+          format: uuid
+        scenario_id:
+          type: [string, "null"]
+          format: uuid
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        run_mode:
+          type: string
+          enum: [prod]
+        total_runs:
+          type: [integer, "null"]
+          minimum: 0
+        completed_runs:
+          type: [integer, "null"]
+          minimum: 0
+        failed_runs:
+          type: [integer, "null"]
+          minimum: 0
+        suggested_actual_transaction_count:
+          type: [integer, "null"]
+          minimum: 0
+        suggested_actual_failure_rate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
 
     AutomationAdoptionEvidenceRequest:
       type: object

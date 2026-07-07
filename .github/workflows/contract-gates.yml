@@ -131,6 +131,9 @@ jobs:
       - name: Check staging release packet validator fixtures
         run: node scripts/validate-staging-release-packet.mjs --self-test
 
+      - name: Check controlled-prod readiness packet validator fixtures
+        run: node scripts/validate-controlled-prod-readiness-packet.mjs --self-test
+
       - name: Scan for high-risk secret material and staging workflow hazards
         run: node scripts/secret-scan.mjs
 
