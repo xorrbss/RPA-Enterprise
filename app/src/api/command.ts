@@ -21,9 +21,9 @@ import type { OperationId } from "../../../ts/control-plane-contract";
 import { ERROR_CATALOG, type ApiError } from "../../../ts/error-catalog";
 import type { CanonicalRequestHash, IdempotencyKey } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 export interface CommandResponse {
   status: number;
@@ -109,6 +109,5 @@ export function apiErrorBody(err: ApiResponseError, correlationId: string): ApiE
   return { code: err.code, message: ERROR_CATALOG[err.code].userMessage, correlation_id: correlationId };
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+// isRecord 정본은 server-shared(R2-5 단일화) — command 경유 기존 소비자 표면 보존을 위한 재수출.
+export { isRecord } from "./server-shared";

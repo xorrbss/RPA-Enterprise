@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
 import { withTenantTx } from "../db/pool";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 type SearchType = "run" | "scenario" | "human_task" | "principal" | "credential";
 
@@ -115,6 +115,8 @@ export function registerSearchRoutes(app: FastifyInstance, deps: ApiServerDeps):
   );
 }
 
+// [R2-5] list-query.parseLimit(기본50/상한200/무효 422)와 의도적으로 다른 검색 전용 한도(기본20/상한50,
+//   무효는 기본으로 흡수 — 검색창 UX). 통합하려면 throw 의미론 변경 승인 필요.
 function parseLimit(raw: string | undefined): number {
   if (raw === undefined) return 20;
   const parsed = Number(raw);

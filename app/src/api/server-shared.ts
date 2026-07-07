@@ -21,9 +21,9 @@ import type {
   SignedCommandRegistry,
 } from "../../../ts/security-middleware-contract";
 import type { BrowserSessionStore } from "../runtime/browser-session-store";
-import type { JwtClaimMapping, JwtRoleMap } from "./auth";
-import { ApiResponseError } from "./errors";
-import type { RunEnqueuer } from "./run-queue";
+import type { JwtClaimMapping, JwtRoleMap } from "../config/jwt-claims";
+import { ApiResponseError } from "../runtime/errors";
+import type { RunEnqueuer } from "../runtime/run-queue";
 import type { PrincipalDirectoryWriter } from "./principal-directory";
 import type { ScenarioPlanner } from "./scenario-generation-types";
 import type { ScenarioGenerationArtifactBuffer } from "./scenario-generation-artifacts";
@@ -114,6 +114,11 @@ export interface ApiServerDeps {
    * 미주입 시 artifact read capability는 audit 없이 노출될 수 없다(fail-closed, registerReadRoutes에서 강제).
    */
   securityAudit?: DurableSecurityAuditDecisionWriter;
+  /**
+   * 오프보딩 purge 유예기간(일). 승인 시 purge_after = now() + grace. 미지정 시 ops-defaults
+   * `offboarding.purge_grace_default`(7d). env `OFFBOARDING_PURGE_GRACE_DAYS` 오버라이드는 main 배선.
+   */
+  offboardingPurgeGraceDays?: number;
   /**
    * 운영자-보조 캡처 완료 세션 스토어(선택). 미지정 시 POST /v1/sites/{id}/session/capture/complete 미등록 —
    * 캡처된 쿠키를 받아 봉투암호화(주입된 encryptor)·browser_sessions 저장하는 prod 캡처 경로(P3, dev=DevPlaintext·prod=AesGcm).

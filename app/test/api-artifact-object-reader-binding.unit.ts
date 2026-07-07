@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import type { ObjectRef } from "../../ts/core-types";
 import { SchemeRoutingArtifactObjectReader, buildApiArtifactObjectReader } from "../src/api/artifact-object-reader-binding";
-import type { ArtifactObjectReader } from "../src/api/server";
+import type { ArtifactObjectReader } from "../src/api/server-shared";
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {

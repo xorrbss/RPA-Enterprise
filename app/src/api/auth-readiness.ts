@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
 
 import type { AuthenticatedPrincipal } from "../../../ts/security-middleware-contract";
-import { DEFAULT_JWT_CLAIM_MAPPING, normalizeJwtClaimMapping, readJwtClaim, type JwtClaimMapping } from "./auth";
+import { readJwtClaim } from "./auth";
+import { DEFAULT_JWT_CLAIM_MAPPING, normalizeJwtClaimMapping, type JwtClaimMapping } from "../config/jwt-claims";
 import { requirePrincipal, type ApiServerDeps, type AuthReadinessConfig } from "./server-shared";
 
 type ReadinessStatus = "ok" | "warning" | "blocked";

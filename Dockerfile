@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
-ARG NODE_VERSION=20-bookworm-slim
+# CI(contract-gates.yml NODE_VERSION=24)와 동일 메이저 — 테스트된 런타임=배포 런타임(R4-2 skew 방지).
+ARG NODE_VERSION=24-bookworm-slim
 
 FROM node:${NODE_VERSION} AS app-deps
 WORKDIR /workspace

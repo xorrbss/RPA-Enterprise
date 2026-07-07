@@ -1,7 +1,7 @@
 import type { PoolClient } from "pg";
 
-import { PgGraphileRunEnqueuer } from "../src/api/run-queue";
-import { RUNTIME_CONTROL_JOB_TASK, RUNTIME_LIFECYCLE_JOB_TASK } from "../src/worker/graphile-runner";
+import { PgGraphileRunEnqueuer } from "../src/runtime/run-queue";
+import { RUNTIME_CONTROL_JOB_TASK, RUNTIME_LIFECYCLE_JOB_TASK } from "../src/runtime/runtime-job-routing";
 
 let failures = 0;
 function check(label: string, cond: boolean, detail?: string): void {

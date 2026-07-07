@@ -12,9 +12,9 @@ import type { CanonicalRequestHash, IdempotencyKey } from "../../../ts/security-
 import { withTenantTx } from "../db/pool";
 import { EVENTS_OUTBOX_RETENTION_POLICY, emitOutboxEvent } from "../runtime/outbox";
 import { assertAiGovernanceRuntimeAllowed, evaluateAiGovernanceRuntime } from "./ai-governance-enforcement";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
-import type { RunEnqueuer, RunPriority } from "./run-queue";
+import type { RunEnqueuer, RunPriority } from "../runtime/run-queue";
 import {
   apiErrorBody,
   isRecord,

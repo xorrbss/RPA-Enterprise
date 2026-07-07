@@ -82,6 +82,8 @@ export type RbacAction =
   | "audit.read"
   | "audit.verify"
   | "tenant_data.export"
+  | "tenant_data.purge.request"
+  | "tenant_data.purge.approve"
   | "ai_governance.read"
   | "ai_governance.manage"
   | "workitem.read"
@@ -458,6 +460,9 @@ export const SECURITY_AUDIT_REQUIRED_ACTIONS = [
   "rbac.grant",
   "rbac.revoke",
   "scim.sync",
+  "tenant_data.export",
+  "tenant_data.purge.request",
+  "tenant_data.purge.approve",
   "network.request",
   "prompt.inspect",
   "ai_governance.manage",
@@ -535,7 +540,8 @@ export type BypassRlsUseCase =
   | "artifact_integrity_checker"
   | "artifact_orphan_sweeper"
   | "lease_sweeper"
-  | "scheduler_infra_worker_registry";
+  | "scheduler_infra_worker_registry"
+  | "tenant_offboarding_purge";
 
 export interface BypassRlsPolicyContract {
   applicationRoleMayBypassRls: false;
@@ -560,6 +566,7 @@ export const MINIMUM_BYPASS_RLS_POLICY = {
     "artifact_orphan_sweeper",
     "lease_sweeper",
     "scheduler_infra_worker_registry",
+    "tenant_offboarding_purge",
   ],
 } as const satisfies BypassRlsPolicyContract;
 

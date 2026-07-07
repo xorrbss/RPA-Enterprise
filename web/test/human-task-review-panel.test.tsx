@@ -1,5 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+import { ApiClientProvider } from "../src/api/context";
 import { beforeEach, describe, expect, test } from "vitest";
 
 import { HumanTaskReviewPanel } from "../src/components/HumanTaskReviewPanel";
@@ -52,7 +54,9 @@ describe("HumanTaskReviewPanel", () => {
     const api = fakeClient();
     const view = render(
       <QueryClientProvider client={qc}>
-        <HumanTaskReviewPanel api={api} task={first} />
+        <ApiClientProvider client={api}>
+          <HumanTaskReviewPanel api={api} task={first} />
+        </ApiClientProvider>
       </QueryClientProvider>,
     );
 
@@ -62,7 +66,9 @@ describe("HumanTaskReviewPanel", () => {
 
     view.rerender(
       <QueryClientProvider client={qc}>
-        <HumanTaskReviewPanel api={api} task={second} />
+        <ApiClientProvider client={api}>
+          <HumanTaskReviewPanel api={api} task={second} />
+        </ApiClientProvider>
       </QueryClientProvider>,
     );
 

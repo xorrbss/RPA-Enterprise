@@ -165,6 +165,8 @@ Worker heartbeat startup rule:
 | `resume_token.ttl` (expiresAt) | 30m | 2s | reserved-handlers ResumeToken | 만료 시 resume 거부→재로그인/System |
 | `resume_token.key_rotation_grace` | 7d | — | security-contracts §5 | 폐기 키 검증 유예 |
 | `human_task.default_timeout` | 30m | 2s | @human_task `timeout` | kind별 시나리오 오버라이드 |
+| `offboarding.purge_grace_default` | 7d | env 단축 | offboarding 설계 O2(승인 시 `purge_after=now()+grace`) | 반출 완료+오조작 복구 창. env `OFFBOARDING_PURGE_GRACE_DAYS` 오버라이드(양의 정수 일 단위). 유예 중 admin 취소 가능(D3) |
+| `tenant_offboarding_purge` | daily 02:00 KST | 과거 `purge_after` 시드 | offboarding 설계 O4(hard 단계) | 만기(approved+`purge_after` 경과)/재개(purging) 원장 테넌트만 enqueue(독자 due 발견 — artifact-due 집합에 숨기지 않음). BYPASSRLS lifecycle task 전용. per-tick cap(행 20000·artifact 200, worker options 오버라이드) 초과 시 deferred → graphile 재시도가 잔여 배치를 이어감(멱등) |
 
 > **resume_token.ttl 보강(상태머신 감사 클러스터 C)**: TTL 은 **resume 개시→restore** 구간을 경계한다. `resume_requested` 도달은 R13(`human_task.resolved`, RBAC 인증 resolve)로만 가능하므로, 워커는 resume 시작 시 진본(hmac/kid 일치)·만료 토큰을 fresh TTL 로 **재발행** 후 restore 한다(tamper=hmac/kid 불일치는 재발행하지 않아 R20 으로 거부 — 보안 경계 유지). 인간 승인 대기의 경계는 토큰 TTL 이 아니라 **human_task 생명주기**(R13 resolve / R14 timeout)다. `human_task.default_timeout`과 명시 `@human_task.timeout`은 `expires_at`으로 저장되고 `human_task_timeout_sweeper`가 H4/H8을 처리한다. "만료 시 resume 거부"는 재발행 후의 restore-verify(=resume 개시 후 짧은 창)에 적용된다.
 

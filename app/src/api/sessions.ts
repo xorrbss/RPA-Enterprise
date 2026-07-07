@@ -17,10 +17,9 @@ import { withTenantTx } from "../db/pool";
 import { sessionKey, type BrowserSessionStore } from "../runtime/browser-session-store";
 import type { RawCookie } from "../executor/raw-cdp";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
-import { ApiResponseError } from "./errors";
-import { type ApiServerDeps, requirePrincipal } from "./server";
+import { ApiResponseError } from "../runtime/errors";
+import { type ApiServerDeps, requirePrincipal, UUID_RE } from "./server-shared";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CAPTURE_LAUNCHING_EXPIRES_AFTER_MS = 10 * 60 * 1000;
 const EXPIRED_LAUNCH_DETAIL = "launching_expired_operator_pc_registration_required";
 

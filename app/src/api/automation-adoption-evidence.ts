@@ -4,11 +4,12 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { PoolClient } from "pg";
 
 import { withTenantTx } from "../db/pool";
-import { assertIdeaExists, parseKnownBody, validateIdeaId } from "./automation-ideas";
+import { assertIdeaExists } from "./automation-ideas";
+import { parseKnownBody, validateIdeaId } from "./automation-ideas-parse";
 import { isRecord, runIdempotentCommand, type CommandResponse } from "./command";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { parseLimit } from "./list-query";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 type AdoptionEvidenceType = "pilot_charter_signoff" | "raci_signoff" | "training_completion" | "support_model_signoff";
 type AdoptionEvidenceStatus = "valid" | "failed" | "deferred";

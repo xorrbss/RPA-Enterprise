@@ -9,9 +9,9 @@
 import type { PoolClient } from "pg";
 
 import type { RuntimeWorkerJob } from "../../../ts/runtime-contract";
-import type { RuntimeJobEnqueuePort } from "../runtime/executor-ports";
-import { runtimeJobTaskIdentifier } from "../worker/graphile-runner";
-import { poolFlagFor } from "../worker/pool-forbidden-flags";
+import type { RuntimeJobEnqueuePort } from "./executor-ports";
+import { runtimeJobTaskIdentifier } from "./runtime-job-routing";
+import { poolFlagFor } from "./pool-forbidden-flags";
 import { ApiResponseError } from "./errors";
 
 export type RunPriority = "low" | "medium" | "high" | "critical";

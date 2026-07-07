@@ -21,7 +21,7 @@ import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { withTenantTx } from "../db/pool";
-import { ApiResponseError, registerErrorHandler } from "./errors";
+import { ApiResponseError, registerErrorHandler } from "../runtime/errors";
 import { registerDlqRoutes } from "./dlq";
 import { registerGatewayRoutes } from "./gateway";
 import { registerHumanTaskRoutes } from "./human-tasks";
@@ -42,6 +42,9 @@ import { registerAutomationIdeaRoutes } from "./automation-ideas";
 import { registerAutomationPerformanceReportRoutes } from "./automation-performance-report";
 import { registerProcessMiningImportRoutes } from "./process-mining-imports";
 import { registerOffboardingExportRoutes } from "./offboarding-export";
+import { registerOffboardingRawExportRoutes } from "./offboarding-export-raw";
+import { isTenantOffboardingLocked, OFFBOARDING_LOCK_EXEMPT_ACTIONS } from "./offboarding-lock";
+import { registerOffboardingPurgeRoutes } from "./offboarding-purge";
 import { registerRoiActualRoutes } from "./roi-actuals";
 import { registerRoiEstimateRoutes } from "./roi-estimate";
 import { registerBrowserRecordingRoutes } from "./browser-recordings";
@@ -192,6 +195,21 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
     }
   });
 
+  // 6) 오프보딩 잠금(설계 O3) — approved/purging 테넌트의 쓰기 명령을 409 로 차단.
+  //    읽기(GET/HEAD)·반출은 허용(유예 창의 목적 = 반출+복구), 복구 방향 명령(취소/결정/run.abort)은 예외.
+  //    원장 활성행 조회는 쓰기 명령에서만 요청당 1회(부분 인덱스 단건 — 설계 O3 구현 노트).
+  app.addHook("preHandler", async (request) => {
+    if (request.routeOptions.config.skipJwtAuth === true) return; // 웹훅 발화는 자체 핸들러에서 잠금 검사
+    if (request.is404) return;
+    if (request.method === "GET" || request.method === "HEAD") return;
+    const action = request.routeOptions.config.rbacAction;
+    if (action !== undefined && OFFBOARDING_LOCK_EXEMPT_ACTIONS.has(action)) return;
+    const principal = requirePrincipal(request);
+    if (await isTenantOffboardingLocked(deps.pool, principal.tenantId)) {
+      throw new ApiResponseError("TENANT_OFFBOARDING", { reason: "tenant_offboarding_locked" });
+    }
+  });
+
   registerErrorHandler(app);
 
   // GET /v1/runs/{run_id} — RLS 스코프 조회. cross-tenant/부재/형식무효 id → RUN_NOT_FOUND(404).
@@ -307,6 +325,8 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   registerRoiActualRoutes(app, deps);
   registerAutomationPerformanceReportRoutes(app, deps);
   registerOffboardingExportRoutes(app, deps);
+  registerOffboardingRawExportRoutes(app, deps);
+  registerOffboardingPurgeRoutes(app, deps);
   registerAuthReadinessRoutes(app, deps);
   registerRunTriggerRoutes(app, deps);
   registerWebhookTriggerRoutes(app, deps);
@@ -340,9 +360,3 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   return app;
 }
 
-// 분해 전 공개 표면 보존(consumers import from "./server") — server-shared/server-create-run 구현 재노출.
-export { requirePrincipal };
-export type { ApiServerDeps, AuthReadinessConfig };
-export { createRunInTx } from "./server-create-run";
-export type { CreateRunInTxInput } from "./server-create-run";
-export type { ArtifactObjectReader } from "./server-shared";

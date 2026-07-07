@@ -62,7 +62,7 @@ const HS256_WARNING: AuthReadiness = {
   current_principal: {
     subject_id: "viewer-a",
     tenant_id: "tenant-a",
-    roles: ["viewer"],
+    roles: ["admin"],
     source: "jwt",
     display_name: null,
     email: null,

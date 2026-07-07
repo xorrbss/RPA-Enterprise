@@ -15,9 +15,10 @@ import { SignJWT } from "jose";
 
 import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
-import { readActiveOpsAlertNotificationRoutes, type OpsAlertNotificationRoute } from "../src/api/ops-alert-notification-routes";
+import type { OpsAlertNotificationRoute } from "../src/api/ops-alert-notification-routes";
+import { readActiveOpsAlertNotificationRoutes } from "../src/runtime/ops-alert-notification-store";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
-import type { RunEnqueuer } from "../src/api/run-queue";
+import type { RunEnqueuer } from "../src/runtime/run-queue";
 import { buildServer } from "../src/api/server";
 import { createPool, withTenantTx } from "../src/db/pool";
 import type { SecretRef } from "../../ts/core-types";

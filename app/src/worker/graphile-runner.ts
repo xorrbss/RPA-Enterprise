@@ -9,31 +9,14 @@ import { runOnce, type Task, type TaskList } from "graphile-worker";
 import type pg from "pg";
 
 import type { RuntimeJobResult, RuntimeWorkerJob } from "../../../ts/runtime-contract";
+import {
+  RUNTIME_CONTROL_JOB_TASK,
+  RUNTIME_LIFECYCLE_JOB_TASK,
+  runtimeJobTaskIdentifier,
+} from "../runtime/runtime-job-routing";
 import { PgRuntimeWorker, type PgRuntimeWorkerOptions } from "./runtime-worker";
 
-/** 일반 런타임 작업(task) 식별자: tenant RLS 아래에서 run/outbox/sink 계열만 처리한다. */
-export const RUNTIME_CONTROL_JOB_TASK = "process_runtime_job";
-/** Artifact lifecycle 전용 task 식별자: BYPASSRLS 운영 role로만 실행해야 한다. */
-export const RUNTIME_LIFECYCLE_JOB_TASK = "process_artifact_lifecycle_job";
-/** Backward-compatible alias for older tests/call sites. */
-export const RUNTIME_JOB_TASK = RUNTIME_CONTROL_JOB_TASK;
-
 export type RuntimeTaskScope = "control" | "artifact_lifecycle" | "all";
-
-export function isArtifactLifecycleRuntimeJob(job: Pick<RuntimeWorkerJob, "kind">): boolean {
-  // artifact_integrity 도 BYPASSRLS lifecycle role 로 실행해야 한다(quarantine UPDATE 는 artifacts UPDATE RLS 정책
-  // 부재로 tenant role 로는 불가). redaction/retention 과 동일 task 로 라우팅.
-  return (
-    job.kind === "artifact_redaction" ||
-    job.kind === "artifact_retention" ||
-    job.kind === "artifact_integrity" ||
-    job.kind === "artifact_orphan"
-  );
-}
-
-export function runtimeJobTaskIdentifier(job: Pick<RuntimeWorkerJob, "kind">): string {
-  return isArtifactLifecycleRuntimeJob(job) ? RUNTIME_LIFECYCLE_JOB_TASK : RUNTIME_CONTROL_JOB_TASK;
-}
 
 export function buildTaskList(
   pool: pg.Pool,

@@ -5,7 +5,7 @@
  */
 import type { LLMRequest, LLMResponse } from "../../ts/security-middleware-contract";
 import type { CompileOutcome } from "../src/api/compile-pipeline";
-import { ApiResponseError } from "../src/api/errors";
+import { ApiResponseError } from "../src/runtime/errors";
 import {
   createLlmScenarioPlanner,
   LlmGatewayScenarioPlannerClient,

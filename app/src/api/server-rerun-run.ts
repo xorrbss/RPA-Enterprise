@@ -6,7 +6,7 @@ import type { CanonicalRequestHash, IdempotencyKey } from "../../../ts/security-
 import { ERROR_CATALOG } from "../../../ts/error-catalog";
 import { withTenantTx } from "../db/pool";
 import { appendGovernanceAudit } from "./role-assignments";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
 import { createRunInTx } from "./server-create-run";
 import type { RunMode } from "./server-create-run";

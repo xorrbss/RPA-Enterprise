@@ -91,6 +91,8 @@ async function main(): Promise<void> {
   await expectDeny(["viewer"], "ai_governance.manage");
   await expectDeny(["viewer"], "audit.verify");
   await expectDeny(["viewer"], "tenant_data.export");
+  await expectDeny(["viewer"], "tenant_data.purge.request");
+  await expectDeny(["viewer"], "tenant_data.purge.approve");
   await expectDeny(["viewer"], "run.create");
   await expectDeny(["viewer"], "trigger.manage");
   await expectDeny(["viewer"], "automation_idea.manage");
@@ -132,6 +134,8 @@ async function main(): Promise<void> {
   await expectDeny(["operator"], "ai_governance.manage");
   await expectDeny(["operator"], "audit.verify");
   await expectDeny(["operator"], "tenant_data.export");
+  await expectDeny(["operator"], "tenant_data.purge.request");
+  await expectDeny(["operator"], "tenant_data.purge.approve");
   await expectDeny(["operator"], "human_task.resolve.validation");
   await expectDeny(["operator"], "human_task.escalate");
   await expectDeny(["operator"], "scenario.promote");
@@ -224,6 +228,8 @@ async function main(): Promise<void> {
   await expectAllow(["admin"], "scenario.certify");
   await expectAllow(["admin"], "audit.verify");
   await expectAllow(["admin"], "tenant_data.export");
+  await expectAllow(["admin"], "tenant_data.purge.request");
+  await expectAllow(["admin"], "tenant_data.purge.approve");
   await expectAllow(["admin"], "ai_governance.read");
   await expectAllow(["admin"], "ai_governance.manage");
   await expectAllow(["admin"], "ops_alert.deliver");

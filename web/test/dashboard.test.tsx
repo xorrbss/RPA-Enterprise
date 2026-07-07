@@ -837,4 +837,25 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     await waitFor(() => expect(panel).toHaveTextContent("완료·실패한 실행이 아직 없습니다"));
     expect(panel).toHaveTextContent("3건"); // 처리량 1+2
   });
+
+  // (e) A1-1 모집단 정합: 카드/추세 집계는 드릴다운 목록(runTrace?run_mode=prod)과 같은 prod 모집단을 요청한다.
+  test("요약/추세 집계는 드릴다운과 동일한 run_mode=prod 모집단을 요청한다", async () => {
+    const summaryModes: unknown[] = [];
+    const trendsModes: unknown[] = [];
+    renderApp(
+      fakeClient({
+        getRunSummary: async (runMode?: "test" | "prod") => {
+          summaryModes.push(runMode);
+          return { by_status: {}, success_rate: null, total: 0, cache: { by_mode: {}, hit_rate: null } };
+        },
+        getRunTrends: async (_days?: number, runMode?: "test" | "prod") => {
+          trendsModes.push(runMode);
+          return { window_days: 30, timezone: "Asia/Seoul", points: [] };
+        },
+      }),
+    );
+
+    await waitFor(() => expect(summaryModes).toContain("prod"));
+    await waitFor(() => expect(trendsModes).toContain("prod"));
+  });
 });

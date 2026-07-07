@@ -161,8 +161,15 @@ export class WorkerRunSupport {
     // 사이트 서킷 게이트(ops-defaults §3 site.circuit)는 기존 site_profiles 판독에 접어 넣는다(별도 쿼리 회피). read-only 판정:
     //   circuit_blocked = open + cooldown(circuit_until 미설정 OR 미래). 전이는 전부 recordSiteCircuitOutcome(drive 후)에서.
     const siteOpenMs = this.options.siteCircuit?.openMs ?? DEFAULT_SITE_CIRCUIT.openMs;
-    const identity = await client.query<{ risk: string; approved: boolean; circuit_blocked: boolean; retry_after_ms: number }>(
+    const identity = await client.query<{
+      risk: string;
+      approved: boolean;
+      approval_expired: boolean;
+      circuit_blocked: boolean;
+      retry_after_ms: number;
+    }>(
       `SELECT sp.risk, sp.approved,
+              (sp.approval_expires_at IS NOT NULL AND sp.approval_expires_at <= now()) AS approval_expired,
               (sp.circuit_state = 'open' AND (sp.circuit_until IS NULL OR sp.circuit_until > now())) AS circuit_blocked,
               GREATEST(1, CEIL(EXTRACT(EPOCH FROM (COALESCE(sp.circuit_until, now() + ($4::bigint * interval '1 millisecond')) - now())) * 1000))::int AS retry_after_ms
          FROM browser_identities bi
@@ -179,7 +186,9 @@ export class WorkerRunSupport {
     if (site === undefined) {
       return { kind: "failed", code: "RESOURCE_NOT_FOUND" };
     }
-    if (site.risk === "red" && !site.approved) {
+    // 기간 한정 승인(approval_expires_at)이 경과하면 미승인과 동일하게 게이트 복귀 — 기록만 되고 집행 안 되는
+    // 조용한 영구화 금지(승인 시각/사유는 보존, 재승인은 approve 라우트).
+    if (site.risk === "red" && (!site.approved || site.approval_expired)) {
       recordSiteBlock({ tenant_id: input.tenantId }); // §E site_block_rate. bootstrap 전이면 no-op meter.
       return { kind: "failed", code: "SITE_PROFILE_BLOCKED" };
     }

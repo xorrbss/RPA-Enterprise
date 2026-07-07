@@ -7,8 +7,9 @@
  * ApiResponseError(IR_SCHEMA_INVALID, 조용한 false 금지). 의존: isRecord(./command)·ApiResponseError(./errors)·
  * isHttpUrl(url leaf)·generation 타입(./scenario-generation-types). UUID_RE는 본 모듈 소유, 원본이 import.
  */
+import { UUID_RE } from "./server-shared";
 import { isRecord } from "./command";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { isHttpUrl } from "./scenario-generation-url";
 import type {
   EvidencePolicy,
@@ -18,7 +19,6 @@ import type {
   ScenarioPlannerId,
 } from "./scenario-generation-types";
 
-export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function parseParamsContext(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {};

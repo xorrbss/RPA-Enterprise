@@ -2,7 +2,7 @@
 // 매핑·검증(순수)은 runtime-worker-artifact-lifecycle.ts. 본 모듈은 async DB(client.query) + append-only 감사 해시체인(createHash).
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
-import { computeAuditHash } from "../api/audit-record-hash";
+import { computeAuditHash } from "../runtime/audit-record-hash";
 import {
   SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
   checkBypassRlsUse,
@@ -58,16 +58,6 @@ export async function assertLifecycleBypassUse(
 }
 
 export async function appendLifecycleAuditWithClient(client: pg.PoolClient, input: LifecycleAuditAppendInput): Promise<void> {
-  const occurredAt = new Date();
-  const occurredAtIso = occurredAt.toISOString();
-  const retentionUntilIso = new Date(
-    occurredAt.getTime() + input.retentionDays * 24 * 60 * 60 * 1000,
-  ).toISOString();
-  const actor = {
-    kind: "system",
-    id: "runtime-worker",
-    worker_id: input.workerId,
-  };
   const payload = {
     decision_kind: "artifact_lifecycle.bypassrls_use",
     use_case: input.useCase,
@@ -96,8 +86,43 @@ export async function appendLifecycleAuditWithClient(client: pg.PoolClient, inpu
       input.objectIoEvidence?.mayBeUsedAsStagingEvidence ??
       (input.portBinding?.kind === "test_fake" ? false : undefined),
   };
-  const payloadJson = safeSerialize(payload);
-  const idempotencyKey = `${input.useCase}:${input.artifact.artifactRef}:${input.jobId}`;
+  await appendWorkerBypassAuditWithClient(client, {
+    tenantId: input.tenantId,
+    correlationId: input.correlationId,
+    workerId: input.workerId,
+    reason: input.reasonCode,
+    idempotencyKey: `${input.useCase}:${input.artifact.artifactRef}:${input.jobId}`,
+    retentionDays: input.retentionDays,
+    payload,
+  });
+}
+
+export type WorkerBypassAuditAppendInput = {
+  readonly tenantId: string;
+  readonly correlationId: string;
+  readonly workerId: string;
+  readonly reason: string;
+  readonly idempotencyKey: string;
+  readonly retentionDays: number;
+  readonly payload: Record<string, unknown>;
+};
+
+/** BYPASSRLS 운영감사 공용 append(action=bypassrls.use, actor=system runtime-worker) — hash-chain/직렬화 단일 구현. */
+export async function appendWorkerBypassAuditWithClient(
+  client: pg.PoolClient,
+  input: WorkerBypassAuditAppendInput,
+): Promise<void> {
+  const occurredAt = new Date();
+  const occurredAtIso = occurredAt.toISOString();
+  const retentionUntilIso = new Date(
+    occurredAt.getTime() + input.retentionDays * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const actor = {
+    kind: "system",
+    id: "runtime-worker",
+    worker_id: input.workerId,
+  };
+  const payloadJson = safeSerialize(input.payload);
 
   // 동일 테넌트 audit 체인 선형화 — 동시 append 직렬화(tx advisory lock; FOR UPDATE LIMIT1 만으론 sequence 경합).
   await client.query("SELECT pg_advisory_xact_lock(hashtext($1::text))", [input.tenantId]);
@@ -123,9 +148,9 @@ export async function appendLifecycleAuditWithClient(client: pg.PoolClient, inpu
     actor,
     action: "bypassrls.use",
     outcome: "allow",
-    reason: input.reasonCode,
+    reason: input.reason,
     correlationId: input.correlationId,
-    idempotencyKey,
+    idempotencyKey: input.idempotencyKey,
     occurredAt: occurredAtIso,
     retentionUntil: retentionUntilIso,
     payloadSchemaRef: SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
@@ -147,9 +172,9 @@ export async function appendLifecycleAuditWithClient(client: pg.PoolClient, inpu
       input.tenantId,
       sequence,
       JSON.stringify(actor),
-      input.reasonCode,
+      input.reason,
       input.correlationId,
-      idempotencyKey,
+      input.idempotencyKey,
       occurredAtIso,
       SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
       payloadJson,

@@ -10,8 +10,10 @@
  * 알고리즘은 검증기(JwtVerifier) 주입으로 분리한다 — 경계는 transport/알고리즘 무관(운영은 RS256/JWKS 검증기
  * 주입). v1 기본은 HS256 공유 시크릿. alg 화이트리스트로 alg-confusion/none을 차단한다.
  */
+import { UUID_RE } from "./server-shared";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 
+import { normalizeJwtClaimMapping, type JwtClaimMapping, type JwtRoleMap } from "../config/jwt-claims";
 import type {
   AuthBoundaryResult,
   AuthenticatedPrincipal,
@@ -22,27 +24,6 @@ import type {
 } from "../../../ts/security-middleware-contract";
 
 const ROLES: ReadonlySet<string> = new Set<Role>(["viewer", "operator", "reviewer", "approver", "admin"]);
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export interface JwtClaimMapping {
-  readonly subjectClaim: string;
-  readonly tenantClaim: string;
-  readonly rolesClaim: string;
-  readonly expiryClaim: string;
-  readonly displayNameClaim: string;
-  readonly emailClaim: string;
-}
-
-export const DEFAULT_JWT_CLAIM_MAPPING: JwtClaimMapping = {
-  subjectClaim: "sub",
-  tenantClaim: "tenant_id",
-  rolesClaim: "roles",
-  expiryClaim: "exp",
-  displayNameClaim: "name",
-  emailClaim: "email",
-};
-
-export type JwtRoleMap = Readonly<Record<string, Role>>;
 
 export interface JwtAuthenticationBoundaryOptions {
   readonly claimMapping?: Partial<JwtClaimMapping>;
@@ -51,23 +32,6 @@ export interface JwtAuthenticationBoundaryOptions {
 
 function isRole(value: unknown): value is Role {
   return typeof value === "string" && ROLES.has(value);
-}
-
-export function normalizeJwtClaimMapping(mapping: Partial<JwtClaimMapping> | undefined): JwtClaimMapping {
-  return {
-    subjectClaim: nonEmptyClaimPath(mapping?.subjectClaim, DEFAULT_JWT_CLAIM_MAPPING.subjectClaim),
-    tenantClaim: nonEmptyClaimPath(mapping?.tenantClaim, DEFAULT_JWT_CLAIM_MAPPING.tenantClaim),
-    rolesClaim: nonEmptyClaimPath(mapping?.rolesClaim, DEFAULT_JWT_CLAIM_MAPPING.rolesClaim),
-    expiryClaim: nonEmptyClaimPath(mapping?.expiryClaim, DEFAULT_JWT_CLAIM_MAPPING.expiryClaim),
-    displayNameClaim: nonEmptyClaimPath(mapping?.displayNameClaim, DEFAULT_JWT_CLAIM_MAPPING.displayNameClaim),
-    emailClaim: nonEmptyClaimPath(mapping?.emailClaim, DEFAULT_JWT_CLAIM_MAPPING.emailClaim),
-  };
-}
-
-function nonEmptyClaimPath(value: string | undefined, fallback: string): string {
-  if (value === undefined) return fallback;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : fallback;
 }
 
 export function readJwtClaim(payload: Readonly<Record<string, unknown>>, claimPath: string): unknown {

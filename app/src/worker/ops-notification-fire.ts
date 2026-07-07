@@ -16,17 +16,17 @@
  */
 import type { PoolClient } from "pg";
 
-import {
-  insertOpsNotificationAttempt,
-  readComputedOpsAlerts,
-  type ComputedOpsAlert,
-  type OpsAlertSeverity,
-  type OpsNotificationWebhookSendInput,
-} from "../api/ops-alerts";
-import { readActiveOpsAlertNotificationRoutes } from "../api/ops-alert-notification-routes";
-import type { OpsNotificationSendEnqueueInput } from "../api/run-queue";
+import { readComputedOpsAlerts } from "../runtime/ops-alerts/compute";
+import { insertOpsNotificationAttempt } from "../runtime/ops-alerts/notification-attempts";
+import type {
+  ComputedOpsAlert,
+  OpsAlertSeverity,
+  OpsNotificationWebhookSendInput,
+} from "../runtime/ops-alerts/types";
+import { readActiveOpsAlertNotificationRoutes } from "../runtime/ops-alert-notification-store";
+import type { OpsNotificationSendEnqueueInput } from "../runtime/run-queue";
 import { withTenantTx, type PgPool } from "../db/pool";
-import { OPS_ALERT_AUTO_FIRE_SOURCES, type OpsAlertRoute } from "../api/ops-alert-routes";
+import { OPS_ALERT_AUTO_FIRE_SOURCES, type OpsAlertRoute } from "../runtime/ops-alert-routes";
 
 // 자동 발화 요청자(감사 귀속). 사람 명령이 아닌 시스템 발화임을 명시.
 const AUTO_FIRE_REQUESTED_BY = "system:ops-alert-auto-fire";

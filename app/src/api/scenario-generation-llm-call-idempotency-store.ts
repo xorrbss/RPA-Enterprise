@@ -6,6 +6,7 @@
  * durable logical key and replays only when the planner output JSON and its
  * generation artifact metadata are both durable.
  */
+import { UUID_RE } from "./server-shared";
 import { randomUUID } from "node:crypto";
 
 import type {
@@ -18,7 +19,6 @@ import type {
 import type { ArtifactRef } from "../../../ts/core-types";
 import { withTenantTx, type PgClient, type PgPool } from "../db/pool";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_RETENTION_DAYS = 90;
 // Match ops-defaults §4 llm.stream_wall_timeout. The gateway will have timed out by then.
 const DEFAULT_STALE_OPEN_RECLAIM_MS = 120_000;

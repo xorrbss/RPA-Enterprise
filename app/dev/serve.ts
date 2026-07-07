@@ -35,9 +35,10 @@ import { SignJWT } from "jose";
 
 import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
+import { positiveInt } from "../src/config/env-primitives";
 import { PgPrincipalDirectory } from "../src/api/principal-directory";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
-import type { RunEnqueuer } from "../src/api/run-queue";
+import type { RunEnqueuer } from "../src/runtime/run-queue";
 import { PgDurableSecurityAuditDecisionWriter } from "../src/api/security-audit";
 import { buildServer } from "../src/api/server";
 import { PgBrowserSessionStore, DevPlaintextSessionEncryptor } from "../src/runtime/browser-session-store";
@@ -230,6 +231,8 @@ async function main(): Promise<void> {
     signedCommandRegistry,
     artifactStore,
     securityAudit: new PgDurableSecurityAuditDecisionWriter(pool),
+    // 라이브 스모크에서 grace 단축(env) 가능하게 dev 도 동일 env 를 읽는다(ops-defaults 기본 7d).
+    offboardingPurgeGraceDays: positiveInt("OFFBOARDING_PURGE_GRACE_DAYS", 7),
     // 운영자-로컬 캡처 완료(POST .../session/capture/complete)용 세션 스토어. dev는 평문 봉투(허용 플래그).
     sessionStore: new PgBrowserSessionStore({ pool, encryptor: new DevPlaintextSessionEncryptor() }, { allowDevPlaintext: true }),
   });

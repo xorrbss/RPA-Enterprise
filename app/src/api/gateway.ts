@@ -14,8 +14,8 @@ import type { PoolClient } from "pg";
 import { randomUUID } from "node:crypto";
 
 import { runIdempotentCommand, isRecord, type CommandResponse } from "./command";
-import { ApiResponseError } from "./errors";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { ApiResponseError } from "../runtime/errors";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 interface PolicyBody {
   model: string;

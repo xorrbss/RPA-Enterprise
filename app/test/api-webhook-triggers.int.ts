@@ -13,7 +13,7 @@ import { SignJWT } from "jose";
 import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
-import type { RunEnqueueInput, RunEnqueuer } from "../src/api/run-queue";
+import type { RunEnqueueInput, RunEnqueuer } from "../src/runtime/run-queue";
 import { buildServer } from "../src/api/server";
 import { webhookSigningPayload } from "../src/api/webhook-trigger-auth";
 import { createPool, withTenantTx } from "../src/db/pool";
@@ -262,6 +262,42 @@ async function main(): Promise<void> {
       });
       check("same event id replays existing fire", replay.statusCode === 202 && replay.json().duplicate === true && replay.json().run_id === accepted.json().run_id, replay.body);
       check("replay does not enqueue another run", enqueued.length === 1, JSON.stringify(enqueued));
+
+      // 오프보딩 잠금(O3): skipJwtAuth 경로도 서명 검증 뒤 발화 전에 차단(조용한 skip 아님 — 409 명시).
+      const OFFBOARDING_ID = "77000000-0000-4000-8000-000000000001";
+      await withTenantTx(pool, TENANT_A, async (c) => {
+        await c.query(
+          `INSERT INTO tenant_offboarding_requests (id, tenant_id, status, reason, requested_by, decided_by, decided_at, purge_after)
+           VALUES ($1::uuid, $2::uuid, 'approved', 'lock test', 'admin-1', 'admin-2', now(), now() + interval '7 days')`,
+          [OFFBOARDING_ID, TENANT_A],
+        );
+      });
+      const lockedReplay = await app.inject({
+        method: "POST",
+        url: `/v1/webhooks/run-triggers/${TENANT_A}/${triggerId}`,
+        headers: signedHeaders("evt-1", payload),
+        payload,
+      });
+      check("offboarding lock blocks signed webhook fire -> 409", lockedReplay.statusCode === 409 && lockedReplay.json().code === "TENANT_OFFBOARDING", lockedReplay.body);
+      const lockedNewPayload = { action: "created", record_id: "case-lock" };
+      const lockedNew = await app.inject({
+        method: "POST",
+        url: `/v1/webhooks/run-triggers/${TENANT_A}/${triggerId}`,
+        headers: signedHeaders("evt-lock", lockedNewPayload),
+        payload: lockedNewPayload,
+      });
+      check("offboarding lock: new event also 409 + no fire ledger", lockedNew.statusCode === 409 && (await fireCount(pool, TENANT_A, triggerId, "webhook:evt-lock")) === 0, lockedNew.body);
+      check("offboarding lock: no extra run enqueued", enqueued.length === 1, JSON.stringify(enqueued));
+      await withTenantTx(pool, TENANT_A, async (c) => {
+        await c.query(`UPDATE tenant_offboarding_requests SET status = 'cancelled', updated_at = now() WHERE id = $1::uuid`, [OFFBOARDING_ID]);
+      });
+      const unlockedReplay = await app.inject({
+        method: "POST",
+        url: `/v1/webhooks/run-triggers/${TENANT_A}/${triggerId}`,
+        headers: signedHeaders("evt-1", payload),
+        payload,
+      });
+      check("offboarding cancel restores webhook fire (replay 202)", unlockedReplay.statusCode === 202 && unlockedReplay.json().duplicate === true, unlockedReplay.body);
 
       const badPayload = { action: "created", record_id: "case-bad" };
       const badSignature = await app.inject({

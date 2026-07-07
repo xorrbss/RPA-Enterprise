@@ -880,3 +880,131 @@
 | 계약(핸들러) | `reserved-handlers.md` @human_task·복귀 토큰 | @human_task 재개 시 `node.<owningNodeId>.*` 노출 bullet + "판정 결과 주입" 단락(출처=`human_tasks.node_id`, 주입=resume re-SELECT, 토큰 미적재) |
 | 계약(정적검증) | `ir-static-validation.md` §1 V9·신규 V13·§3·§5 | V9에 @human_task 노드 게이트(decision/correction 허용) 명시 + V13 `decision_branch_incomplete`(promote-block) + ValidationReport rule union·§5 매핑표에 V13 |
 | 비도입(C2/C3) | codegen `static-validation.ts`/IREL compile·런타임 인터프리터/worker·web | V13 구현·`node.<id>.decision/correction` 투영·재개 re-SELECT 주입 — 전부 후속 PR(C2 codegen·C3 런타임·C4 web). 이번 PR은 계약+DDL만 |
+
+## v2.31 패치 로그 (사이트 승인 하드닝 — approved_by text 정합 + 만료 집행 + 이력 조회)
+
+> **검증된 내부 불일치 해소**(3관점 감사 2026-07-03 A3-2/A3-3/A3-7 confirmed). ① `site_profiles.approved_by`/
+> `site_profile_approvals.approved_by`가 `uuid`라 승인 라우트가 JWT sub를 `::uuid` 캐스트 — 비-UUID OIDC sub
+> (auth0|…·이메일)는 22P02→미분류 500으로 **승인 워크플로우 전면 좌초**. 저장소 스스로 세운 규범과 모순:
+> `approvals.decide`는 "decided_by는 text… ::uuid 캐스트 금지"를 명문화했고 신형 `scenario_releases.approved_by`도
+> text — sites만 구 패턴 잔존이라 **text로 통일**(약한 쪽을 규범에 맞춤). ② `approval_expires_at`은 기록만 되고
+> 읽는 곳이 0곳 — 기간 한정 승인이 조용히 영구화("조용한 false 금지" 위반; 동형 만료인 scenario certification·
+> AI governance evidence는 집행됨). **런타임 게이트가 만료 경과 시 `SITE_PROFILE_BLOCKED` 복귀** + 조회 표면
+> `approval_status=expired`. ③ `site_profile_approvals`는 INSERT만 있고 조회 경로 부재 — 승인 사후 감사가 DB
+> 직접 조회 의존. **GET /v1/sites/{id}/approvals 신설**(site.read).
+> **역호환**: DDL은 uuid→text 확장(기존 UUID 값 전부 유효한 text). 응답 추가 필드는 additive. `expired`는
+> `approval_status` 신규 값이나 기존 소비자는 pending/approved만 생산하던 DB에서 만료 설정 자체가 불가능했으므로
+> 실데이터 무영향.
+
+| 항목 | 위치 | 조치 |
+|---|---|---|
+| DDL | `db/migration_core_entities.sql` site_profiles·site_profile_approvals | `approved_by` uuid→text(비-UUID OIDC sub 수용) + 주석에 캐스트 금지 규범 |
+| 명령 | `app/src/api/sites.ts` applySiteApproval | `::uuid` 캐스트 2건 제거(UPDATE·감사 INSERT) |
+| 런타임 게이트 | `app/src/worker/runtime-worker-run-support.ts` | red 게이트를 `!approved OR approval_expired`로 확장(만료=미승인과 동일 차단) |
+| 조회 | `app/src/api/reads-catalog.ts` mapSite·신규 라우트 | `approval_status=pending\|approved\|expired` + `approved_by`/`approved_at`/`approval_expires_at` 투영, `GET /v1/sites/{id}/approvals`(최신 20건) |
+| 계약 | `api-surface.md` §6 sites | GET 목록/상세 필드·approve 만료 의미론·approvals 이력 행 추가 |
+| 콘솔 | `web/src/views/security/` | 승인 다이얼로그(사유·만료 입력, UTC ISO 전송)·`expired` 배지·승인 이력 열람 |
+| 검증 | `app/test/api-sites-approve.int.ts`·`app/test/runtime-worker-claim.int.ts`·web vitest | 비-UUID sub 승인 200·만료 시 SITE_PROFILE_BLOCKED·이력 조회·재승인 해제 |
+
+## v2.32 패치 로그 (레다크션 terminal 실패 알림 — ops-defaults §6 "failed+알림"의 알림 절반 이행)
+
+> **검증된 계약 미이행 해소**(3관점 감사 2026-07-03 A4-3 confirmed). ops-defaults §6·impl-contracts §B는 레다크션
+> 실패 N회 초과 시 "**failed + 알림**"을 계약하지만 코드는 failed 전이만 이행 — 알림 채널이 0이었다. 더 나쁘게,
+> failed 행은 RLS(`artifacts_visible_isolation`, D8-A1 read 게이트)가 앱 롤에서 숨기므로 **증빙이 영구 열람 불가가
+> 되는데 관리자에게 어떤 신호도 가지 않았다**("조용한 실패 금지" 위반). 해소: ① 워커가 finalize CAS 성공과 같은
+> tx에서 앱-가시 원장 `artifact_redaction_failures`에 push 기록(증빙 내용/객체참조 미저장, 메타만) ② 운영 알림
+> 소스 `artifact_redaction` 신설(critical, subject_type=artifact, run 딥링크) ③ 자동 발화 소스 등록
+> (detected_at=원장 행 타임스탬프라 세대 안정 — 무인 외부 통지 포함).
+> **역호환**: 신규 테이블/소스는 additive. D8-A1(read 게이트)은 그대로 — 알림은 실패 사실의 메타만 표면화.
+
+| 항목 | 위치 | 조치 |
+|---|---|---|
+| DDL | `db/migration_core_entities.sql` | `artifact_redaction_failures`(tenant RLS, 아티팩트당 1행 UNIQUE, artifacts 복합 FK) + smoke/static 3곳 동기(migration_smoke·db-static) |
+| 워커 | `app/src/worker/artifact-redaction-processor.ts` | finalize에서 status=failed 확정 시 같은 tx로 원장 INSERT(ON CONFLICT 방어) |
+| 알림 | `app/src/api/ops-alerts-artifact-redaction.ts`(신규)·`ops-alerts.ts`·`ops-alert-routes.ts` | source=`artifact_redaction` 계산·by-id·ack + 자동 발화 allowlist 등록 |
+| 계약 | `api-surface.md` ops-alerts | source enum + 계산 의미론(유일한 표면임을 명시) |
+| 콘솔 | `web/src/views/orchestration/OpsAlertCenter.tsx` | 소스 필터/라벨 "증빙 보호 실패" |
+| 검증 | `api-ops-alerts.int`·`runtime-worker-claim.int`·`ops-alert-routes.unit` | 목록/필터/ack/딥링크/누출0 + failed 전이 tx원장 push + 라우트 파서 |
+
+## v2.33 패치 로그 (보안 예외 R10 이행 — security_exception→aborting 도달 + security_abort 알림)
+
+> **검증된 계약 미이행 해소**(3관점 감사 2026-07-03 R3-1 confirmed). state-machine.md **R10**(running +
+> security_exception → aborting, "SSE close + browser drain + 알림")과 runtime-contract
+> `EXECUTOR_OUTCOME_MAPPING_CONTRACT.securityFailure`(R10 + `requiresRunAbortJob` + `requiresNotificationPort`)가
+> 계약돼 있으나, 인터프리터가 `failed_security` step 을 `fail_system` 터미널로 **합류**시켜 R10 이 프로덕션에서
+> 도달 불가였다 — 보안 차단(도메인 정책 위반·프롬프트 인젝션 등)이 일반 시스템 실패로 위장되고 알림 0.
+> 해소: ① 인터프리터가 `fail_security` 터미널을 독립 산출(+fallback 티어 전환 재시도 금지 — 다른 셀렉터로
+> 차단 행위 재시도는 정책 우회) ② 드라이버가 R10(→aborting, failure_reason 기록)과 R23(→cancelled, H7
+> human-task cancel)을 완결 — 자신이 lease 소유자라 별도 run_abort 잡 대신 직접 종결(외부발신 abort 용 drain
+> claim 은 lease 반납 후 영구 실패해 aborting 고착 위험; 어휘 체인 abort→cancelled 유지) ③ 운영 알림 소스
+> `security_abort` 신설(critical, subject_type=run, error-catalog `exceptionClass=security` 코드 파생 —
+> 하드코딩 금지) + 자동 발화 등록(detected_at=`runs.ended_at`, 안정 세대).
+> **역호환**: 신규 소스/유니온 멤버는 additive. 종전에 failed_system 으로 기록되던 보안 차단이 cancelled 로
+> 종결되는 것은 **계약이 원래 요구한 동작의 복원**이다(failed_system 소비자는 순수 시스템 실패만 남아 정밀해짐).
+
+| 항목 | 위치 | 조치 |
+|---|---|---|
+| 런타임 | `app/src/runtime/ir-interpreter.ts` | `failed_security`→`fail_security` 터미널 독립 + fallback 티어 즉시 채택(전환 재시도 금지) + `terminalToStatus` 투영 정직화 |
+| 드라이버 | `app/src/runtime/run-step-driver.ts` | `fail_security` 분기: R10(security_exception, class=security)→R23(drain_ok) 완결 + failure_reason + H7 + artifact lifecycle |
+| 계약 | `ts/runtime-contract.ts` `VisualEvidenceVideoStopInput` | terminal 유니온에 `fail_security` 추가(보안 종결도 실패 증적 비디오 보존) |
+| DDL | `db/migration_core_entities.sql` | ops-alert acks/attempts/deliveries source CHECK + 저장 라우트 allowlist 에 `security_abort` |
+| 알림 | `app/src/api/ops-alerts-security-abort.ts`(신규)·`ops-alerts.ts`·`ops-alert-routes.ts` | runs(cancelled+security failure_reason) 계산 소스·by-id + 자동 발화 allowlist |
+| 계약 | `api-surface.md` ops-alerts | source enum + `security_abort` 계산 의미론 |
+| 콘솔 | `web/src/views/orchestration/OpsAlertCenter.tsx`·`web/src/api/types.ts` | 소스 필터/라벨 "보안 차단 중단" |
+| 검증 | `run-step-driver.int`·`api-ops-alerts.int`·interpreter unit | security step→cancelled 종결·R10/R23 이벤트·알림 계산/ack·fallback 미전환 |
+
+## v2.34 패치 로그 (패치로그 공백 백필 — v2.30 이후 미기록 계약 변경 42건 소급 색인)
+
+> **검증된 SSoT 공백 해소**(3관점 감사 2026-07-03 R1-3). 패치로그가 v2.30(2026-06-25) 이후 멈춘 사이
+> 계약 파일(루트 `.md`·`schema/`·`ts/`·`db/`)을 변경한 커밋 44건 중 **42건이 근거 기록 없이 반영**됐다
+> (v2.31/v2.32만 기록). 본 엔트리는 그 42건을 소급 색인한다 — 개별 상세 근거는 해당 PR/커밋 메시지·리뷰에
+> 있고, 여기서는 계약 표면의 변화와 의도를 복원해 "contracts가 진실원천"의 추적성을 되살린다.
+> 공백의 대표 위험 사례: ① 신규 오류코드 2건(`AI_GOVERNANCE_POLICY_BLOCKED`·`TENANT_OFFBOARDING`)이 무기록
+> 반입 ② v2.30 계약 자체의 서술 정정(#349)이 무기록 ③ PR #377 번들의 Phase 9(계약 11파일 ~1,182줄, 신규
+> 테이블 10)가 커밋 본문 없이 병합. **재발 방지**: 계약 파일 변경은 패치로그 엔트리를 동반한다(v2.31부터 복원된
+> 규율). 백필 엔트리 자체는 소급 기록이므로 개별 항목에 새 버전 번호를 부여하지 않는다.
+
+| 일자 | PR | 커밋 | 계약 표면 | 변경 요지 |
+|---|---|---|---|---|
+| 06-25 | #336 | b417ab71 | api-surface | `GET /v1/runs/trends` 신설 — 일별 run outcome 추세(KST 버킷, 분모 0→null) |
+| 06-25 | #341 | b035faf4 | api-surface | `GET /v1/gateway/call-summary` 신설 — 모델별 콜/토큰/비용 집계 |
+| 06-25 | #344 | 9b9c0870 | api-surface | `POST /v1/dlq/replay-all` 신설 — kind별 일괄 재처리(cap 500, per-item tx) |
+| 06-25 | #347 | ea667d8b | api-surface·state-machine·core DDL | human-task escalate 기능화(assignee-release 모델, H5/R15, `escalation_*` 컬럼) |
+| 06-25 | #349 | da84c2aa | api-surface·ir-static-validation | **v2.30 계약 서술 정정** — 은퇴한 `node.<handler>.result` 네임스페이스를 `human_tasks.result` 재조회로, §5 오류표 `IR_SCHEMA_INVALID` 정정 |
+| 06-25 | #353 | 2c62e850 | api-surface·DDL·ts 3종 | 시나리오 prod 승격 maker-checker — `scenario_promotion_requests`(요청자≠승인자), RBAC `scenario.promote.approve` |
+| 06-25 | #356 | d78b4add | api-surface | `GET /v1/credentials/concurrency` 신설 — 정책+활성 lease 사용량 |
+| 06-25 | #362 | 546b6e9e | db/roles.sql | DB 최소권한 롤 분리 — `rpa_migrator`(DDL) vs `rpa_app`(런타임 DML, no BYPASSRLS) |
+| 06-26 | #368 | f4001c6e | api-surface·ts 3종 | 자격증명 **참조** 등록 API(`POST/DELETE /v1/credentials`, `credential.manage`, 값 필드 loud 거부 — SecretStore resolve-only 경계 유지) |
+| 06-26 | #370 | df2a8ec1 | api-surface·DDL·ts | 전용 워커 풀 — `worker_pools`/`worker_pool_assignments`, graphile `pool:<key>` 친화, `worker_pool.manage` |
+| 06-26 | #373 | dcbcdaf6 | api-surface·auth-rbac·DDL·ts | 엔터프라이즈 ALM/RBAC v1 — `scenario_releases`·`scenario_environment_bindings`·`scenario_release_events`·`principal_role_assignments`(+events), `scenario_release.*` RBAC |
+| 06-26 | #374 | f9f0976f | api-surface | worker-pools 응답 `pending{queued_runs,oldest_queued_at}` — 무서빙 풀 지연 신호 |
+| 06-26 | #376 | 1c88fde3 | api-surface·concurrency DDL | 자격증명 바인딩 운영 메타(`label`/`registered_by`/`registered_at`) |
+| 06-26 | #377 | a16df579 | api-surface·auth-rbac·DDL·ts | Phase 6 운영 거버넌스 — `credential_binding_events`·`run_reruns`, `run.prioritize` |
+| 06-26 | #377 | f55ba42f | api-surface·state-machine·DDL·ts | Phase 7 — `worker_pool_memberships`·`run_pause_requests`, 운영자 pause 상태(R5b) |
+| 06-26 | #377 | 9b1ac617 | api-surface·auth-rbac·DDL·ops-defaults·security-contracts·schema | Phase 8 — SCIM 프로비저닝(`scim_providers`·`scim_group_role_mappings`, `scim-principal.schema.json`) + `ops_alert_acknowledgements` |
+| 06-26 | #377 | 15fa27fc | security-middleware | staging S3 artifact producer 게이트 조임 |
+| 06-30 | #377 | 1131e934 | **계약 11파일(~1,182줄)** | Phase 9 도입 준비 — `ai_governance_evidence`·`roi_actual_evidence`·`automation_adoption_evidence`·`integration_handoffs`(+receipts·dispatch_attempts)·`ops_notification_deliveries`(+attempts)·`production_readiness_evidence`·`audit_verifier_runs` 신설 + RBAC 다수. **최대 무기록 표면** |
+| 06-30 | #377 | 98a9ce1a | DDL·error-catalog·ts | Phase 10 — `ai_runtime_policies` + **신규 오류코드 `AI_GOVERNANCE_POLICY_BLOCKED`** |
+| 06-30 | #377 | 59cf7531 | schema 2종·api-surface | Phase 11 — `studio-graph.schema.json` 신설 |
+| 06-30 | #377 | 411e5769 | api-surface·DDL·ts | Phase 11 — `studio_projects`·`studio_graph_versions`·`studio_validation_runs`·`connector_profiles`·`connector_certifications` |
+| 06-30 | #377 | cb3afeab | api-surface·DDL·ts | Phase 12 — `process_mining_imports`(임포트 계보) |
+| 06-30 | #377 | c64cc807 | api-surface | Phase 13 — browser-helper 스코프 문구 정리 |
+| 06-30 | #377 | 3d734b05 | api-surface·auth-rbac·DDL·ops-defaults·ts | Web Attended 실행·재개 원장 — `web_attended_run_requests`·`run_resume_requests`, human_tasks 테넌트 복합 UNIQUE |
+| 07-02 | #378 | f7189f1d | DDL·ts | 결재 fan-out ① — `approval_row_claims` 원장 + `POST /v1/approvals/fan-out`(행별 검토 run 스폰, **자동 승인 아님**) |
+| 07-02 | #379 | 00e6db3a | DDL·runtime-contract | fan-out ② — `scenarios.auto_fan_out` + `approval_fan_out_sweeper` 잡 |
+| 07-02 | #380 | 03bf7362 | DDL | fan-out ③ — `approval_row_claims.mode` CHECK `review|decide`(이중 처리 상호배제) |
+| 07-02 | #381 | e9460021 | api-surface | runs 읽기 시나리오 식별 투영(`scenario_id`/`scenario_name` JOIN·전 버전 필터·rerun prefill `params`) |
+| 07-02 | #383 | 162d4890 | api-surface | human-task `unassigned=true` 읽기(미배정 가시화) |
+| 07-02 | #384 | 5a913998 | api-surface | human-task `terminal=false`/`active=true` fail-closed 필터 |
+| 07-02 | #385 | 82d65936 | api-surface·ts | 세션 캡처 정직 capabilities·감사 date export·adoption evidence packet |
+| 07-02 | #386 | 68e02565 | api-surface | 콘솔 사용성 S9~S12(trace 깊이·JWT 만료 UX·공유 오류 요약·a11y) |
+| 07-02 | #387 | dec383fe | api-surface·DDL | 자동 발화 초기 attempt 부분 UNIQUE(멱등 하드닝, 수동 발송·재시도 행 보존) |
+| 07-02 | #388 | b62c200a | api-surface·auth-rbac·ts 3종 | `GET /v1/offboarding/export` 메타 CSV(admin, `tenant_data` RBAC, CSV 수식 가드) |
+| 07-02 | #389 | ff10a328 | api-surface·DDL | **`run_mode`(test\|prod) 도입** — 생성/조회/재실행/월간 성과(운영 지표는 기본 prod) |
+| 07-02 | #390 | 39b8dfbe | DDL·ts | 알림 라우팅 저장소 초안 + `session_expiry` 소스 |
+| 07-02 | #390 | 23c81b22 | api-surface·auth-rbac·ts | S4b 완성 — `session_expiry` 전 구간(목록/필터/ack/자동발화), `/v1/ops-alert-routes` CRUD, Fastify maxParamLength 300 |
+| 07-03 | #392 | 9a223218 | api-surface·ts | ROI actuals 반자동 제안 read(`run_mode=prod` 집계 prefill, 쓰기 없음) |
+| 07-03 | #397 | 354a80e6 | api-surface·auth-rbac·ts 2종 | 오프보딩 O1 — raw export(JSON Lines, keyset cursor, `tenant_data.export` + 감사 필수 액션 등록, 시크릿/토큰/쿠키 제외) |
+| 07-03 | #398 | 8c294c6a | 계약 9파일 | 오프보딩 O2 — `tenant_offboarding_requests` 원장 + purge 4 API + SoD(자기승인 403) + **신규 오류코드 `TENANT_OFFBOARDING`** |
+| 07-03 | #399 | 554dca69 | api-surface | 오프보딩 O3 — 전역 잠금 preHandler(approved/purging 테넌트 비-GET 409) + `capabilities.offboarding` |
+| 07-03 | #400 | 142b5d35 | ops-defaults·runtime-contract·security-middleware | 오프보딩 O4 — `tenant_offboarding_purge` 잡(BYPASSRLS 유스케이스 확장, FK 역순 purge 레지스트리, legal_hold 존중) |

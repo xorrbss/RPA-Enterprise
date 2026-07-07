@@ -150,3 +150,25 @@ describe("errorCodeLabel — bare 코드 문자열 라벨 + raw 폴백", () => {
     expect(errorCodeLabel("TOTALLY_UNKNOWN")).toBe("TOTALLY_UNKNOWN");
   });
 });
+
+// U3-2: 종결(터미널) 문맥 라벨 — 재시도 소진 후 배너/목록에서 "재시도됩니다" 미래형이 사실과 모순되지 않게
+// 과거형+조치형으로 덮어쓴다. 비-터미널 표면과 미매핑 코드는 기존 규칙 그대로.
+describe("errorCodeLabel terminal — 종결 문맥 미래형 재시도 문구 교체", () => {
+  test.each([
+    ["LLM_BACKEND_UNAVAILABLE"],
+    ["BROWSER_CRASH"],
+    ["CDP_DISCONNECTED"],
+    ["VERIFY_FAILED"],
+  ])("terminal code=%s → 미래형 '재시도됩니다' 미노출 + 조치형", (code) => {
+    const label = errorCodeLabel(code, { terminal: true });
+    expect(label).not.toBe("재시도됩니다.");
+    expect(label).toMatch(/실패|종료|소진/);
+    expect(label).toMatch(/다시 실행|확인/);
+  });
+
+  test("terminal 미지정 코드는 기본 라벨 유지(계약 userMessage 미러)", () => {
+    expect(errorCodeLabel("LLM_BACKEND_UNAVAILABLE")).toBe("재시도됩니다.");
+    expect(errorCodeLabel("SITE_CIRCUIT_OPEN", { terminal: true })).toBe("일시적으로 수집이 중단되었습니다.");
+    expect(errorCodeLabel("TOTALLY_UNKNOWN", { terminal: true })).toBe("TOTALLY_UNKNOWN");
+  });
+});

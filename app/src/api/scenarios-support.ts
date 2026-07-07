@@ -18,15 +18,14 @@ import type {
 } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
 import { compileScenario } from "./compile-pipeline";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { canonicalRequestHash, completeIdempotencyInTx } from "./idempotency";
 import { inferRuntimeTargetForStartUrl } from "./scenario-generation-target";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps, UUID_RE } from "./server-shared";
 import { promoteActsToDeterministic } from "./scenario-promotion";
 import { loadRunActionPlans } from "./scenario-promotion-store";
-import type { ScenarioCertificationStatus, ScenarioGovernanceStage } from "./scenario-certification";
+import { mapScenarioCertification, type ScenarioCertificationStatus, type ScenarioGovernanceStage } from "./scenario-certification";
 
-export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface CommandResponse {
@@ -67,6 +66,21 @@ export interface ScenarioVersionDetailRow extends ScenarioVersionListRow {
   scenario_id: string;
   name: string;
   ir: unknown;
+}
+
+export function mapScenarioVersion(row: ScenarioVersionListRow | ScenarioVersionDetailRow): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    version_id: row.version_id,
+    version: row.version,
+    promotion_status: row.promotion_status,
+    certification: mapScenarioCertification(row),
+    created_at: row.created_at,
+    promoted_at: row.promoted_at,
+  };
+  if ("scenario_id" in row) body.scenario_id = row.scenario_id;
+  if ("name" in row) body.name = row.name;
+  if ("ir" in row) body.ir = row.ir;
+  return body;
 }
 
 export async function promoteScenario(

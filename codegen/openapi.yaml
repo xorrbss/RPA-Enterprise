@@ -69,6 +69,20 @@ tags:
     description: Metadata-only AI governance evidence and runtime enforcement policy.
   - name: Sites
     description: 사이트 risk 승인 (api-surface §7)
+  - name: Search
+    description: 콘솔 전역 검색 (api-surface §0.8)
+  - name: WorkerPools
+    description: 전용 워커 풀 레지스트리 · 테넌트 배정 · 워커 membership (api-surface §1.6, DG-3)
+  - name: Credentials
+    description: 자격증명 SecretRef 동시성 정책 레지스트리 — 시크릿 값 미수신 (api-surface §1.6, DG-4)
+  - name: ScenarioReleases
+    description: Enterprise ALM 릴리스 · 환경 바인딩 (api-surface §2.1)
+  - name: Rbac
+    description: RBAC role assignment 원장 — manual grant/revoke (api-surface §3)
+  - name: Scim
+    description: SCIM provider 등록 · group-role mapping · principal 동기화 (api-surface §3)
+  - name: Approvals
+    description: 결재(approval) 명령 — 하이웍스 결재 인박스 Model A (api-surface §7)
 
 # 전 엔드포인트 기본 인증(api-surface §0.1 / auth-rbac §3: tenant_id·roles는 JWT 클레임에서 도출).
 # 공개 엔드포인트 없음. 개별 operation에서 override하지 않는 한 이 전역 보안이 적용된다.
@@ -264,6 +278,44 @@ paths:
           $ref: '#/components/responses/Error'
 
   # ============================================================
+  # 0.8 Global Search — api-surface §0.8
+  # ============================================================
+  /search:
+    get:
+      tags: [Search]
+      operationId: searchEverything
+      summary: 전역 검색
+      description: >
+        콘솔 전역 검색. q가 2자 미만이면 빈 결과를 반환한다. 검색 대상은 runs, scenarios, human_tasks,
+        principals, credential_concurrency_policies이며 모두 tenant RLS 범위 안에서 조회한다.
+        run.read 권한.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+      responses:
+        '200':
+          description: 검색 결과(items; next_cursor는 항상 null).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResultPage'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        default:
+          $ref: '#/components/responses/Error'
+
+  # ============================================================
   # 1. Runs (실행 제어) — api-surface §1
   # ============================================================
   /runs:
@@ -326,6 +378,67 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RunPage'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /runs/summary:
+    get:
+      tags: [Runs]
+      operationId: getRunSummary
+      summary: 실행 결과 집계
+      description: >
+        테넌트 run outcome+캐시 집계(관찰성). by_status는 runs.status별 정확 카운트(부재 status 키 생략),
+        success_rate는 completed/(completed+failed_business+failed_system) — 분모 0이면 null(cancelled 제외),
+        cache.hit_rate는 hit/(non-bypass 조회) — 조회 0이면 null. RLS 스코프, 서버 GROUP BY(목록 근사 아님).
+        run_mode 지정 시 해당 실행 구분만 집계(cache는 runs 조인으로 동일 모집단). run.read 권한.
+      parameters:
+        - name: run_mode
+          in: query
+          description: 시험/운영 실행 구분 필터. 생략 시 전체 실행. 대시보드 카드와 드릴다운 목록의 모집단 통일용.
+          required: false
+          schema:
+            $ref: '#/components/schemas/RunMode'
+      responses:
+        '200':
+          description: run outcome + 캐시 집계.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunSummary'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /runs/trends:
+    get:
+      tags: [Runs]
+      operationId: getRunTrends
+      summary: 일별 실행 추세
+      description: >
+        일별 run outcome 추세(summary의 시계열 확장). 윈도우 내 모든 날을 포함한다(0건 날도 — 스파크라인 x축
+        연속). success_rate는 completed/(completed+failed_business+failed_system)이며 그 날 분모가 0이면
+        null(0/0 단정 금지). Asia/Seoul 일 경계, RLS 스코프, 서버 GROUP BY. run.read 권한.
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 90
+            default: 30
+        - name: run_mode
+          in: query
+          description: 시험/운영 실행 구분 필터. 생략 시 전체 실행(summary 와 동형).
+          required: false
+          schema:
+            $ref: '#/components/schemas/RunMode'
+      responses:
+        '200':
+          description: 일별 추세 points.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunTrends'
         default:
           $ref: '#/components/responses/Error'
 
@@ -464,6 +577,172 @@ paths:
           $ref: '#/components/responses/Error'        # RUN_NOT_FOUND
         '409':
           $ref: '#/components/responses/Error'        # RUN_ALREADY_TERMINAL / RUN_ABORTED / WORKITEM_CHECKOUT_CONFLICT(suspending)
+        default:
+          $ref: '#/components/responses/Error'
+
+  /runs/{run_id}/rerun:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    post:
+      tags: [Runs]
+      operationId: rerunRun
+      summary: 실패 실행 재실행
+      description: >
+        failed_business|failed_system source run에만 허용. mode=same_input은 source의 params·as_of·model·
+        run_mode를 보존하고, edited_input은 제출된 params를 새 child run에 저장한다(params.as_of가 없으면
+        서버 시각으로 1회 고정, run_mode는 source를 그대로 따름). source/child 관계는 run_reruns lineage에,
+        감사는 run.rerun으로 남긴다(payload는 params_sha256 같은 비민감 요약만). run.rerun 권한(operator+).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunRerunRequest'
+      responses:
+        '201':
+          description: 실패 run의 자식 run 생성·enqueue(status=queued). run.created(child) 이벤트.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunRerunResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN / SITE_PROFILE_BLOCKED
+        '404':
+          $ref: '#/components/responses/Error'        # RUN_NOT_FOUND / RESOURCE_NOT_FOUND
+        '409':
+          $ref: '#/components/responses/Error'        # WORKITEM_CHECKOUT_CONFLICT(source가 failed_business|failed_system 아님 / idempotency in-flight)
+        '412':
+          $ref: '#/components/responses/Error'        # SCENARIO_VERSION_CONFLICT
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /runs/{run_id}/resume:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    post:
+      tags: [Runs]
+      operationId: resumeRun
+      summary: 중단 실행 재개 요청
+      description: >
+        운영자 resume은 HITL 우회가 아니라 복구 명령. suspended run은 unresolved human task
+        (open|assigned|in_progress|escalated)가 없을 때만 R13(resume_requested) 적용 + run_resume enqueue +
+        run.resume 감사. 이미 resume_requested면 상태 변경 없이 run_resume 재인큐(유실 job 복구). 같은 멱등
+        tx 안에 run_resume_requests 원장 1행을 기록한다(api-surface §1.1). run.resume 권한(operator+).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunCommandReasonRequest'
+      responses:
+        '202':
+          description: 재개 요청 수락(suspended → resume_requested 또는 resume_requested 재인큐).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunResumeCommandResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RUN_NOT_FOUND
+        '409':
+          $ref: '#/components/responses/Error'        # WORKITEM_CHECKOUT_CONFLICT(human_task_unresolved / run_resume_requires_suspended_or_resume_requested / idempotency in-flight)
+        '412':
+          $ref: '#/components/responses/Error'        # SCENARIO_VERSION_CONFLICT
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /runs/{run_id}/pause:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    post:
+      tags: [Runs]
+      operationId: pauseRun
+      summary: 실행 일시정지 요청
+      description: >
+        control-plane이 run 상태를 직접 바꾸지 않고 run_pause_requests에 durable pause intent를 남긴다.
+        런타임만 이 intent를 소비해 다음 safe node boundary에서 R5b(operator_pause_requested)로 suspending에
+        진입하고 bookmark.reason="operator_pause"와 resume token을 저장한다. 이미 open pause request가 있으면
+        같은 shape로 replay하고, 이미 operator-pause bookmark로 suspended이면 200 + status=suspended를
+        반환한다. suspended 이후 재개는 기존 resume 경로. run.pause 권한(operator+).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunCommandReasonRequest'
+      responses:
+        '202':
+          description: pause intent 기록(status=pause_requested, pause_request_id 포함).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunPauseCommandResponse'
+        '200':
+          description: 이미 operator-pause bookmark로 suspended인 run(status=suspended).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunPauseCommandResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RUN_NOT_FOUND
+        '409':
+          $ref: '#/components/responses/Error'        # RUN_ALREADY_TERMINAL / WORKITEM_CHECKOUT_CONFLICT(run_pause_requires_running / idempotency in-flight)
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /runs/{run_id}/priority:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    post:
+      tags: [Runs]
+      operationId: prioritizeRun
+      summary: 대기 실행 우선순위 변경
+      description: >
+        run priority는 low|medium|high|critical로 닫힌다. 아직 worker가 잡지 않은 queued run에만 허용 —
+        claimed 이상은 순서를 바꾼 척하지 않고 WORKITEM_CHECKOUT_CONFLICT(details.reason=
+        "run_priority_requires_queued_status")로 거부한다. 변경 시 원장 priority 갱신 + 새 run_claim을
+        Graphile priority로 재인큐(stale claim은 worker claim 단계 no-op) + run.prioritize 감사.
+        run.prioritize 권한(operator+).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunPriorityRequest'
+      responses:
+        '200':
+          description: queued run의 priority 갱신 + run_claim 재인큐.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunPriorityResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RUN_NOT_FOUND
+        '409':
+          $ref: '#/components/responses/Error'        # WORKITEM_CHECKOUT_CONFLICT(run_priority_requires_queued_status / idempotency in-flight)
+        '412':
+          $ref: '#/components/responses/Error'        # SCENARIO_VERSION_CONFLICT
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID(무효 priority)
         default:
           $ref: '#/components/responses/Error'
 
@@ -1289,6 +1568,313 @@ paths:
           $ref: '#/components/responses/Error'
 
   # ============================================================
+  # 1.6c Ops capacity — bot pools · credential concurrency · worker pools (api-surface §1.6)
+  # ============================================================
+  /bot-pools:
+    get:
+      tags: [OpsAlerts, WorkerPools]
+      operationId: listBotPools
+      summary: 봇 풀 용량 조회
+      description: >
+        운영 용량 표면 read model. 신규 bot_pools 테이블 없이 worker_pools/worker_pool_memberships,
+        기존 workers(infra), tenant-scoped browser_leases/runs/run_triggers를 합산한 synthetic browser pool을
+        계산한다. capacity_slots는 assigned pool 기준 최근 heartbeat가 있고 circuit이 닫힌 active browser
+        worker 수이며 stale worker(ops-defaults worker.stale_threshold, 기본 2분)는 용량 슬롯에서 제외한다.
+        leases/queue는 요청 테넌트 범위로만 계산하고, 만료된 reserved/active browser lease가 있으면
+        health=critical. ops_alert.read 권한.
+      responses:
+        '200':
+          description: synthetic bot pool 목록(next_cursor는 항상 null).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BotPoolPage'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        default:
+          $ref: '#/components/responses/Error'
+
+  /credentials/concurrency:
+    get:
+      tags: [Credentials]
+      operationId: listCredentialConcurrencyPolicies
+      summary: 자격증명 동시성 정책 목록
+      description: >
+        credential_concurrency_policies + 활성 lease 계산(active_leases=status='active'이고 미만료인 lease 수).
+        정책 미설정 시 빈 목록(기본 동시성 1). DG-4 메타(label·registered_by/at)는 표시명·마지막 등록자·시각이며
+        시크릿 값이 아니다. RLS 테넌트 스코프, ops_alert.read 권한.
+      responses:
+        '200':
+          description: 동시성 정책 목록(next_cursor는 항상 null).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConcurrencyPolicyPage'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        default:
+          $ref: '#/components/responses/Error'
+
+  /credentials:
+    post:
+      tags: [Credentials]
+      operationId: registerCredential
+      summary: 자격증명 SecretRef 동시성 정책 등록
+      description: >
+        시크릿 값 미수신 — SecretRef 경로 식별자만 등록한다(값은 out-of-band Vault/KMS). value/secret/
+        password/token 등 값 필드가 존재하면 거부(422). credential_ref는 rpa/<env>/<runtime>/<purpose>/<name>
+        규약 + purpose=자격증명(executor). label은 운영자 표시명(선택, 값 아님), registered_by는 처리자 자동
+        기록. 동일 (credential_ref, site_profile_id) 재등록은 max_concurrency·label upsert.
+        credential.manage(admin, DG-4).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialRegisterRequest'
+      responses:
+        '200':
+          description: 등록/upsert된 동시성 정책.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialRegisterResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND(site 부재)
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID(값 필드/ref 문법/site/max)
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Credentials]
+      operationId: deleteCredential
+      summary: 자격증명 동시성 정책 삭제
+      description: >
+        query의 (credential_ref, site_profile_id) 정책을 삭제한다. 활성·미만료 lease가 있으면 거부
+        (in-flight run 보호). credential.manage(admin, DG-4).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: credential_ref
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: site_profile_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 삭제 완료.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialDeleteResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '409':
+          $ref: '#/components/responses/Error'        # WORKITEM_CHECKOUT_CONFLICT(활성 lease)
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /worker-pools:
+    get:
+      tags: [WorkerPools]
+      operationId: listWorkerPools
+      summary: 워커 풀 레지스트리·배정 조회
+      description: >
+        전용 워커 풀 레지스트리(풀=인프라 전역) + 호출 테넌트 배정(assigned_pool_key, RLS) + 대기 실행 지연
+        신호(pending=호출 테넌트의 queued run 수·가장 오래된 시각 — 배정 풀에 워커가 없으면 디스패치가 안 돼
+        적체가 보이게, stuck 가시화) + worker membership summary(total/active/stale/worker_ids).
+        worker_pool.manage(admin, DG-3).
+      responses:
+        '200':
+          description: 워커 풀 목록 + 테넌트 배정 + pending 신호.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerPoolsResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [WorkerPools]
+      operationId: createWorkerPool
+      summary: 워커 풀 생성/설명 갱신(upsert)
+      description: >
+        pool_key는 소문자 영숫자+_-(default 예약). 풀 생성 또는 설명 갱신(upsert).
+        worker_pool.manage(admin).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkerPoolCreateRequest'
+      responses:
+        '200':
+          description: 생성/갱신된 풀.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerPoolCreateResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID(pool_key 형식)
+        default:
+          $ref: '#/components/responses/Error'
+
+  /worker-pools/{pool_key}:
+    parameters:
+      - name: pool_key
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      tags: [WorkerPools]
+      operationId: deleteWorkerPool
+      summary: 워커 풀 삭제
+      description: >
+        테넌트 배정이 참조 중이면 거부(pool_in_use — 먼저 해제). worker_pool.manage(admin).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: 삭제 완료.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerPoolDeleteResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '409':
+          $ref: '#/components/responses/Error'        # WORKITEM_CHECKOUT_CONFLICT(pool_in_use)
+        default:
+          $ref: '#/components/responses/Error'
+
+  /worker-pool:
+    put:
+      tags: [WorkerPools]
+      operationId: assignWorkerPool
+      summary: 호출 테넌트 워커 풀 배정
+      description: >
+        호출 테넌트를 풀에 배정한다(테넌트당 1풀, upsert). 미배정 테넌트의 run은 default 풀.
+        /worker-pools(레지스트리)와 구분되는 테넌트 자기-배정 단수 표면. worker_pool.manage(admin).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkerPoolAssignRequest'
+      responses:
+        '200':
+          description: 배정 반영.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerPoolAssignment'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND(미존재 풀)
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [WorkerPools]
+      operationId: unassignWorkerPool
+      summary: 호출 테넌트 워커 풀 배정 해제
+      description: >
+        호출 테넌트 배정 해제(→ default 풀). 멱등. worker_pool.manage(admin).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: 배정 해제(assigned_pool_key=null).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerPoolAssignment'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        default:
+          $ref: '#/components/responses/Error'
+
+  /worker-pools/{pool_key}/workers/{worker_id}:
+    parameters:
+      - name: pool_key
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: worker_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [WorkerPools]
+      operationId: assignWorkerToPool
+      summary: 워커를 풀에 배정/교체
+      description: >
+        browser worker를 풀에 배정하거나 기존 배정을 교체한다. worker_pool.manage(admin).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: membership 배정(assigned=true).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerPoolMembership'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND(pool/worker 없음 또는 worker_id 형식 무효)
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [WorkerPools]
+      operationId: removeWorkerFromPool
+      summary: 워커 풀 membership 제거
+      description: >
+        worker-to-pool membership을 제거한다. worker_pool.manage(admin).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: membership 제거(assigned=false).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerPoolMembership'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        default:
+          $ref: '#/components/responses/Error'
+
+  # ============================================================
   # 2.5 Scenario Generations — api-surface §2.5
   # ============================================================
   # ============================================================
@@ -1898,6 +2484,179 @@ paths:
             text/csv:
               schema:
                 $ref: '#/components/schemas/OffboardingExportCsv'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /offboarding/export/raw:
+    get:
+      tags: [Offboarding]
+      operationId: exportOffboardingRawData
+      summary: Export offboarding raw data as JSON Lines
+      description: >
+        Export tenant-scoped raw business data for customer offboarding as JSON Lines
+        (one JSON object per line, machine re-importable). The runs section carries the
+        original runs.params; the human_tasks section carries the original payload/result.
+        Credentials, cookies, resolved SecretRef values, resume_token, and bookmark are
+        never included in any export. Artifact bodies are not served here; reuse
+        GET /artifacts/{id}/blob (RLS redaction gate + per-read audit). Every request is
+        recorded as a fail-closed tenant_data.export security audit decision before the
+        body is returned.
+      parameters:
+        - name: section
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/OffboardingRawExportSection'
+        - name: created_at_from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Inclusive lower bound for row created_at.
+        - name: created_at_to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Inclusive upper bound for row created_at.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+          description: Page size (default 1000; values above 5000 are capped to 5000).
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: >
+            JSON Lines page ordered by (created_at, id) DESC. The body contains data rows
+            only; when another page exists the opaque keyset cursor is returned in the
+            x-next-cursor response header (absent on the last page).
+          headers:
+            x-next-cursor:
+              required: false
+              description: Opaque cursor for the next page. Pass as the cursor query parameter.
+              schema:
+                type: string
+          content:
+            application/x-ndjson:
+              schema:
+                $ref: '#/components/schemas/OffboardingRawExportJsonl'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /offboarding/purge-requests:
+    get:
+      tags: [Offboarding]
+      operationId: listOffboardingPurgeRequests
+      summary: List tenant offboarding purge requests
+      description: >
+        List the tenant offboarding deletion ledger (newest first, up to 50 rows). Read scope reuses
+        tenant_data.export. grace_days echoes the configured purge grace period in days.
+      responses:
+        '200':
+          description: Tenant-scoped ledger rows plus the configured grace period.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OffboardingPurgeRequestPage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Offboarding]
+      operationId: createOffboardingPurgeRequest
+      summary: Request tenant data purge (maker)
+      description: >
+        Open a tenant offboarding deletion request (status pending). Requires tenant_data.purge.request
+        (admin) and Idempotency-Key. Only one active (pending/approved/purging) request may exist per
+        tenant; a second request fails with 409 TENANT_OFFBOARDING. Every transition is recorded as a
+        fail-closed tenant_data.purge.* security audit decision in the same transaction.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OffboardingPurgeRequestCreate'
+      responses:
+        '201':
+          description: Pending purge request created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OffboardingPurgeRequest'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /offboarding/purge-requests/{request_id}/decide:
+    post:
+      tags: [Offboarding]
+      operationId: decideOffboardingPurgeRequest
+      summary: Approve or reject a purge request (checker)
+      description: >
+        Maker-checker decision on a pending purge request. Requires tenant_data.purge.approve (admin)
+        and Idempotency-Key. The requester cannot decide their own request (403 self_approval_forbidden).
+        Approval schedules the irreversible purge at now() + grace (purge_after); rejection closes the
+        request. Recorded as a fail-closed tenant_data.purge.approve security audit decision.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: request_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OffboardingPurgeDecision'
+      responses:
+        '200':
+          description: Decided request (approved rows carry purge_after).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OffboardingPurgeRequest'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /offboarding/purge-requests/{request_id}/cancel:
+    post:
+      tags: [Offboarding]
+      operationId: cancelOffboardingPurgeRequest
+      summary: Cancel a pending/approved purge request
+      description: >
+        Cancel an offboarding purge request during the recovery window. Any admin may cancel
+        (tenant_data.purge.request + Idempotency-Key) regardless of who requested or approved —
+        the grace window exists for recovery. Only pending/approved rows are cancellable; purging
+        or terminal rows fail with 409 TENANT_OFFBOARDING (not_cancellable).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: request_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Cancelled request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OffboardingPurgeRequest'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
 
@@ -2702,6 +3461,34 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /scenario-generations/{generation_id}/result-artifacts:
+    parameters:
+      - $ref: '#/components/parameters/GenerationId'
+    get:
+      tags: [ScenarioGenerations, Artifacts]
+      operationId: listScenarioGenerationResultArtifacts
+      summary: 생성 연결 run의 실행 결과 산출물 목록
+      description: >
+        generation 원장에 연결된 run의 screenshot/video 등 실행 결과 artifact 목록(metadata-only, 최신순).
+        run_id=null인 saved/blocked generation은 빈 목록을 반환한다. 본문/blob은
+        GET /v1/artifacts/{artifact_id} 감사 게이트로만 조회한다. artifact.read 권한.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: generation-linked run artifact metadata list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunArtifactList'
+        '403':
+          $ref: '#/components/responses/Error'        # SECRET_ACCESS_DENIED
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND(형식 무효/보이지 않는 generation_id)
+        default:
+          $ref: '#/components/responses/Error'
+
   # ============================================================
   # 2. Scenarios — api-surface §2
   # ============================================================
@@ -2899,6 +3686,101 @@ paths:
           $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
         '422':
           $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID / IR_EXPRESSION_COMPILE_ERROR
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenarios/{scenario_id}/promotion-requests:
+    parameters:
+      - $ref: '#/components/parameters/ScenarioId'
+    post:
+      tags: [Scenarios]
+      operationId: createScenarioPromotionRequest
+      summary: prod 승격 요청(maker)
+      description: >
+        maker-checker prod 승격 요청 — 직접 /promote(admin)와 별개의 인간 승격 경로. 사유(reason) 필수.
+        동일 버전 pending 요청이 이미 있으면 412. operator+(scenario.update).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenarioPromotionRequestCreate'
+      responses:
+        '201':
+          description: 승격 요청 생성(status=pending).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioPromotionRequest'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '412':
+          $ref: '#/components/responses/Error'        # SCENARIO_VERSION_CONFLICT(동일 버전 pending 존재)
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID(사유/버전/already_prod)
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenarios/{scenario_id}/promotion-requests/{request_id}/decide:
+    parameters:
+      - $ref: '#/components/parameters/ScenarioId'
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Scenarios]
+      operationId: decideScenarioPromotionRequest
+      summary: prod 승격 요청 결재(checker)
+      description: >
+        approver+(scenario.promote.approve). 요청자≠승인자(SoD) 강제 — 자기 결재는
+        AUTHZ_FORBIDDEN(self_approval_forbidden). approve 시 해당 버전 prod 승격(직접 promote와 동일
+        compile+CAS).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenarioPromotionDecisionRequest'
+      responses:
+        '200':
+          description: 결재 결과(status=approved|rejected).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioPromotionDecisionResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN(권한 / self_approval_forbidden)
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND(pending 아님)
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID / IR_EXPRESSION_COMPILE_ERROR
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenarios/promotion-requests:
+    get:
+      tags: [Scenarios]
+      operationId: listScenarioPromotionRequests
+      summary: 승격 요청 인박스(approver)
+      description: >
+        pending 승격 요청 + scenario_name(JOIN 투영) — approver 인박스. 정적 라우트(파라메트릭
+        :scenario_id에 가려지지 않음), RLS 스코프. scenario.promote.approve 권한.
+      responses:
+        '200':
+          description: pending 승격 요청 목록(next_cursor는 항상 null).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioPromotionRequestPage'
         default:
           $ref: '#/components/responses/Error'
 
@@ -3124,6 +4006,305 @@ paths:
 
 
   # ============================================================
+  # 2.1 Scenario Releases / Environment Bindings (Enterprise ALM) — api-surface §2.1
+  # ============================================================
+  /scenarios/{scenario_id}/environment-bindings:
+    parameters:
+      - $ref: '#/components/parameters/ScenarioId'
+    get:
+      tags: [ScenarioReleases]
+      operationId: listScenarioEnvironmentBindings
+      summary: 환경 바인딩 조회
+      description: >
+        tenant-scoped logical binding — 환경 값은 dev|staging|prod로 닫힌다. prod binding은 v1 동안 기존
+        scenario_versions.promotion_status='prod'와 mirror되어야 한다. scenario_release.read 권한.
+      responses:
+        '200':
+          description: 현재 환경 바인딩 목록.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioEnvironmentBindingList'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenarios/{scenario_id}/releases:
+    parameters:
+      - $ref: '#/components/parameters/ScenarioId'
+    get:
+      tags: [ScenarioReleases]
+      operationId: listScenarioReleases
+      summary: 릴리스 목록
+      description: scenario별 릴리스 원장 조회. scenario_release.read 권한.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ScenarioReleaseStatus'
+        - name: target_environment
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ScenarioReleaseEnvironment'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: 릴리스 커서 페이지.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioReleasePage'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [ScenarioReleases]
+      operationId: createScenarioRelease
+      summary: 릴리스 생성(draft)
+      description: >
+        source_version과 target_environment로 draft 릴리스를 생성하고 validation report와 package_hash를
+        함께 반환한다. 릴리스 상태는 draft→submitted→approved→deployed, submitted→rejected,
+        deployed→rolled_back만 허용. scenario_release.submit 권한.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenarioReleaseCreateRequest'
+      responses:
+        '201':
+          description: draft 릴리스 + validation report + package_hash.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioRelease'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID / IR_EXPRESSION_COMPILE_ERROR
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenario-releases/{release_id}:
+    parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [ScenarioReleases]
+      operationId: getScenarioRelease
+      summary: 릴리스 상세
+      description: 릴리스 상세 + scenario_release_events 제품 이력. scenario_release.read 권한.
+      responses:
+        '200':
+          description: 릴리스 상세 + events.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioRelease'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenario-releases/{release_id}/submit:
+    parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [ScenarioReleases]
+      operationId: submitScenarioRelease
+      summary: 릴리스 제출
+      description: draft→submitted 전이. scenario_release.submit 권한.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: 제출된 릴리스.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioRelease'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenario-releases/{release_id}/approve:
+    parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [ScenarioReleases]
+      operationId: approveScenarioRelease
+      summary: 릴리스 승인(checker)
+      description: >
+        submitted→approved 전이. maker-checker로 requested_by != actor를 강제한다.
+        target_environment='prod'는 source version certification.valid_for_prod=true와
+        controlled_prod_ready=true가 아니면 IR_SCHEMA_INVALID(reason=certification_required_for_prod|
+        certification_expired_for_prod|controlled_prod_readiness_required)로 fail-closed.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenarioReleaseCommandRequest'
+      responses:
+        '200':
+          description: 승인된 릴리스.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioRelease'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenario-releases/{release_id}/reject:
+    parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [ScenarioReleases]
+      operationId: rejectScenarioRelease
+      summary: 릴리스 반려
+      description: submitted→rejected 전이. 사유(reason) 필수.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenarioReleaseRejectRequest'
+      responses:
+        '200':
+          description: 반려된 릴리스.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioRelease'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenario-releases/{release_id}/deploy:
+    parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [ScenarioReleases]
+      operationId: deployScenarioRelease
+      summary: 릴리스 배포
+      description: >
+        approved→deployed 전이. compile/promote 재검증 후 environment binding을 갱신한다. If-Match로 최신
+        version 충돌을 방지한다. prod 배포는 approve와 동일한 certification/controlled_prod_ready
+        fail-closed 게이트를 거친다.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: 배포된 릴리스 + current binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioReleaseWithBinding'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '412':
+          $ref: '#/components/responses/Error'        # SCENARIO_VERSION_CONFLICT
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID / IR_EXPRESSION_COMPILE_ERROR
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenario-releases/{release_id}/rollback:
+    parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [ScenarioReleases]
+      operationId: rollbackScenarioRelease
+      summary: 릴리스 롤백
+      description: >
+        deployed release 기준 rollback release를 생성한 뒤 approved/deployed로 기록한다(deployed→rolled_back).
+        rollback은 복구 경로라 readiness에 막히지 않지만 certification/최신 version/compile 검증은 유지한다.
+        If-Match로 최신 version 충돌을 방지한다.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: rollback release + current binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioReleaseWithBinding'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '412':
+          $ref: '#/components/responses/Error'        # SCENARIO_VERSION_CONFLICT
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID / IR_EXPRESSION_COMPILE_ERROR
+        default:
+          $ref: '#/components/responses/Error'
+
+  # ============================================================
   # 3. Human Tasks — api-surface §3
   # ============================================================
   /human-tasks:
@@ -3285,6 +4466,463 @@ paths:
           $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
         '404':
           $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        default:
+          $ref: '#/components/responses/Error'
+
+  # ============================================================
+  # 3.1 RBAC role assignments — api-surface §3 (auth-rbac §1–§2)
+  # ============================================================
+  /principals/{principal_id}/role-assignments:
+    parameters:
+      - $ref: '#/components/parameters/PrincipalId'
+    get:
+      tags: [Rbac]
+      operationId: listPrincipalRoleAssignments
+      summary: principal role assignment 이력
+      description: 해당 principal의 tenant-wide role assignment 이력 조회. principal.read 권한.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: role assignment 커서 페이지.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleAssignmentPage'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Rbac]
+      operationId: createPrincipalRoleAssignment
+      summary: 역할 부여(manual)
+      description: >
+        source='manual' assignment 생성. effective roles는 token role과 active manual/SCIM assignment의
+        합집합. 자기 자신에게 admin 부여, 만료된 expires_at, 중복 active (tenant_id, principal_sub, role)는
+        거부한다. rbac.grant 권한.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleAssignmentCreateRequest'
+      responses:
+        '201':
+          description: 생성된 assignment(status=active).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleAssignment'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /role-assignments:
+    get:
+      tags: [Rbac]
+      operationId: listRoleAssignments
+      summary: role assignment 원장 조회
+      description: tenant-wide assignment ledger 조회. principal.read 권한.
+      parameters:
+        - name: principal_sub
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: role
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/RbacRole'
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: role assignment 커서 페이지.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleAssignmentPage'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /role-assignments/{assignment_id}/revoke:
+    parameters:
+      - name: assignment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Rbac]
+      operationId: revokeRoleAssignment
+      summary: 역할 회수(manual만)
+      description: >
+        source='manual' assignment만 회수한다. IdP/JWT claim role과 source='scim' 같은 외부 관리
+        assignment는 본 API로 회수 불가(AUTHZ_FORBIDDEN, externally_managed_role_assignment). 자기 자신의
+        마지막 rbac.grant 근거 회수는 거부. rbac.grant 권한.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleAssignmentRevokeRequest'
+      responses:
+        '200':
+          description: 회수된 assignment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleAssignment'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN(externally_managed_role_assignment 포함)
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  # ============================================================
+  # 3.2 SCIM provisioning (provider registry · group-role mapping · principal sync) — api-surface §3
+  # ============================================================
+  /scim/providers:
+    get:
+      tags: [Scim]
+      operationId: listScimProviders
+      summary: SCIM provider 등록 원장 조회
+      description: >
+        provider registration ledger 조회. signature_secret_ref 등 SecretRef alias와 rotation evidence
+        메타만 반환하고 secret 값은 미노출. scim.sync 권한(admin).
+      responses:
+        '200':
+          description: provider 목록(next_cursor는 항상 null).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScimProviderPage'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Scim]
+      operationId: createScimProvider
+      summary: SCIM provider 등록
+      description: >
+        SecretRef만 입력하며 평문 secret 필드는 없다. secret_rotation_policy는 manual|periodic_30d|
+        periodic_60d|periodic_90d(기본 periodic_90d). 등록 결과는 status=active,
+        inbound_schema_ref='scim-principal@1', auth_mode='signed_request_v1' + rotation evidence.
+        scim.sync 권한(admin).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScimProviderCreateRequest'
+      responses:
+        '201':
+          description: 등록된 provider.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScimProvider'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scim/providers/{provider_key}:
+    parameters:
+      - name: provider_key
+        in: path
+        required: true
+        schema:
+          type: string
+    patch:
+      tags: [Scim]
+      operationId: updateScimProvider
+      summary: SCIM provider 부분 수정
+      description: >
+        display_name/status(active|disabled)/signature_secret_ref/secret_rotation_policy/clock_skew_seconds
+        중 최소 1개. signature_secret_ref가 실제 변경되면 last_secret_rotated_at/by와 scim_provider_updated
+        감사 payload의 secret_rotated=true evidence를 남긴다. disabled provider는 inbound sync 차단.
+        decommission된 provider는 일반 status patch로 active 재활성화 불가. scim.sync 권한(admin).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScimProviderUpdateRequest'
+      responses:
+        '200':
+          description: 수정된 provider(rotation_status=manual|current|due_soon|overdue|decommissioned).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScimProvider'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scim/providers/{provider_key}/decommission:
+    parameters:
+      - name: provider_key
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Scim]
+      operationId: decommissionScimProvider
+      summary: SCIM provider 폐기
+      description: >
+        SecretRef 삭제가 아니라 감사 가능한 provider 폐기 명령: provider status=disabled,
+        decommissioned_at/by/reason 기록, active group mapping disable, active SCIM role assignment revoke.
+        이후 inbound sync는 scim_provider_disabled로 거부된다. scim.sync 권한(admin).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScimProviderDecommissionRequest'
+      responses:
+        '200':
+          description: 폐기된 provider + disable/revoke 집계.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScimProviderDecommissionResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scim/providers/{provider_key}/group-role-mappings:
+    parameters:
+      - name: provider_key
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Scim]
+      operationId: listScimGroupRoleMappings
+      summary: group-role mapping 원장 조회
+      description: >
+        provider별 opaque external group → RPA role 원장 조회. SCIM group-to-role mapping의 source of
+        truth는 RPA-owned scim_group_role_mappings 원장이다. scim.sync 권한(admin).
+      responses:
+        '200':
+          description: mapping 목록(next_cursor는 항상 null).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScimGroupRoleMappingPage'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Scim]
+      operationId: createScimGroupRoleMapping
+      summary: group-role mapping 생성
+      description: >
+        같은 (provider_key, external_group) 중복은 거부한다. decommission된 provider에는 mutation 불가.
+        scim.sync 권한(admin).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScimGroupRoleMappingCreateRequest'
+      responses:
+        '201':
+          description: 생성된 mapping(status=active).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScimGroupRoleMapping'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID(중복 external_group 포함)
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scim/providers/{provider_key}/group-role-mappings/import:
+    parameters:
+      - name: provider_key
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Scim]
+      operationId: importScimGroupRoleMappings
+      summary: group-role mapping 일괄 import
+      description: >
+        mappings 1..500, 입력 내 duplicate external_group은 거부. upsert_only는 입력 row만 생성/갱신/유지하고
+        기존 active mapping은 보존한다. replace_active는 입력 목록을 source of truth로 보고 입력에 없는 기존
+        active mapping을 disabled 처리한다. decommission된 provider에는 import 불가. scim.sync 권한(admin).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScimGroupRoleMappingImportRequest'
+      responses:
+        '200':
+          description: import 집계(imported/updated/unchanged/disabled) + 결과 mapping 목록.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScimGroupRoleMappingImportResponse'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scim/providers/{provider_key}/group-role-mappings/{mapping_id}:
+    parameters:
+      - name: provider_key
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: mapping_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Scim]
+      operationId: updateScimGroupRoleMapping
+      summary: group-role mapping 부분 수정
+      description: >
+        role/status(active|disabled)/description 중 최소 1개. disabled mapping은 inbound external_groups
+        해석에서 제외된다. scim.sync 권한(admin).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScimGroupRoleMappingUpdateRequest'
+      responses:
+        '200':
+          description: 수정된 mapping.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScimGroupRoleMapping'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scim/principals:
+    post:
+      tags: [Scim]
+      operationId: syncScimPrincipal
+      summary: SCIM principal 동기화(signed request)
+      description: >
+        registered scim_providers row의 signed request(X-RPA-SCIM-Timestamp/X-RPA-SCIM-Signature) +
+        scim.sync 권한(admin)을 모두 통과해야 한다. body는 scim-principal@1이며 roles 또는 external_groups
+        중 정확히 하나만 허용(혼합/동시 생략 거부). external_groups는 RPA-owned
+        scim_group_role_mappings(status='active')로 닫힌 RPA role set에 매핑되어야 한다. upsert 후
+        active=true면 resolved active SCIM role set 동기화, active=false면 해당 provider principal의 active
+        SCIM assignments revoke. scim.sync 감사 기록.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: X-RPA-SCIM-Timestamp
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-RPA-SCIM-Signature
+          in: header
+          required: true
+          description: sha256=<hex> — registered provider signature_secret_ref로 검증하는 서명.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScimPrincipalSyncRequest'
+      responses:
+        '200':
+          description: 동기화된 principal 요약(active SCIM role set 포함).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScimPrincipalSyncResponse'
+        '401':
+          $ref: '#/components/responses/Error'        # UNAUTHENTICATED(서명/timestamp 무효)
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
         default:
           $ref: '#/components/responses/Error'
 
@@ -3536,6 +5174,38 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /dlq/replay-all:
+    post:
+      tags: [Workitems]
+      operationId: replayAllDeadLetters
+      summary: 데드레터 일괄 재처리
+      description: >
+        적격 DLQ 전체(현재 페이지 한도 없이, 캡 500)를 per-item replay로 처리한 집계를 반환한다.
+        Idempotency-Key 불요(설계) — 행 CAS(replayed_at/requeued_at)+적격 SELECT가 자연 멱등이라 재호출은
+        신규 적격만 처리한다. 예상 충돌(이미 처리/진행 중)은 conflicts로 집계(전체 실패 아님),
+        truncated=캡 초과 잔여 존재. RLS 스코프, 운영자 재처리 권한 필요.
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [workitem, sink]
+            default: workitem
+      responses:
+        '202':
+          description: 일괄 재처리 집계(attempted/replayed/conflicts/truncated).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayAllResult'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID(kind 무효)
+        default:
+          $ref: '#/components/responses/Error'
+
   # ============================================================
   # 5. Artifacts — api-surface §5
   # ============================================================
@@ -3619,6 +5289,34 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GatewayPolicyList'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /gateway/call-summary:
+    get:
+      tags: [GatewayPolicy]
+      operationId: getGatewayCallSummary
+      summary: LLM 호출 사용량/비용 집계
+      description: >
+        stagehand_calls를 model별 GROUP BY한 기간 윈도우 집계(모델별 호출수·입력/출력 토큰 합·비용 합 +
+        전체 합계). 토큰/비용이 전부 NULL이면 합도 null(0 단정 금지). 비용 DESC(NULL 마지막) 정렬,
+        RLS 스코프. gateway_policy.read 권한.
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 90
+            default: 30
+      responses:
+        '200':
+          description: 사용량/비용 집계(window_days, total, by_model).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayCallSummary'
         default:
           $ref: '#/components/responses/Error'
 
@@ -3834,6 +5532,30 @@ paths:
           $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
         '422':
           $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /sites/{site_profile_id}/approvals:
+    parameters:
+      - $ref: '#/components/parameters/SiteProfileId'
+    get:
+      tags: [Sites]
+      operationId: listSiteApprovals
+      summary: 사이트 승인 이력
+      description: >
+        불변 감사 원장 site_profile_approvals의 승인 이력(최신순 최대 20건) — 고위험(red) 승인 사후 감사
+        (누가/언제/왜/만료)의 콘솔 표면. site.read 권한.
+      responses:
+        '200':
+          description: 승인 이력(next_cursor는 항상 null).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteApprovalPage'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
         default:
           $ref: '#/components/responses/Error'
 
@@ -4311,6 +6033,47 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  # ============================================================
+  # 7.1 결재(approval) 명령 — 하이웍스 결재 인박스 Model A (api-surface §7)
+  # ============================================================
+  /approvals/decide:
+    post:
+      tags: [Approvals]
+      operationId: decideApproval
+      summary: 결재 건별 승인/반려
+      description: >
+        건별 approver-게이트 결재. approval_decisions UNIQUE(tenant_id, source_run_id, doc_ref)로 이중결재를
+        차단한다: 동일 Idempotency-Key replay는 최초 응답(같은 spawned_run_id) 재생, 다른 키·동일
+        (source_run, doc_ref)는 APPROVAL_ALREADY_DECIDED(409). 결정 INSERT + 내부 DECIDE 시나리오
+        ("하이웍스 결재 처리" 최신 prod) run 스폰이 동일 tx(부분실패 원자). 실 승인/반려 클릭은 스폰된 처리
+        run이 수행한다(비가역). source_run_id 부재/cross-tenant는 RESOURCE_NOT_FOUND(RLS), reason 누락
+        (reject)·doc_ref 비-URL은 IR_SCHEMA_INVALID. approval.decide 권한(approver+).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalDecideRequest'
+      responses:
+        '201':
+          description: 결재 기록 + 처리 run 스폰.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalDecision'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '409':
+          $ref: '#/components/responses/Error'        # APPROVAL_ALREADY_DECIDED
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
 # ============================================================
 # Components
 # ============================================================
@@ -4517,6 +6280,7 @@ components:
         - SHELL_COMMAND_NOT_ALLOWED
         - UNAUTHENTICATED
         - AUTHZ_FORBIDDEN
+        - TENANT_OFFBOARDING
         - CONNECTOR_PERMISSION_DENIED
         - CONNECTOR_INCOMPATIBLE
         - CONNECTOR_HOOK_FAILED
@@ -7261,6 +9025,64 @@ components:
         Metadata-only offboarding CSV with manifest, runs, human_tasks, and artifacts sections.
         Execution params, human task payload/result data, artifact object references, hashes,
         and content bodies are intentionally omitted.
+    OffboardingRawExportSection:
+      type: string
+      enum: [runs, human_tasks]
+    OffboardingRawExportJsonl:
+      type: string
+      description: >
+        JSON Lines raw export page. runs rows carry
+        { run_id, scenario_id, scenario_name, created_at, params };
+        human_tasks rows carry
+        { human_task_id, run_id, kind, state, created_at, resolved_at, payload, result,
+        result_schema, payload_ref }. resume_token, bookmark, failure_reason.message,
+        credentials, cookies, and resolved SecretRef values are never included.
+    OffboardingPurgeRequestStatus:
+      type: string
+      enum: [pending, approved, rejected, cancelled, purging, purged]
+    OffboardingPurgeRequest:
+      type: object
+      required: [request_id, status, reason, requested_by, created_at, updated_at]
+      properties:
+        request_id: { type: string, format: uuid }
+        status:
+          $ref: '#/components/schemas/OffboardingPurgeRequestStatus'
+        reason: { type: string }
+        requested_by: { type: string }
+        decided_by: { type: [string, "null"] }
+        decision_reason: { type: [string, "null"] }
+        decided_at: { type: [string, "null"], format: date-time }
+        purge_after: { type: [string, "null"], format: date-time }
+        purged_at: { type: [string, "null"], format: date-time }
+        held_rows:
+          type: object
+          description: legal_hold rows that survived the purge, as table name to row count.
+          additionalProperties: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    OffboardingPurgeRequestPage:
+      type: object
+      required: [items, grace_days]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/OffboardingPurgeRequest' }
+        grace_days: { type: integer, minimum: 1 }
+    OffboardingPurgeRequestCreate:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1 }
+    OffboardingPurgeDecision:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [approved, rejected]
+        reason: { type: string }
     ProcessMiningImportPage:
       type: object
       required: [items, next_cursor]
@@ -9768,7 +11590,7 @@ components:
     RuntimeCapabilities:
       type: object
       additionalProperties: false
-      required: [session_capture]
+      required: [session_capture, offboarding]
       properties:
         session_capture:
           type: object
@@ -9787,6 +11609,21 @@ components:
                 enabled:
                   type: boolean
                   description: true only when mode=dev and a server-side capture consumer exists.
+        offboarding:
+          type: object
+          additionalProperties: false
+          required: [active, status, purge_after, request_id]
+          description: >
+            Active tenant offboarding ledger state, visible to every authenticated role so the
+            console can explain the write lock (409 TENANT_OFFBOARDING) with a global banner.
+            Only pending/approved/purging ledgers appear; approved/purging block write commands.
+          properties:
+            active: { type: boolean }
+            status:
+              type: [string, "null"]
+              description: pending | approved | purging (null when no active ledger).
+            purge_after: { type: [string, "null"], format: date-time }
+            request_id: { type: [string, "null"], format: uuid }
 
     ScenarioGenerationCapabilities:
       type: object
@@ -11310,3 +13147,957 @@ components:
           type: string
           format: date-time
       additionalProperties: false
+
+    # ===== Global search (api-surface §0.8) =====
+    SearchResultType:
+      type: string
+      enum: [run, scenario, human_task, principal, credential]
+
+    SearchResultItem:
+      type: object
+      description: 전역 검색 결과 항목(요지). route는 콘솔 딥링크 해시 라우트.
+      required: [type, id, label, route, matched_field]
+      properties:
+        type: { $ref: '#/components/schemas/SearchResultType' }
+        id: { type: string }
+        label: { type: string }
+        description: { type: [string, "null"] }
+        route: { type: string }
+        matched_field: { type: string }
+
+    SearchResultPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/SearchResultItem' }
+        next_cursor:
+          type: "null"
+          description: 전역 검색은 커서 페이지네이션을 열지 않는다 — 항상 null.
+
+    # ===== Run summary / trends (api-surface §1 관찰성) =====
+    RunSummary:
+      type: object
+      description: >
+        테넌트 run outcome+캐시 집계. §E OTel 메트릭 백엔드가 아니라 DB 원천 서버 GROUP BY 재집계이며,
+        분모 0인 비율은 null로 반환한다(0 단정 금지).
+      required: [by_status, success_rate, total, cache]
+      properties:
+        by_status:
+          type: object
+          description: runs.status별 정확 카운트. 부재 status 키는 생략.
+          additionalProperties: { type: integer }
+        success_rate:
+          type: [number, "null"]
+          description: completed/(completed+failed_business+failed_system). 분모 0이면 null(cancelled 제외).
+        total: { type: integer }
+        cache:
+          type: object
+          required: [by_mode, hit_rate]
+          properties:
+            by_mode:
+              type: object
+              description: run_steps.cache_mode별 카운트.
+              additionalProperties: { type: integer }
+            hit_rate:
+              type: [number, "null"]
+              description: hit/(non-bypass 조회). 조회 0이면 null.
+
+    RunTrendPoint:
+      type: object
+      required: [day, completed, failed_business, failed_system, total, success_rate]
+      properties:
+        day:
+          type: string
+          format: date
+        completed: { type: integer }
+        failed_business: { type: integer }
+        failed_system: { type: integer }
+        total: { type: integer }
+        success_rate:
+          type: [number, "null"]
+          description: completed/(completed+failed_business+failed_system). 그 날 분모 0이면 null(0/0 단정 금지).
+
+    RunTrends:
+      type: object
+      required: [window_days, timezone, points]
+      properties:
+        window_days: { type: integer }
+        timezone:
+          type: string
+          description: Asia/Seoul 일 경계.
+        points:
+          type: array
+          description: 윈도우 내 모든 날 포함(0건 날도 — 스파크라인 x축 연속).
+          items: { $ref: '#/components/schemas/RunTrendPoint' }
+
+    # ===== Run lifecycle commands (rerun · resume · pause · priority — api-surface §1) =====
+    RunRerunRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        mode:
+          type: string
+          enum: [same_input, edited_input]
+          default: same_input
+        params:
+          type: object
+          description: mode=edited_input일 때 필수 — 새 child run에 저장할 실행 파라미터(params_schema 준수).
+        reason: { type: string }
+
+    RunRerunResponse:
+      type: object
+      additionalProperties: false
+      required: [rerun_id, source_run_id, run_id, status, mode, as_of, run_mode]
+      properties:
+        rerun_id: { type: string }
+        source_run_id: { type: string }
+        run_id:
+          type: string
+          description: 생성된 child run id.
+        status:
+          type: string
+          enum: [queued]
+        mode:
+          type: string
+          enum: [same_input, edited_input]
+        as_of:
+          type: [string, "null"]
+          format: date-time
+        run_mode:
+          $ref: '#/components/schemas/RunMode'
+
+    RunCommandReasonRequest:
+      type: object
+      description: resume/pause 명령의 optional 사유 body(생략 가능).
+      additionalProperties: false
+      properties:
+        reason: { type: string }
+
+    RunResumeCommandResponse:
+      type: object
+      additionalProperties: false
+      required: [run_id, status, previous_status]
+      properties:
+        run_id: { type: string }
+        status:
+          type: string
+          enum: [resume_requested]
+        previous_status:
+          $ref: '#/components/schemas/RunState'
+
+    RunPauseCommandResponse:
+      type: object
+      description: >
+        202는 status=pause_requested(durable intent — run 상태가 아니라 run_pause_requests 원장 상태) +
+        pause_request_id, 이미 operator-pause bookmark로 suspended인 run은 200 + status=suspended(이때
+        pause_request_id 없음).
+      additionalProperties: false
+      required: [run_id, status, previous_status]
+      properties:
+        run_id: { type: string }
+        status:
+          type: string
+          enum: [pause_requested, suspended]
+        pause_request_id: { type: string }
+        previous_status:
+          $ref: '#/components/schemas/RunState'
+
+    RunPriority:
+      type: string
+      enum: [low, medium, high, critical]
+
+    RunPriorityRequest:
+      type: object
+      additionalProperties: false
+      required: [priority]
+      properties:
+        priority: { $ref: '#/components/schemas/RunPriority' }
+        reason: { type: string }
+
+    RunPriorityResponse:
+      type: object
+      additionalProperties: false
+      required: [run_id, status, previous_priority, priority]
+      properties:
+        run_id: { type: string }
+        status:
+          type: string
+          enum: [queued]
+        previous_priority: { $ref: '#/components/schemas/RunPriority' }
+        priority: { $ref: '#/components/schemas/RunPriority' }
+
+    # ===== Ops capacity — bot pools · credential concurrency · worker pools (api-surface §1.6) =====
+    BotPool:
+      type: object
+      description: >
+        synthetic browser pool 용량 read model(요지). 저장 원장이 아니라 현재 DB 상태 계산값 —
+        worker_pools/memberships + workers(infra) + tenant-scoped browser_leases/runs/run_triggers 합산.
+      required: [capacity_slots, workers, leases, queue, capacity, health]
+      properties:
+        capacity_slots:
+          type: integer
+          description: assigned pool 기준 최근 heartbeat+circuit closed active browser worker 수(stale 제외).
+        workers:
+          type: object
+          description: worker membership summary.
+          properties:
+            total: { type: integer }
+            active: { type: integer }
+            stale:
+              type: integer
+              description: ops-defaults worker.stale_threshold(기본 2분) 초과 heartbeat 부재 worker — 용량 슬롯 제외.
+            worker_ids:
+              type: array
+              items: { type: string }
+        leases:
+          type: object
+          description: 요청 테넌트 범위 browser lease 점유/만료 집계.
+        queue:
+          type: object
+          description: 요청 테넌트 범위 대기 실행 집계.
+        capacity:
+          type: object
+          properties:
+            live_capacity: { type: integer }
+        health:
+          type: string
+          description: 만료된 reserved/active browser lease가 있으면 critical.
+        health_reason:
+          type: [string, "null"]
+
+    BotPoolPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/BotPool' }
+        next_cursor:
+          type: "null"
+
+    ConcurrencyPolicy:
+      type: object
+      description: >
+        credential 동시성 정책 + 활성 lease 계산값. credential_ref는 SecretRef 경로 식별자(값 아님),
+        label/registered_by/registered_at는 DG-4 메타(표시명·마지막 등록자·시각).
+      required: [credential_ref, site_profile_id, max_concurrency, active_leases]
+      properties:
+        credential_ref: { type: string }
+        site_profile_id: { type: string }
+        site_name: { type: string }
+        max_concurrency: { type: integer }
+        active_leases:
+          type: integer
+          description: status='active'이고 미만료인 lease 수.
+        label: { type: [string, "null"] }
+        registered_by: { type: [string, "null"] }
+        registered_at:
+          type: [string, "null"]
+          format: date-time
+
+    ConcurrencyPolicyPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ConcurrencyPolicy' }
+        next_cursor:
+          type: "null"
+
+    CredentialRegisterRequest:
+      type: object
+      description: >
+        SecretRef 경로 식별자만 등록 — 시크릿 값 필드(value/secret/password/token 등)는 존재 자체로 거부한다
+        (additionalProperties: false).
+      additionalProperties: false
+      required: [credential_ref, site_profile_id, max_concurrency]
+      properties:
+        credential_ref:
+          type: string
+          description: rpa/<env>/<runtime>/<purpose>/<name> 규약, purpose=executor(자격증명).
+        site_profile_id: { type: string }
+        max_concurrency:
+          type: integer
+          minimum: 1
+        label:
+          type: string
+          description: 운영자 표시명(선택, 값 아님).
+
+    CredentialRegisterResponse:
+      type: object
+      additionalProperties: false
+      required: [credential_ref, site_profile_id, max_concurrency]
+      properties:
+        credential_ref: { type: string }
+        site_profile_id: { type: string }
+        max_concurrency: { type: integer }
+        label: { type: [string, "null"] }
+
+    CredentialDeleteResponse:
+      type: object
+      additionalProperties: false
+      required: [credential_ref, site_profile_id, deleted]
+      properties:
+        credential_ref: { type: string }
+        site_profile_id: { type: string }
+        deleted:
+          type: boolean
+          enum: [true]
+
+    WorkerPool:
+      type: object
+      description: 전용 워커 풀 레지스트리 항목(풀=인프라 전역, 배정=RLS).
+      required: [pool_key, status, workers]
+      properties:
+        pool_key: { type: string }
+        description: { type: [string, "null"] }
+        status: { type: string }
+        max_concurrency: { type: [integer, "null"] }
+        priority: { type: [integer, "null"] }
+        workers:
+          type: object
+          description: worker membership summary.
+          properties:
+            total: { type: integer }
+            active: { type: integer }
+            stale: { type: integer }
+            worker_ids:
+              type: array
+              items: { type: string }
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        updated_by: { type: [string, "null"] }
+
+    WorkerPoolsResponse:
+      type: object
+      required: [items, assigned_pool_key, pending]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/WorkerPool' }
+        assigned_pool_key:
+          type: [string, "null"]
+          description: 호출 테넌트 배정 풀. 미배정이면 null(run은 default 풀).
+        pending:
+          type: object
+          description: 호출 테넌트의 queued run 적체 신호(배정 풀 무워커 stuck 가시화).
+          required: [queued_runs, oldest_queued_at]
+          properties:
+            queued_runs: { type: integer }
+            oldest_queued_at:
+              type: [string, "null"]
+              format: date-time
+
+    WorkerPoolCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [pool_key]
+      properties:
+        pool_key:
+          type: string
+          pattern: '^[a-z0-9_-]+$'
+          description: 소문자 영숫자+_-. default는 예약어.
+        description: { type: string }
+
+    WorkerPoolCreateResponse:
+      type: object
+      additionalProperties: false
+      required: [pool_key]
+      properties:
+        pool_key: { type: string }
+        description: { type: [string, "null"] }
+
+    WorkerPoolDeleteResponse:
+      type: object
+      additionalProperties: false
+      required: [pool_key, deleted]
+      properties:
+        pool_key: { type: string }
+        deleted:
+          type: boolean
+          enum: [true]
+
+    WorkerPoolAssignRequest:
+      type: object
+      additionalProperties: false
+      required: [pool_key]
+      properties:
+        pool_key: { type: string }
+
+    WorkerPoolAssignment:
+      type: object
+      additionalProperties: false
+      required: [assigned_pool_key]
+      properties:
+        assigned_pool_key:
+          type: [string, "null"]
+          description: 배정 해제 시 null(→ default 풀).
+
+    WorkerPoolMembership:
+      type: object
+      additionalProperties: false
+      required: [pool_key, worker_id, assigned]
+      properties:
+        pool_key: { type: string }
+        worker_id: { type: string }
+        assigned: { type: boolean }
+
+    # ===== Scenario promotion requests (maker-checker — api-surface §2) =====
+    ScenarioPromotionRequestCreate:
+      type: object
+      additionalProperties: false
+      required: [version, reason]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        reason:
+          type: string
+          description: 승격 사유(필수).
+
+    ScenarioPromotionRequest:
+      type: object
+      description: maker-checker prod 승격 요청(요지). 인박스 목록 item은 scenario_name JOIN 투영을 포함한다.
+      required: [request_id, version, status, reason, requested_by]
+      properties:
+        request_id: { type: string }
+        scenario_id: { type: string }
+        scenario_name: { type: string }
+        version: { type: integer }
+        status:
+          type: string
+          enum: [pending, approved, rejected]
+        reason: { type: string }
+        requested_by: { type: string }
+
+    ScenarioPromotionDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [approve, reject]
+        reason: { type: string }
+
+    ScenarioPromotionDecisionResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [approved, rejected]
+
+    ScenarioPromotionRequestPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ScenarioPromotionRequest' }
+        next_cursor:
+          type: "null"
+
+    # ===== Scenario releases / environment bindings (Enterprise ALM — api-surface §2.1) =====
+    ScenarioReleaseStatus:
+      type: string
+      enum: [draft, submitted, approved, rejected, deployed, rolled_back]
+
+    ScenarioReleaseEnvironment:
+      type: string
+      enum: [dev, staging, prod]
+
+    ScenarioRelease:
+      type: object
+      description: >
+        Enterprise ALM 릴리스(요지). 상태 전이는 draft→submitted→approved→deployed, submitted→rejected,
+        deployed→rolled_back만 허용. approve는 maker-checker(requested_by != approved_by).
+        target_environment='prod'는 source version certification.valid_for_prod=true +
+        controlled_prod_ready=true가 아니면 fail-closed.
+      required: [release_id, scenario_id, source_version, target_environment, status]
+      properties:
+        release_id: { type: string }
+        scenario_id: { type: string }
+        source_version: { type: integer }
+        target_environment: { $ref: '#/components/schemas/ScenarioReleaseEnvironment' }
+        status: { $ref: '#/components/schemas/ScenarioReleaseStatus' }
+        reason: { type: [string, "null"] }
+        package_hash: { type: string }
+        validation_report: { $ref: '#/components/schemas/ValidationReport' }
+        requested_by: { type: string }
+        approved_by: { type: [string, "null"] }
+        events:
+          type: array
+          description: scenario_release_events 제품 이력(상세 조회에 포함).
+          items: { type: object }
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ScenarioReleasePage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ScenarioRelease' }
+        next_cursor:
+          type: [string, "null"]
+
+    ScenarioReleaseCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [source_version, target_environment]
+      properties:
+        source_version:
+          type: integer
+          minimum: 1
+        target_environment: { $ref: '#/components/schemas/ScenarioReleaseEnvironment' }
+        reason: { type: string }
+
+    ScenarioReleaseCommandRequest:
+      type: object
+      description: approve 명령의 optional 사유 body(생략 가능).
+      additionalProperties: false
+      properties:
+        reason: { type: string }
+
+    ScenarioReleaseRejectRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string }
+
+    ScenarioEnvironmentBinding:
+      type: object
+      description: tenant-scoped logical environment binding. prod binding은 v1 동안 promotion_status='prod'와 mirror.
+      required: [environment, scenario_version_id, version]
+      properties:
+        environment: { $ref: '#/components/schemas/ScenarioReleaseEnvironment' }
+        scenario_version_id: { type: string }
+        version: { type: integer }
+        release_id: { type: [string, "null"] }
+        activated_by: { type: [string, "null"] }
+        activated_at:
+          type: [string, "null"]
+          format: date-time
+
+    ScenarioEnvironmentBindingList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ScenarioEnvironmentBinding' }
+
+    ScenarioReleaseWithBinding:
+      type: object
+      description: deploy/rollback 응답 — 릴리스와 갱신된 current environment binding을 함께 반환(요지).
+      required: [release]
+      properties:
+        release: { $ref: '#/components/schemas/ScenarioRelease' }
+        current_binding: { $ref: '#/components/schemas/ScenarioEnvironmentBinding' }
+
+    # ===== RBAC role assignments (api-surface §3 / auth-rbac §1–§2) =====
+    RbacRole:
+      type: string
+      description: auth-rbac §1 역할 레지스트리(닫힘).
+      enum: [viewer, operator, reviewer, approver, admin]
+
+    RoleAssignment:
+      type: object
+      description: >
+        tenant-wide role assignment 원장 행(요지). effective roles는 token role과 active manual/SCIM
+        assignment의 합집합. source='scim' assignment는 manual revoke API로 회수 불가.
+      required: [assignment_id, principal_sub, role, status, source]
+      properties:
+        assignment_id: { type: string }
+        principal_sub: { type: string }
+        role: { $ref: '#/components/schemas/RbacRole' }
+        status:
+          type: string
+          description: 원장 상태 — 부여 시 active, 회수 시 revoked.
+        source:
+          type: string
+          enum: [manual, scim]
+        external_id:
+          type: [string, "null"]
+          description: SCIM 관리 시 <provider external_id>:<role>.
+        idp_provider: { type: [string, "null"] }
+        lifecycle_source: { type: [string, "null"] }
+        reason: { type: [string, "null"] }
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    RoleAssignmentPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/RoleAssignment' }
+        next_cursor:
+          type: [string, "null"]
+
+    RoleAssignmentCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [role]
+      properties:
+        role: { $ref: '#/components/schemas/RbacRole' }
+        reason: { type: string }
+        expires_at:
+          type: string
+          format: date-time
+
+    RoleAssignmentRevokeRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string }
+
+    # ===== SCIM provisioning (api-surface §3) =====
+    ScimSecretRotationPolicy:
+      type: string
+      enum: [manual, periodic_30d, periodic_60d, periodic_90d]
+
+    ScimRotationStatus:
+      type: string
+      enum: [manual, current, due_soon, overdue, decommissioned]
+
+    ScimProviderStatus:
+      type: string
+      enum: [active, disabled]
+
+    ScimProvider:
+      type: object
+      description: >
+        SCIM provider 등록 원장(요지). signature_secret_ref는 SecretRef alias만 — secret 값은 어떤 응답에도
+        미노출. disabled provider는 inbound sync 차단, decommission은 status patch로 재활성화 불가.
+      required: [provider_id, provider_key, display_name, status, inbound_schema_ref, auth_mode, signature_secret_ref, secret_rotation_policy, rotation_status]
+      properties:
+        provider_id: { type: string }
+        provider_key: { type: string }
+        display_name: { type: string }
+        status: { $ref: '#/components/schemas/ScimProviderStatus' }
+        inbound_schema_ref:
+          type: string
+          description: scim-principal@1.
+        auth_mode:
+          type: string
+          description: signed_request_v1.
+        signature_secret_ref: { $ref: '#/components/schemas/SecretRefIdentifier' }
+        secret_rotation_policy: { $ref: '#/components/schemas/ScimSecretRotationPolicy' }
+        rotation_due_at:
+          type: [string, "null"]
+          format: date-time
+        rotation_status: { $ref: '#/components/schemas/ScimRotationStatus' }
+        clock_skew_seconds: { type: integer }
+        last_secret_rotated_at:
+          type: [string, "null"]
+          format: date-time
+        last_secret_rotated_by: { type: [string, "null"] }
+        decommissioned_at:
+          type: [string, "null"]
+          format: date-time
+        decommissioned_by: { type: [string, "null"] }
+        decommissioned_reason: { type: [string, "null"] }
+
+    ScimProviderPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ScimProvider' }
+        next_cursor:
+          type: "null"
+
+    ScimProviderCreateRequest:
+      type: object
+      description: >
+        SecretRef만 입력 — 평문 secret 필드 없음(additionalProperties=false로 거부).
+      additionalProperties: false
+      required: [provider_key, display_name, signature_secret_ref]
+      properties:
+        provider_key: { type: string }
+        display_name: { type: string }
+        signature_secret_ref: { $ref: '#/components/schemas/SecretRefIdentifier' }
+        secret_rotation_policy:
+          $ref: '#/components/schemas/ScimSecretRotationPolicy'
+        clock_skew_seconds: { type: integer }
+
+    ScimProviderUpdateRequest:
+      type: object
+      description: 부분 수정 — 최소 1개 필드 필요.
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        display_name: { type: string }
+        status: { $ref: '#/components/schemas/ScimProviderStatus' }
+        signature_secret_ref: { $ref: '#/components/schemas/SecretRefIdentifier' }
+        secret_rotation_policy: { $ref: '#/components/schemas/ScimSecretRotationPolicy' }
+        clock_skew_seconds: { type: integer }
+
+    ScimProviderDecommissionRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string }
+
+    ScimProviderDecommissionResponse:
+      type: object
+      additionalProperties: false
+      required: [provider, disabled_mappings, revoked_assignments]
+      properties:
+        provider: { $ref: '#/components/schemas/ScimProvider' }
+        disabled_mappings: { type: integer }
+        revoked_assignments: { type: integer }
+
+    ScimGroupRoleMappingStatus:
+      type: string
+      enum: [active, disabled]
+
+    ScimGroupRoleMapping:
+      type: object
+      description: provider별 opaque external group → RPA role 원장 행. disabled는 inbound 해석 제외.
+      required: [mapping_id, provider_key, external_group, role, status]
+      properties:
+        mapping_id: { type: string }
+        provider_key: { type: string }
+        external_group: { type: string }
+        role: { $ref: '#/components/schemas/RbacRole' }
+        status: { $ref: '#/components/schemas/ScimGroupRoleMappingStatus' }
+        description: { type: [string, "null"] }
+
+    ScimGroupRoleMappingPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ScimGroupRoleMapping' }
+        next_cursor:
+          type: "null"
+
+    ScimGroupRoleMappingCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [external_group, role]
+      properties:
+        external_group: { type: string }
+        role: { $ref: '#/components/schemas/RbacRole' }
+        description: { type: string }
+
+    ScimGroupRoleMappingImportRequest:
+      type: object
+      additionalProperties: false
+      required: [mode, mappings]
+      properties:
+        mode:
+          type: string
+          description: upsert_only=입력 row만 생성/갱신/유지(기존 active 보존), replace_active=입력에 없는 기존 active를 disabled 처리.
+          enum: [upsert_only, replace_active]
+        mappings:
+          type: array
+          minItems: 1
+          maxItems: 500
+          description: 입력 내 duplicate external_group 거부.
+          items:
+            type: object
+            additionalProperties: false
+            required: [external_group, role]
+            properties:
+              external_group: { type: string }
+              role: { $ref: '#/components/schemas/RbacRole' }
+              description: { type: string }
+
+    ScimGroupRoleMappingImportResponse:
+      type: object
+      additionalProperties: false
+      required: [provider_key, mode, imported, updated, unchanged, disabled, items]
+      properties:
+        provider_key: { type: string }
+        mode:
+          type: string
+          enum: [upsert_only, replace_active]
+        imported: { type: integer }
+        updated: { type: integer }
+        unchanged: { type: integer }
+        disabled: { type: integer }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ScimGroupRoleMapping' }
+
+    ScimGroupRoleMappingUpdateRequest:
+      type: object
+      description: 부분 수정 — 최소 1개 필드 필요.
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        role: { $ref: '#/components/schemas/RbacRole' }
+        status: { $ref: '#/components/schemas/ScimGroupRoleMappingStatus' }
+        description: { type: string }
+
+    ScimPrincipalSyncRequest:
+      type: object
+      description: >
+        scim-principal@1. roles 또는 external_groups 중 정확히 하나만 허용(혼합/동시 생략 거부).
+        external_groups는 active scim_group_role_mappings로 닫힌 RPA role set에 매핑되어야 한다.
+      additionalProperties: false
+      required: [schema_version, idp_provider, external_id, sub, display_name]
+      properties:
+        schema_version:
+          type: string
+          enum: [scim-principal@1]
+        idp_provider: { type: string }
+        external_id: { type: string }
+        sub: { type: string }
+        display_name: { type: string }
+        email: { type: string }
+        active: { type: boolean }
+        roles:
+          type: array
+          items: { $ref: '#/components/schemas/RbacRole' }
+        external_groups:
+          type: array
+          items: { type: string }
+
+    ScimPrincipalSyncResponse:
+      type: object
+      additionalProperties: false
+      required: [principal_id, sub, active, roles]
+      properties:
+        principal_id: { type: string }
+        sub: { type: string }
+        active: { type: boolean }
+        roles:
+          type: array
+          description: resolved active SCIM role set.
+          items: { $ref: '#/components/schemas/RbacRole' }
+
+    # ===== DLQ replay-all (api-surface §4) =====
+    ReplayAllResult:
+      type: object
+      description: >
+        적격 DLQ 전체(캡 500)의 per-item replay 집계. conflicts=예상 충돌(이미 처리/진행 중 — 전체 실패 아님),
+        truncated=캡 초과 잔여 존재 여부.
+      additionalProperties: false
+      required: [kind, attempted, replayed, conflicts, truncated]
+      properties:
+        kind:
+          type: string
+          enum: [workitem, sink]
+        attempted: { type: integer }
+        replayed: { type: integer }
+        conflicts: { type: integer }
+        truncated: { type: boolean }
+
+    # ===== Gateway call summary (api-surface §6) =====
+    GatewayCallSummaryFigures:
+      type: object
+      description: 호출수·토큰 합·비용 합. 토큰/비용이 전부 NULL이면 합도 null(0 단정 금지). cost는 numeric 문자열(정밀도 보존).
+      required: [calls, input_tokens, output_tokens, cost]
+      properties:
+        calls: { type: integer }
+        input_tokens: { type: [integer, "null"] }
+        output_tokens: { type: [integer, "null"] }
+        cost: { type: [string, "null"] }
+
+    GatewayCallSummary:
+      type: object
+      required: [window_days, total, by_model]
+      properties:
+        window_days: { type: integer }
+        total: { $ref: '#/components/schemas/GatewayCallSummaryFigures' }
+        by_model:
+          type: array
+          description: stagehand_calls GROUP BY model. 비용 DESC(NULL 마지막) 정렬.
+          items:
+            allOf:
+              - $ref: '#/components/schemas/GatewayCallSummaryFigures'
+              - type: object
+                required: [model]
+                properties:
+                  model: { type: string }
+
+    # ===== Site approval history (api-surface §7) =====
+    SiteApprovalRecord:
+      type: object
+      description: 불변 감사 원장 site_profile_approvals 행 — 누가/언제/왜/만료. approved_by는 JWT sub 원문(text).
+      required: [approved_by, reason, expires_at, created_at]
+      properties:
+        approved_by: { type: string }
+        reason: { type: [string, "null"] }
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    SiteApprovalPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          description: 최신순 최대 20건.
+          items: { $ref: '#/components/schemas/SiteApprovalRecord' }
+        next_cursor:
+          type: "null"
+
+    # ===== 결재(approval) 명령 — 하이웍스 결재 인박스 Model A (api-surface §7) =====
+    ApprovalDecideRequest:
+      type: object
+      additionalProperties: false
+      required: [source_run_id, doc_ref, decision]
+      properties:
+        source_run_id:
+          type: string
+          description: 수집 run id.
+        doc_ref:
+          type: string
+          format: uri
+          description: approval origin 절대 URL.
+        decision:
+          type: string
+          enum: [approve, reject]
+        reason:
+          type: string
+          description: reject 시 필수.
+
+    ApprovalDecision:
+      type: object
+      additionalProperties: false
+      required: [decision_id, source_run_id, doc_ref, decision, spawned_run_id]
+      properties:
+        decision_id: { type: string }
+        source_run_id: { type: string }
+        doc_ref:
+          type: string
+          format: uri
+        decision:
+          type: string
+          enum: [approve, reject]
+        spawned_run_id:
+          type: string
+          description: 내부 DECIDE 시나리오 처리 run id(동일 tx 스폰).

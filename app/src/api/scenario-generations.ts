@@ -19,17 +19,18 @@ import type {
 } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
 import { compileScenario, type CompileOutcome } from "./compile-pipeline";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { canonicalRequestHash, completeIdempotencyInTx, idempotencyRecordRowId } from "./idempotency";
 import { apiErrorBody, isRecord, type CommandResponse } from "./command";
 import { extractFirstHttpUrl, hostOfHttpUrl, isHostAllowed, isHttpUrl } from "./scenario-generation-url";
-import { parseGenerationRequest, parseGenerationRunRequest, parseGenerationStatusFilter, parseListCursor, parseListLimit, parseRunIdFilter, UUID_RE } from "./scenario-generation-parse";
+import { parseGenerationRequest, parseGenerationRunRequest, parseGenerationStatusFilter, parseListCursor, parseListLimit, parseRunIdFilter } from "./scenario-generation-parse";
+import { UUID_RE } from "./server-shared";
 import { DEFAULT_PAGINATION_MAX_PAGES, MAX_AUTO_PAGINATION_PAGES, recordingPolicy, type RecordingPolicy } from "./scenario-generation-policy";
 import { finalizeDraftIrEvidence, looksLikeSideEffectPrompt, paginationPlan, scenarioPlannerFor } from "./scenario-generation-planner";
 import { inferRuntimeTargetForRequest } from "./scenario-generation-target";
 import { encodeListCursor, loadGenerationForRun, loadScenarioVersionIrForRun, mapGenerationRow, persistGeneration, persistGenerationRun, type ScenarioGenerationRow } from "./scenario-generation-store";
 import { upsertFailedGenerationLedger } from "./scenario-generation-failed-ledger";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import type {
   EvidencePolicy,
   GenerationCapabilities,
@@ -42,7 +43,7 @@ import type {
   ScenarioPlannerContext,
   ScenarioPlannerId,
 } from "./scenario-generation-types";
-import type { RunEnqueuer } from "./run-queue";
+import type { RunEnqueuer } from "../runtime/run-queue";
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PLANNER_REPAIR_ATTEMPTS = 1;

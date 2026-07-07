@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
@@ -6,23 +6,14 @@ import { useCan } from "../api/permissions";
 import { mergeParams, navigate, useHashParam } from "../router";
 import type {
   IntegrationHandoff,
-  OpsAlertItem,
-  OpsAlertNotificationRoute,
-  OpsNotificationAttempt,
-  OpsNotificationDelivery,
-  OpsNotificationWebhookSendRequest,
-  ProductionReadinessEvidence,
   RunItem,
   RunResumeRequest,
   WebAttendedRunRequest,
-  WebAttendedRunRequestCreate,
 } from "../api/types";
 import { OpsHealthSummary } from "./orchestration/OpsHealthSummary";
 import { TriggerScheduler } from "./orchestration/TriggerScheduler";
 import { StatusColumn } from "./orchestration/StatusColumn";
 import { NotificationRoutingReadiness } from "./orchestration/NotificationRoutingReadiness";
-import { OpsAlertCenter, type OpsWebhookSendDraft } from "./orchestration/OpsAlertCenter";
-import { OpsAlertRoutePanel, type OpsAlertRouteDraft } from "./orchestration/OpsAlertRoutePanel";
 import { BotPoolCapacityPanel } from "./orchestration/BotPoolCapacityPanel";
 import {
   IntegrationHandoffPanel,
@@ -31,14 +22,16 @@ import {
   type IntegrationHandoffReceiptDraft,
 } from "./orchestration/IntegrationHandoffPanel";
 import { WebAttendedPanel, type WebAttendedRunCreateDraft } from "./orchestration/WebAttendedPanel";
+import { countLabel } from "./orchestration/trigger-helpers";
+import { useOpsAlertSection } from "./orchestration/useOpsAlertSection";
+import { useReadinessSection } from "./orchestration/useReadinessSection";
 import {
-  ProductionReadinessPanel,
-  type BackupEvidenceRecordDraft,
-  type ExternalAlertEvidenceRecordDraft,
-  type ObservabilityEvidenceRecordDraft,
-  type SloEvidenceRecordDraft,
-} from "./orchestration/ProductionReadinessPanel";
-import { countLabel, type AlertSeverityFilter, type AlertSourceFilter } from "./orchestration/trigger-helpers";
+  integrationHandoffDispatchIdempotencyKey,
+  integrationHandoffIdempotencyKey,
+  runResumeIdempotencyKey,
+  webAttendedIdempotencyKey,
+  webAttendedRequestBody,
+} from "./orchestration/ops-request-helpers";
 
 type OpsSectionKey = "today" | "schedule" | "queue" | "alerts" | "readiness" | "external";
 
@@ -95,27 +88,6 @@ export function OrchestrationView(): JSX.Element {
   const human = useQuery({ queryKey: ["human-tasks"], queryFn: () => api.listHumanTasks({ limit: 50 }), refetchInterval: 5_000 });
   const workDlq = useQuery({ queryKey: ["dlq", "workitem"], queryFn: () => api.listDlq("workitem", { limit: 50 }), refetchInterval: 10_000 });
   const opsHealth = useQuery({ queryKey: ["ops-health"], queryFn: () => api.getOpsHealth(), refetchInterval: 5_000 });
-  const productionReadiness = useQuery({ queryKey: ["production-readiness"], queryFn: () => api.getProductionReadiness(), refetchInterval: 15_000 });
-  const externalAlertReadinessEvidence = useQuery({
-    queryKey: ["production-readiness-evidence", "external_alert_delivery"],
-    queryFn: () => api.listProductionReadinessEvidence({ evidence_type: "external_alert_delivery", limit: 3 }),
-    refetchInterval: 60_000,
-  });
-  const backupReadinessEvidence = useQuery({
-    queryKey: ["production-readiness-evidence", "managed_backup_restore_drill"],
-    queryFn: () => api.listProductionReadinessEvidence({ evidence_type: "managed_backup_restore_drill", limit: 3 }),
-    refetchInterval: 60_000,
-  });
-  const sloReadinessEvidence = useQuery({
-    queryKey: ["production-readiness-evidence", "slo_oncall_signoff"],
-    queryFn: () => api.listProductionReadinessEvidence({ evidence_type: "slo_oncall_signoff", limit: 3 }),
-    refetchInterval: 60_000,
-  });
-  const observabilityReadinessEvidence = useQuery({
-    queryKey: ["production-readiness-evidence", "observability_telemetry_wiring"],
-    queryFn: () => api.listProductionReadinessEvidence({ evidence_type: "observability_telemetry_wiring", limit: 3 }),
-    refetchInterval: 60_000,
-  });
   const botPools = useQuery({ queryKey: ["bot-pools"], queryFn: () => api.listBotPools({ limit: 10 }), refetchInterval: 5_000 });
   const notificationConnectors = useQuery({ queryKey: ["connectors", "notification"], queryFn: () => api.listConnectors({ kind: "notification", limit: 10 }), refetchInterval: 60_000 });
   const notificationTemplates = useQuery({ queryKey: ["templates", "notification"], queryFn: () => api.listTemplates({ kind: "notification_workflow", limit: 10 }), refetchInterval: 60_000 });
@@ -140,220 +112,11 @@ export function OrchestrationView(): JSX.Element {
     refetchInterval: 10_000,
   });
 
-  const [alertSeverity, setAlertSeverity] = useState<AlertSeverityFilter>("all");
-  const [alertSource, setAlertSource] = useState<AlertSourceFilter>("all");
-  const [alertCursor, setAlertCursor] = useState<string | null>(null);
-  const [alertItems, setAlertItems] = useState<readonly OpsAlertItem[]>([]);
-  const [deliveryAlertId, setDeliveryAlertId] = useState<string | null>(null);
-  const [ackErrorAlertId, setAckErrorAlertId] = useState<string | null>(null);
-  const [webhookSendErrorAlertId, setWebhookSendErrorAlertId] = useState<string | null>(null);
-  const [toggleErrorRouteId, setToggleErrorRouteId] = useState<string | null>(null);
-  const [deleteErrorRouteId, setDeleteErrorRouteId] = useState<string | null>(null);
-  const [queuedWebhookAttempt, setQueuedWebhookAttempt] = useState<OpsNotificationAttempt | null>(null);
   const [dispatchErrorHandoffId, setDispatchErrorHandoffId] = useState<string | null>(null);
   const [receiptErrorHandoffId, setReceiptErrorHandoffId] = useState<string | null>(null);
   const [resumeErrorRunId, setResumeErrorRunId] = useState<string | null>(null);
-  const alertBaseParams = useMemo(
-    () => ({
-      limit: 20,
-      severity: alertSeverity === "all" ? undefined : alertSeverity,
-      source: alertSource === "all" ? undefined : alertSource,
-    }),
-    [alertSeverity, alertSource],
-  );
-  const alertParams = useMemo(
-    () => ({
-      ...alertBaseParams,
-      cursor: alertCursor ?? undefined,
-    }),
-    [alertBaseParams, alertCursor],
-  );
-  const opsAlerts = useQuery({
-    queryKey: ["ops-alerts", alertParams],
-    queryFn: () => api.listOpsAlerts(alertParams),
-    refetchInterval: 5_000,
-  });
-  const opsAlertRoutes = useQuery({
-    queryKey: ["ops-alert-routes"],
-    queryFn: () => api.listOpsAlertNotificationRoutes({ limit: 50 }),
-    refetchInterval: 30_000,
-  });
-  const deliveryReceipts = useQuery({
-    queryKey: ["ops-alert-deliveries", deliveryAlertId],
-    queryFn: () => {
-      if (deliveryAlertId === null) return Promise.resolve({ items: [] as OpsNotificationDelivery[], next_cursor: null });
-      return api.listOpsAlertDeliveries(deliveryAlertId, { limit: 5 });
-    },
-    enabled: deliveryAlertId !== null,
-    refetchInterval: deliveryAlertId === null ? false : 15_000,
-  });
-  const ackMutation = useMutation({
-    mutationFn: (alert: OpsAlertItem) => api.ackOpsAlert(alert.alert_id, opsAlertAckIdempotencyKey(alert)),
-    onMutate: () => {
-      setAckErrorAlertId(null);
-    },
-    onSuccess: (acknowledged) => {
-      setAlertItems((current) => current.map((alert) => (alert.alert_id === acknowledged.alert_id ? acknowledged : alert)));
-      void queryClient.invalidateQueries({ queryKey: ["ops-alerts"] });
-    },
-    onError: (_error, alert) => {
-      setAckErrorAlertId(alert.alert_id);
-    },
-  });
-  const sendWebhookMutation = useMutation({
-    mutationFn: ({ alert, draft }: { alert: OpsAlertItem; draft: OpsWebhookSendDraft }) =>
-      api.sendOpsAlertWebhookDelivery(
-        alert.alert_id,
-        webhookSendRequestBody(draft),
-        opsAlertWebhookIdempotencyKey(alert, draft),
-      ),
-    onMutate: () => {
-      setWebhookSendErrorAlertId(null);
-    },
-    onSuccess: (attempt, { alert }) => {
-      setQueuedWebhookAttempt(attempt);
-      setDeliveryAlertId(alert.alert_id);
-      void queryClient.invalidateQueries({ queryKey: ["ops-alerts"] });
-      void queryClient.invalidateQueries({ queryKey: ["ops-alert-deliveries", alert.alert_id] });
-    },
-    onError: (_error, { alert }) => {
-      setWebhookSendErrorAlertId(alert.alert_id);
-    },
-  });
-  const createAlertRouteMutation = useMutation({
-    mutationFn: (draft: OpsAlertRouteDraft) =>
-      api.createOpsAlertNotificationRoute({
-        source: draft.source,
-        min_severity: draft.minSeverity,
-        provider_alias: draft.providerAlias,
-        endpoint_secret_ref: draft.endpointSecretRef,
-        callback_signature_secret_ref: draft.callbackSignatureSecretRef,
-        route_policy_ref: draft.routePolicyRef,
-        recipient_group_ref: draft.recipientGroupRef,
-        allowed_hosts: draft.allowedHosts,
-      }, alertRouteCreateIdempotencyKey(draft)),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["ops-alert-routes"] });
-    },
-  });
-  const toggleAlertRouteMutation = useMutation({
-    mutationFn: (route: OpsAlertNotificationRoute) =>
-      api.updateOpsAlertNotificationRoute(
-        route.route_id,
-        { enabled: !route.enabled },
-        `ops-alert-route-toggle-${route.route_id}-${!route.enabled}-${Date.now()}`,
-      ),
-    onMutate: () => {
-      setToggleErrorRouteId(null);
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["ops-alert-routes"] });
-    },
-    onError: (_error, route) => {
-      setToggleErrorRouteId(route.route_id);
-    },
-  });
-  const deleteAlertRouteMutation = useMutation({
-    mutationFn: (route: OpsAlertNotificationRoute) =>
-      api.deleteOpsAlertNotificationRoute(route.route_id, `ops-alert-route-delete-${route.route_id}-${Date.now()}`),
-    onMutate: () => {
-      setDeleteErrorRouteId(null);
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["ops-alert-routes"] });
-    },
-    onError: (_error, route) => {
-      setDeleteErrorRouteId(route.route_id);
-    },
-  });
-  const recordSloEvidenceMutation = useMutation({
-    mutationFn: (draft: SloEvidenceRecordDraft) => api.recordProductionReadinessEvidence({
-      evidence_type: "slo_oncall_signoff",
-      status: "valid",
-      evidence_at: new Date().toISOString(),
-      expires_at: draft.expiresAt,
-      summary: draft.summary,
-      evidence_ref: draft.evidenceRef,
-      metadata: {
-        slo_dashboard: draft.sloDashboard,
-        severity_model: draft.severityModel,
-        oncall_rota: draft.oncallRota,
-        raci_ref: draft.raciRef,
-        support_hours: draft.supportHours,
-      },
-      legal_hold: false,
-    }, sloEvidenceIdempotencyKey(draft)),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["production-readiness"] });
-      void queryClient.invalidateQueries({ queryKey: ["production-readiness-evidence", "slo_oncall_signoff"] });
-    },
-  });
-  const recordExternalAlertEvidenceMutation = useMutation({
-    mutationFn: (draft: ExternalAlertEvidenceRecordDraft) => api.recordProductionReadinessEvidence({
-      evidence_type: "external_alert_delivery",
-      status: "valid",
-      evidence_at: new Date().toISOString(),
-      expires_at: draft.expiresAt,
-      summary: draft.summary,
-      evidence_ref: draft.evidenceRef,
-      metadata: {
-        channel: draft.channel,
-        provider_alias: draft.providerAlias,
-        receipt_id: draft.receiptId,
-        receipt_at: draft.receiptAt,
-        delivery_status: "delivered",
-      },
-      legal_hold: false,
-    }, externalAlertEvidenceIdempotencyKey(draft)),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["production-readiness"] });
-      void queryClient.invalidateQueries({ queryKey: ["production-readiness-evidence", "external_alert_delivery"] });
-    },
-  });
-  const recordBackupEvidenceMutation = useMutation({
-    mutationFn: (draft: BackupEvidenceRecordDraft) => api.recordProductionReadinessEvidence({
-      evidence_type: "managed_backup_restore_drill",
-      status: "valid",
-      evidence_at: new Date().toISOString(),
-      expires_at: draft.expiresAt,
-      summary: draft.summary,
-      evidence_ref: draft.evidenceRef,
-      metadata: {
-        backup_policy_ref: draft.backupPolicyRef,
-        restore_scope: draft.restoreScope,
-        restore_completed_at: draft.restoreCompletedAt,
-        rto_minutes: draft.rtoMinutes,
-        rpo_minutes: draft.rpoMinutes,
-      },
-      legal_hold: false,
-    }, backupEvidenceIdempotencyKey(draft)),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["production-readiness"] });
-      void queryClient.invalidateQueries({ queryKey: ["production-readiness-evidence", "managed_backup_restore_drill"] });
-    },
-  });
-  const recordObservabilityEvidenceMutation = useMutation({
-    mutationFn: (draft: ObservabilityEvidenceRecordDraft) => api.recordProductionReadinessEvidence({
-      evidence_type: "observability_telemetry_wiring",
-      status: "valid",
-      evidence_at: new Date().toISOString(),
-      expires_at: draft.expiresAt,
-      summary: draft.summary,
-      evidence_ref: draft.evidenceRef,
-      metadata: {
-        exporter: draft.exporter,
-        collector_ref: draft.collectorRef,
-        dashboard_ref: draft.dashboardRef,
-        alert_route_ref: draft.alertRouteRef,
-        sampled_at: draft.sampledAt,
-      },
-      legal_hold: false,
-    }, observabilityEvidenceIdempotencyKey(draft)),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["production-readiness"] });
-      void queryClient.invalidateQueries({ queryKey: ["production-readiness-evidence", "observability_telemetry_wiring"] });
-    },
-  });
+  const { opsAlertCenter, opsAlertRoutePanel } = useOpsAlertSection();
+  const productionReadinessPanel = useReadinessSection();
   const createIntegrationHandoffMutation = useMutation({
     mutationFn: (draft: IntegrationHandoffCreateDraft) =>
       api.createIntegrationHandoff({
@@ -431,32 +194,6 @@ export function OrchestrationView(): JSX.Element {
       setResumeErrorRunId(run.run_id);
     },
   });
-  useEffect(() => {
-    if (opsAlerts.data === undefined) return;
-    setAlertItems((current) => {
-      if (alertCursor === null) return opsAlerts.data.items;
-      const seen = new Set(current.map((alert) => alert.alert_id));
-      return [...current, ...opsAlerts.data.items.filter((alert) => !seen.has(alert.alert_id))];
-    });
-  }, [alertCursor, opsAlerts.data]);
-
-  useEffect(() => {
-    if (deliveryAlertId !== null && !alertItems.some((alert) => alert.alert_id === deliveryAlertId)) {
-      setDeliveryAlertId(null);
-    }
-  }, [alertItems, deliveryAlertId]);
-
-  function changeAlertSeverity(next: AlertSeverityFilter): void {
-    setAlertCursor(null);
-    setAlertItems([]);
-    setAlertSeverity(next);
-  }
-
-  function changeAlertSource(next: AlertSourceFilter): void {
-    setAlertCursor(null);
-    setAlertItems([]);
-    setAlertSource(next);
-  }
 
   const schedulerQueueUnavailable = opsHealth.data?.queue.available === false;
   const queueRows = [
@@ -494,42 +231,6 @@ export function OrchestrationView(): JSX.Element {
       health={opsHealth.data}
       isLoading={opsHealth.data === undefined && opsHealth.isFetching}
       isError={opsHealth.isError}
-    />
-  );
-
-  const productionReadinessPanel = (
-    <ProductionReadinessPanel
-      readiness={productionReadiness.data}
-      isLoading={productionReadiness.data === undefined && productionReadiness.isFetching}
-      isError={productionReadiness.isError}
-      externalAlertEvidence={externalAlertReadinessEvidence.data?.items ?? ([] as ProductionReadinessEvidence[])}
-      isExternalAlertEvidenceLoading={externalAlertReadinessEvidence.data === undefined && externalAlertReadinessEvidence.isFetching}
-      isExternalAlertEvidenceError={externalAlertReadinessEvidence.isError}
-      backupEvidence={backupReadinessEvidence.data?.items ?? ([] as ProductionReadinessEvidence[])}
-      isBackupEvidenceLoading={backupReadinessEvidence.data === undefined && backupReadinessEvidence.isFetching}
-      isBackupEvidenceError={backupReadinessEvidence.isError}
-      sloEvidence={sloReadinessEvidence.data?.items ?? ([] as ProductionReadinessEvidence[])}
-      isSloEvidenceLoading={sloReadinessEvidence.data === undefined && sloReadinessEvidence.isFetching}
-      isSloEvidenceError={sloReadinessEvidence.isError}
-      observabilityEvidence={observabilityReadinessEvidence.data?.items ?? ([] as ProductionReadinessEvidence[])}
-      isObservabilityEvidenceLoading={observabilityReadinessEvidence.data === undefined && observabilityReadinessEvidence.isFetching}
-      isObservabilityEvidenceError={observabilityReadinessEvidence.isError}
-      canRecordBackupEvidence={can("ops_readiness.manage")}
-      isRecordingBackupEvidence={recordBackupEvidenceMutation.isPending}
-      recordBackupEvidenceError={recordBackupEvidenceMutation.isError}
-      onRecordBackupEvidence={(draft) => recordBackupEvidenceMutation.mutate(draft)}
-      canRecordExternalAlertEvidence={can("ops_readiness.manage")}
-      isRecordingExternalAlertEvidence={recordExternalAlertEvidenceMutation.isPending}
-      recordExternalAlertEvidenceError={recordExternalAlertEvidenceMutation.isError}
-      onRecordExternalAlertEvidence={(draft) => recordExternalAlertEvidenceMutation.mutate(draft)}
-      canRecordSloEvidence={can("ops_readiness.manage")}
-      isRecordingSloEvidence={recordSloEvidenceMutation.isPending}
-      recordSloEvidenceError={recordSloEvidenceMutation.isError}
-      onRecordSloEvidence={(draft) => recordSloEvidenceMutation.mutate(draft)}
-      canRecordObservabilityEvidence={can("ops_readiness.manage")}
-      isRecordingObservabilityEvidence={recordObservabilityEvidenceMutation.isPending}
-      recordObservabilityEvidenceError={recordObservabilityEvidenceMutation.isError}
-      onRecordObservabilityEvidence={(draft) => recordObservabilityEvidenceMutation.mutate(draft)}
     />
   );
 
@@ -583,53 +284,6 @@ export function OrchestrationView(): JSX.Element {
       resumingRunId={resumeSuspendedRunMutation.isPending ? resumeSuspendedRunMutation.variables?.run_id ?? null : null}
       resumeErrorRunId={resumeErrorRunId}
       onResume={(run) => resumeSuspendedRunMutation.mutate(run)}
-    />
-  );
-
-  const opsAlertCenter = (
-    <OpsAlertCenter
-      alerts={alertItems}
-      isError={opsAlerts.isError}
-      isLoading={opsAlerts.data === undefined && opsAlerts.isFetching}
-      isFetchingMore={alertCursor !== null && opsAlerts.isFetching}
-      nextCursor={opsAlerts.data?.next_cursor ?? null}
-      severity={alertSeverity}
-      source={alertSource}
-      onLoadMore={(cursor) => setAlertCursor(cursor)}
-      onSeverityChange={changeAlertSeverity}
-      onSourceChange={changeAlertSource}
-      canAck={can("ops_alert.ack")}
-      ackingAlertId={ackMutation.isPending ? ackMutation.variables?.alert_id ?? null : null}
-      ackErrorAlertId={ackErrorAlertId}
-      onAck={(alert) => ackMutation.mutate(alert)}
-      deliveryAlertId={deliveryAlertId}
-      deliveryReceipts={deliveryReceipts.data?.items ?? []}
-      isDeliveryLoading={deliveryAlertId !== null && deliveryReceipts.isFetching && deliveryReceipts.data === undefined}
-      isDeliveryError={deliveryReceipts.isError}
-      onToggleDeliveries={(alert) => setDeliveryAlertId((current) => (current === alert.alert_id ? null : alert.alert_id))}
-      canSendWebhook={can("ops_alert.deliver")}
-      sendingWebhookAlertId={sendWebhookMutation.isPending ? sendWebhookMutation.variables?.alert.alert_id ?? null : null}
-      webhookSendErrorAlertId={webhookSendErrorAlertId}
-      queuedWebhookAttempt={queuedWebhookAttempt}
-      onSendWebhook={(alert, draft) => sendWebhookMutation.mutate({ alert, draft })}
-    />
-  );
-
-  const opsAlertRoutePanel = (
-    <OpsAlertRoutePanel
-      routes={opsAlertRoutes.data?.items ?? []}
-      isLoading={opsAlertRoutes.data === undefined && opsAlertRoutes.isFetching}
-      isError={opsAlertRoutes.isError}
-      canManage={can("ops_alert.deliver")}
-      isCreating={createAlertRouteMutation.isPending}
-      createError={createAlertRouteMutation.isError}
-      onCreate={(draft) => createAlertRouteMutation.mutate(draft)}
-      togglingRouteId={toggleAlertRouteMutation.isPending ? toggleAlertRouteMutation.variables?.route_id ?? null : null}
-      toggleErrorRouteId={toggleErrorRouteId}
-      onToggle={(route) => toggleAlertRouteMutation.mutate(route)}
-      deletingRouteId={deleteAlertRouteMutation.isPending ? deleteAlertRouteMutation.variables?.route_id ?? null : null}
-      deleteErrorRouteId={deleteErrorRouteId}
-      onDelete={(route) => deleteAlertRouteMutation.mutate(route)}
     />
   );
 
@@ -717,159 +371,4 @@ export function OrchestrationView(): JSX.Element {
       )}
     </div>
   );
-}
-
-function opsAlertAckIdempotencyKey(alert: OpsAlertItem): string {
-  const stableAlertId = alert.alert_id.replace(/[^a-zA-Z0-9._:-]/g, "_");
-  const stableDetectedAt = alert.detected_at.replace(/[^a-zA-Z0-9._:-]/g, "_");
-  return `ops-alert-ack-${stableAlertId}-${stableDetectedAt}-${Date.now()}`;
-}
-
-function externalAlertEvidenceIdempotencyKey(draft: ExternalAlertEvidenceRecordDraft): string {
-  const stableEvidenceRef = draft.evidenceRef.replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 80);
-  const stableReceiptId = draft.receiptId.replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 80);
-  return `readiness-alert-${stableEvidenceRef}-${stableReceiptId}-${Date.now()}`;
-}
-
-function webhookSendRequestBody(draft: OpsWebhookSendDraft): OpsNotificationWebhookSendRequest {
-  const body: {
-    endpoint_secret_ref: string;
-    callback_signature_secret_ref?: string | null;
-    route_policy_ref: string;
-    recipient_group_ref?: string | null;
-    allowed_hosts: readonly string[];
-    metadata: Record<string, unknown>;
-    legal_hold: boolean;
-    provider_alias?: string;
-    summary?: string;
-  } = {
-    endpoint_secret_ref: draft.endpointSecretRef,
-    route_policy_ref: draft.routePolicyRef,
-    recipient_group_ref: draft.recipientGroupRef,
-    allowed_hosts: draft.allowedHosts,
-    metadata: { requested_from: "admin_console" },
-    legal_hold: draft.legalHold,
-  };
-  if (draft.callbackSignatureSecretRef !== null) body.callback_signature_secret_ref = draft.callbackSignatureSecretRef;
-  if (draft.providerAlias !== null) body.provider_alias = draft.providerAlias;
-  if (draft.summary !== null) body.summary = draft.summary;
-  return body;
-}
-
-function opsAlertWebhookIdempotencyKey(alert: OpsAlertItem, draft: OpsWebhookSendDraft): string {
-  return [
-    "ops-alert-webhook",
-    stableIdempotencyPart(alert.alert_id),
-    stableIdempotencyPart(alert.detected_at),
-    stableIdempotencyPart(draft.endpointSecretRef),
-    Date.now(),
-  ].join("-");
-}
-
-function alertRouteCreateIdempotencyKey(draft: OpsAlertRouteDraft): string {
-  return [
-    "ops-alert-route-create",
-    stableIdempotencyPart(draft.providerAlias),
-    stableIdempotencyPart(draft.endpointSecretRef),
-    Date.now(),
-  ].join("-");
-}
-
-function stableIdempotencyPart(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 80);
-}
-
-function webAttendedRequestBody(draft: WebAttendedRunCreateDraft): WebAttendedRunRequestCreate {
-  return {
-    scenario_version_id: draft.scenarioVersionId.trim(),
-    params: parseJsonObject(draft.paramsJson),
-    model: draft.model,
-    priority: draft.priority,
-    human_task_id: draft.humanTaskId,
-    consent: {
-      summary: draft.consentSummary.trim(),
-      evidence_ref: draft.consentEvidenceRef,
-      input_refs: parseCsvRefs(draft.inputRefsCsv),
-    },
-    metadata: { requested_from: "admin_console" },
-    legal_hold: draft.legalHold,
-  };
-}
-
-function parseJsonObject(value: string): Record<string, unknown> {
-  const parsed = JSON.parse(value) as unknown;
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("params_json_object_required");
-  }
-  return parsed as Record<string, unknown>;
-}
-
-function parseCsvRefs(value: string): readonly string[] {
-  const refs: string[] = [];
-  const seen = new Set<string>();
-  for (const item of value.split(",")) {
-    const ref = item.trim();
-    if (ref.length > 0 && !seen.has(ref)) {
-      seen.add(ref);
-      refs.push(ref);
-    }
-  }
-  return refs;
-}
-
-function webAttendedIdempotencyKey(draft: WebAttendedRunCreateDraft): string {
-  return [
-    "web-attended",
-    stableIdempotencyPart(draft.scenarioVersionId),
-    stableIdempotencyPart(draft.consentEvidenceRef ?? draft.consentSummary),
-    Date.now(),
-  ].join("-");
-}
-
-function runResumeIdempotencyKey(run: RunItem): string {
-  return [
-    "web-attended-resume",
-    stableIdempotencyPart(run.run_id),
-    stableIdempotencyPart(run.updated_at ?? run.as_of ?? "unknown"),
-    Date.now(),
-  ].join("-");
-}
-
-function sloEvidenceIdempotencyKey(draft: SloEvidenceRecordDraft): string {
-  const stableEvidenceRef = draft.evidenceRef.replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 80);
-  return `readiness-slo-${stableEvidenceRef}-${Date.now()}`;
-}
-
-function backupEvidenceIdempotencyKey(draft: BackupEvidenceRecordDraft): string {
-  const stableEvidenceRef = draft.evidenceRef.replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 80);
-  return `readiness-backup-${stableEvidenceRef}-${Date.now()}`;
-}
-
-function observabilityEvidenceIdempotencyKey(draft: ObservabilityEvidenceRecordDraft): string {
-  const stableEvidenceRef = draft.evidenceRef.replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 80);
-  const stableCollectorRef = draft.collectorRef.replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 80);
-  return `readiness-observability-${stableEvidenceRef}-${stableCollectorRef}-${Date.now()}`;
-}
-
-function integrationHandoffIdempotencyKey(draft: IntegrationHandoffCreateDraft): string {
-  return [
-    "integration-handoff",
-    stableIdempotencyPart(draft.providerAlias),
-    stableIdempotencyPart(draft.jobRef),
-    stableIdempotencyPart(draft.payloadRef),
-    Date.now(),
-  ].join("-");
-}
-
-function integrationHandoffDispatchIdempotencyKey(
-  handoff: IntegrationHandoff,
-  draft: IntegrationHandoffDispatchDraft,
-): string {
-  return [
-    "integration-handoff-dispatch",
-    stableIdempotencyPart(handoff.handoff_id),
-    stableIdempotencyPart(draft.endpointSecretRef),
-    stableIdempotencyPart(draft.allowedHosts.join(".")),
-    Date.now(),
-  ].join("-");
 }

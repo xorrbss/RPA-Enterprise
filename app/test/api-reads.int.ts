@@ -15,7 +15,7 @@ import { SignJWT } from "jose";
 import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
-import type { RunEnqueuer } from "../src/api/run-queue";
+import type { RunEnqueuer } from "../src/runtime/run-queue";
 import { buildServer } from "../src/api/server";
 import { createPool, withTenantTx } from "../src/db/pool";
 import type { SecretRef } from "../../ts/core-types";
@@ -93,13 +93,14 @@ async function seedRun(
 }
 
 // 트렌드 테스트용 — created_at 을 (오늘 Seoul − daysAgo) 정오로 시드(now() 상대, 시간-비의존). +12h로 일 경계 모호성 회피.
-async function seedRunRelative(pool: Pool, tenant: string, sver: string, id: string, status: string, daysAgo: number): Promise<void> {
+// runMode — summary/trends 의 ?run_mode 모집단 필터 검증용(기본 prod=DDL 기본값 동형).
+async function seedRunRelative(pool: Pool, tenant: string, sver: string, id: string, status: string, daysAgo: number, runMode: "test" | "prod" = "prod"): Promise<void> {
   await withTenantTx(pool, tenant, (c) =>
     c.query(
-      `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, as_of, created_at)
+      `INSERT INTO runs (id, tenant_id, scenario_version_id, status, correlation_id, attempts, as_of, created_at, run_mode)
        VALUES ($1,$2,$3,$4,$1,1,'2026-06-15T00:00:00Z',
-               ((((now() AT TIME ZONE 'Asia/Seoul')::date - $5::int)::timestamp + interval '12 hours') AT TIME ZONE 'Asia/Seoul'))`,
-      [id, tenant, sver, status, daysAgo],
+               ((((now() AT TIME ZONE 'Asia/Seoul')::date - $5::int)::timestamp + interval '12 hours') AT TIME ZONE 'Asia/Seoul'),$6)`,
+      [id, tenant, sver, status, daysAgo, runMode],
     ),
   );
 }
@@ -284,6 +285,16 @@ async function main(): Promise<void> {
     await seedRunRelative(pool, TENANT_C, SVER_C, "7c000000-0000-0000-0000-000000000003", "completed", 0);
     await seedRunRelative(pool, TENANT_C, SVER_C, "7c000000-0000-0000-0000-000000000004", "failed_system", 0);
     await seedRunRelative(pool, TENANT_C, SVER_C, "7c000000-0000-0000-0000-000000000005", "running", 2);
+    // run_mode 모집단 필터 검증용(오늘, test): summary/trends ?run_mode=prod 가 이 run 을 제외해야 한다.
+    await seedRunRelative(pool, TENANT_C, SVER_C, "7c000000-0000-0000-0000-000000000006", "completed", 0, "test");
+    // test run 의 run_step(hit) — summary cache 집계가 runs 조인으로 동일 모집단을 따르는지의 음성 대조.
+    await withTenantTx(pool, TENANT_C, (c) =>
+      c.query(
+        `INSERT INTO run_steps (id, run_id, tenant_id, step_id, node_id, action, status, cache_mode)
+         VALUES ($1::uuid, $2::uuid, $3::uuid, 'st-t1', 'node-t', 'extract', 'success', 'hit')`,
+        ["7e0c0000-0000-0000-0000-0000000000c2", "7c000000-0000-0000-0000-000000000006", TENANT_C],
+      ),
+    );
     // stagehand_calls(tenant C, call-summary 픽스처). FK(tenant,run,step,attempt)→run_steps 라 부모 step 먼저 시드.
     await withTenantTx(pool, TENANT_C, (c) =>
       c.query(
@@ -526,8 +537,9 @@ async function main(): Promise<void> {
       check("trends timezone Asia/Seoul", tBody.timezone === "Asia/Seoul", JSON.stringify(tBody.timezone));
       check("trends 7 points (연속 시리즈)", Array.isArray(tBody.points) && tBody.points.length === 7, JSON.stringify(tBody.points?.length));
       const tToday = tBody.points?.[6];
-      check("trends 오늘 버킷(completed 3·failed_system 1·total 4·success_rate 0.75)",
-        tToday?.completed === 3 && tToday?.failed_system === 1 && tToday?.total === 4 && tToday?.success_rate === 0.75,
+      // run_mode 미지정 → 전체(test 포함): prod completed 3 + test completed 1.
+      check("trends 오늘 버킷(전체 — completed 4·failed_system 1·total 5·success_rate 0.8)",
+        tToday?.completed === 4 && tToday?.failed_system === 1 && tToday?.total === 5 && tToday?.success_rate === 0.8,
         JSON.stringify(tToday));
       check("trends 1일전 0건 → success_rate null(0/0 단정 금지)",
         tBody.points?.[5]?.total === 0 && tBody.points?.[5]?.success_rate === null, JSON.stringify(tBody.points?.[5]));
@@ -550,6 +562,34 @@ async function main(): Promise<void> {
       // RBAC: 역할 없음 → 403.
       const noRoleTrends = await get("/v1/runs/trends", noRole);
       check("no-role trends → 403", noRoleTrends.statusCode === 403, noRoleTrends.body);
+
+      // ===== run_mode 모집단 필터(A1-1 — 대시보드 카드↔드릴다운 목록 모집단 통일) =====
+      // trends: prod 필터가 test run 을 제외(음성 대조), test 필터는 test run 만.
+      const trendsProd = await get("/v1/runs/trends?days=7&run_mode=prod", viewerC);
+      const tpToday = trendsProd.json().points?.[6];
+      check("trends run_mode=prod 오늘(completed 3·total 4·rate 0.75 — test 제외)",
+        tpToday?.completed === 3 && tpToday?.total === 4 && tpToday?.success_rate === 0.75, JSON.stringify(tpToday));
+      const trendsTest = await get("/v1/runs/trends?days=7&run_mode=test", viewerC);
+      const ttToday = trendsTest.json().points?.[6];
+      check("trends run_mode=test 오늘(completed 1·total 1 — 역필터 아님 증명)",
+        ttToday?.completed === 1 && ttToday?.total === 1 && ttToday?.success_rate === 1, JSON.stringify(ttToday));
+      const trendsBadMode = await get("/v1/runs/trends?run_mode=bogus", viewerC);
+      check("trends run_mode=bogus → 422", trendsBadMode.statusCode === 422 && trendsBadMode.json().code === "IR_SCHEMA_INVALID", trendsBadMode.body);
+      // summary: 동일 모집단 의미론 — 미지정=전체, prod=test 제외, cache 는 runs 조인으로 동행.
+      const sumC = await get("/v1/runs/summary", viewerC);
+      check("summary C 전체(completed 4·total 6·rate 0.8·cache hit 1)",
+        sumC.json().by_status?.completed === 4 && sumC.json().total === 6 && sumC.json().success_rate === 0.8 &&
+        sumC.json().cache?.by_mode?.hit === 1 && sumC.json().cache?.hit_rate === 1, sumC.body);
+      const sumCProd = await get("/v1/runs/summary?run_mode=prod", viewerC);
+      check("summary C run_mode=prod(completed 3·total 5·rate 0.75 — test run+step 제외)",
+        sumCProd.json().by_status?.completed === 3 && sumCProd.json().total === 5 && sumCProd.json().success_rate === 0.75 &&
+        sumCProd.json().cache?.by_mode?.hit === undefined && sumCProd.json().cache?.hit_rate === null, sumCProd.body);
+      const sumCTest = await get("/v1/runs/summary?run_mode=test", viewerC);
+      check("summary C run_mode=test(completed 1·total 1·cache hit 1 — 역필터 아님 증명)",
+        sumCTest.json().by_status?.completed === 1 && sumCTest.json().total === 1 &&
+        sumCTest.json().cache?.by_mode?.hit === 1 && sumCTest.json().cache?.hit_rate === 1, sumCTest.body);
+      const sumBadMode = await get("/v1/runs/summary?run_mode=bogus", viewerC);
+      check("summary run_mode=bogus → 422", sumBadMode.statusCode === 422 && sumBadMode.json().code === "IR_SCHEMA_INVALID", sumBadMode.body);
 
       // ===== gateway call-summary(LLM 사용량/비용 집계 — 분석; tenant C 격리 픽스처) =====
       const callSummary = await get("/v1/gateway/call-summary", viewerC);

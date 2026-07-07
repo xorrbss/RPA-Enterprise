@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 
 import { HUMANTASK_TERMINAL, type HumanTaskKind, type HumanTaskState } from "../../../ts/state-machine-types";
 import { withTenantTx } from "../db/pool";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import {
   humanTaskKindFilter,
   humanTaskStateFilter,
@@ -13,7 +13,7 @@ import {
   uuidFilter,
 } from "./list-query";
 import { UUID_RE } from "./reads-support";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 interface HumanTaskRow {
   id: string;

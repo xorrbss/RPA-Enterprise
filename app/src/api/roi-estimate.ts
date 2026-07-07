@@ -5,11 +5,12 @@ import type { PoolClient } from "pg";
 
 import { withTenantTx } from "../db/pool";
 import { runIdempotentCommand, type CommandResponse } from "./command";
-import { ApiResponseError } from "./errors";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { ApiResponseError } from "../runtime/errors";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 // ROI 추정은 automation_ideas 와 별개 테이블(roi_estimates)·별개 bounded context 다. idea 도메인의 식별자/존재
 //   검증·바디 파서만 재사용한다(단방향: roi-estimate → automation-ideas, server.ts 가 둘 다 등록).
-import { assertIdeaExists, parseKnownBody, validateIdeaId } from "./automation-ideas";
+import { assertIdeaExists } from "./automation-ideas";
+import { parseKnownBody, validateIdeaId } from "./automation-ideas-parse";
 
 type RoiConfidence = "low" | "medium" | "high";
 

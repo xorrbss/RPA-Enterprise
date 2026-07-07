@@ -13,7 +13,7 @@ import type { PoolClient } from "pg";
 import type { AuthenticatedPrincipal } from "../../../ts/security-middleware-contract";
 import { compileScenario, type CompileOutcome } from "./compile-pipeline";
 import { isRecord, type CommandResponse } from "./command";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { cloneJsonRecord, parseEvidencePolicy, parseGenerationBlockers, parseParamsContext, parseTarget } from "./scenario-generation-parse";
 import { recordingPolicy } from "./scenario-generation-policy";
 import { prepareGenerationRunIr, startUrlFromParams, uniqueStrings } from "./scenario-generation-planner";
@@ -26,8 +26,8 @@ import type {
   GenerationRunRequest,
   GenerationStatus,
 } from "./scenario-generation-types";
-import type { ApiServerDeps } from "./server";
-import { createRunInTx } from "./server";
+import type { ApiServerDeps } from "./server-shared";
+import { createRunInTx } from "./server-create-run";
 
 export interface ScenarioGenerationRow {
   id: string;

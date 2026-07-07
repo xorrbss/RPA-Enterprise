@@ -7,7 +7,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { type RunEnqueueInput, type RunEnqueuer } from "../src/api/run-queue";
+import { type RunEnqueueInput, type RunEnqueuer } from "../src/runtime/run-queue";
 import { createPool, withTenantTx } from "../src/db/pool";
 import { PgRuntimeWorker } from "../src/worker/runtime-worker";
 import { processDueRunTriggers, processRunTriggerFireJob } from "../src/worker/run-trigger-scheduler";

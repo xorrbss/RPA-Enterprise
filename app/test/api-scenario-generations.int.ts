@@ -15,7 +15,7 @@ import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { LlmGatewayScenarioPlannerClient, createLlmScenarioPlanner } from "../src/api/llm-scenario-planner";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
-import type { ArtifactRedactionEnqueueInput, RunEnqueueInput, RunEnqueuer, SinkDeliverEnqueueInput } from "../src/api/run-queue";
+import type { ArtifactRedactionEnqueueInput, RunEnqueueInput, RunEnqueuer, SinkDeliverEnqueueInput } from "../src/runtime/run-queue";
 import { BufferedScenarioGenerationArtifactSink } from "../src/api/scenario-generation-artifacts";
 import { PgScenarioGenerationLlmCallIdempotencyStore } from "../src/api/scenario-generation-llm-call-idempotency-store";
 import type { ScenarioPlanner } from "../src/api/scenario-generation-types";

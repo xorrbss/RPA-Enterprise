@@ -3,18 +3,18 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 
 import { withTenantTx } from "../db/pool";
-import { verifyAuditChainInTenantTx } from "./audit-record-hash";
+import { verifyAuditChainInTenantTx } from "../runtime/audit-record-hash";
 import { csvCell, csvWithBom } from "./csv";
 import {
   insertAuditVerificationRun,
   mapAuditVerificationRunRow,
   type AuditVerifierRunRow,
   type AuditVerificationRunStatus,
-} from "./audit-verification-runs";
+} from "../runtime/audit-verification-runs";
 import { runIdempotentCommand, isRecord } from "./command";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { paginate, parsePageParams, principalIdFilter, uuidFilter } from "./list-query";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { UUID_RE } from "./server-shared";
 
 type AuditOutcome = "allow" | "deny" | "blocked" | "error";

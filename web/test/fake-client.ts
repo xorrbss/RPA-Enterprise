@@ -1,4 +1,5 @@
 import type { ApiClient } from "../src/api/client";
+import { decodeRoles, decodeSubject } from "../src/api/permissions";
 import type {
   AiGovernanceEvidence,
   AiGovernanceRuntimePolicy,
@@ -65,6 +66,26 @@ const aiGovernanceRuntimePolicy: AiGovernanceRuntimePolicy = {
 };
 
 // 테스트용 fake ApiClient(백엔드 무의존). 뷰는 동일 포트로 주입되므로 fixture만 갈아끼운다.
+function fakeOffboardingRequest(
+  overrides: Partial<import("../src/api/types").OffboardingPurgeRequestItem> = {},
+): import("../src/api/types").OffboardingPurgeRequestItem {
+  return {
+    request_id: "70000000-0000-4000-8000-000000000001",
+    status: "pending",
+    reason: "계약 종료",
+    requested_by: "admin-1",
+    decided_by: null,
+    decision_reason: null,
+    decided_at: null,
+    purge_after: null,
+    purged_at: null,
+    held_rows: {},
+    created_at: "2026-07-03T00:00:00.000Z",
+    updated_at: "2026-07-03T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
 export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
   const empty = async () => ({ items: [], next_cursor: null });
   return {
@@ -940,10 +961,12 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
         { claim: "name", label: "표시 이름", required: false, present: true, mapped_to: "담당자 디렉터리 표시명" },
         { claim: "email", label: "이메일", required: false, present: true, mapped_to: "담당자 디렉터리 이메일" },
       ],
+      // 실서버 계약 미러: current_principal.roles = 토큰 클레임 ∪ 수동 부여(기본 fake는 부여 없음 → 토큰 역할).
+      // useRoles가 효과 역할(A3-1)을 이 응답에서 읽으므로, 고정값이면 모든 테스트의 게이팅이 왜곡된다.
       current_principal: {
-        subject_id: "viewer-a",
+        subject_id: decodeSubject(localStorage.getItem("rpa.token")) ?? "viewer-a",
         tenant_id: "00000000-0000-4000-8000-0000000000a1",
-        roles: ["viewer"],
+        roles: decodeRoles(localStorage.getItem("rpa.token")),
         source: "jwt",
         display_name: "Viewer A",
         email: "viewer@example.com",
@@ -2071,6 +2094,17 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       review_status: "promoted_to_studio",
     }),
     getCapabilities: async () => ({ session_capture: { server: { mode: "off", enabled: false } } }),
+    listOffboardingPurgeRequests: async () => ({ items: [], grace_days: 7 }),
+    createOffboardingPurgeRequest: async (reason) => fakeOffboardingRequest({ status: "pending", reason }),
+    decideOffboardingPurgeRequest: async (requestId, decision) =>
+      fakeOffboardingRequest({
+        request_id: requestId,
+        status: decision,
+        decided_by: "admin-2",
+        decided_at: "2026-07-03T00:10:00.000Z",
+        purge_after: decision === "approved" ? "2026-07-10T00:10:00.000Z" : null,
+      }),
+    cancelOffboardingPurgeRequest: async (requestId) => fakeOffboardingRequest({ request_id: requestId, status: "cancelled" }),
     listSites: empty,
     listSessionCaptures: empty,
     listGatewayPolicies: async () => ({
@@ -2389,6 +2423,7 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       content: "redacted generation artifact content",
     }),
     approveSite: async () => ({ site_profile_id: "s", approval_status: "approved" }),
+    listSiteApprovals: async () => ({ items: [], next_cursor: null }),
     createSite: async () => ({
       site_profile_id: "s",
       name: "n",

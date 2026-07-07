@@ -1,9 +1,22 @@
-import type { FastifyInstance } from "fastify";
+import { randomUUID } from "node:crypto";
 
+import type { FastifyInstance, FastifyRequest } from "fastify";
+
+import {
+  SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
+  type AuthenticatedPrincipal,
+  type CorrelationId,
+  type DurableSecurityAuditDecisionWriter,
+  type IdempotencyKey,
+  type IsoDateTime,
+} from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
 import { csvRow, csvWithBom } from "./csv";
-import { ApiResponseError } from "./errors";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { ApiResponseError } from "../runtime/errors";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
+
+// offboarding export audit 보존일수 — artifact.read audit(ARTIFACT_READ_AUDIT_RETENTION_DAYS=90)과 동일 기준 재사용(비발명).
+const OFFBOARDING_EXPORT_AUDIT_RETENTION_DAYS = 90;
 
 interface OffboardingRunRow {
   readonly run_id: string;
@@ -69,6 +82,7 @@ interface OffboardingExportRows {
 
 export function registerOffboardingExportRoutes(app: FastifyInstance, deps: ApiServerDeps): void {
   app.get("/v1/offboarding/export", { config: { rbacAction: "tenant_data.export" } }, async (request, reply) => {
+    const securityAudit = requireOffboardingSecurityAudit(deps);
     const principal = requirePrincipal(request);
     const query = request.query as Record<string, unknown>;
     const format = query.format ?? "csv";
@@ -81,6 +95,18 @@ export function registerOffboardingExportRoutes(app: FastifyInstance, deps: ApiS
       throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_created_at_range" });
     }
     const rows = await selectOffboardingExportRows(deps, principal.tenantId, createdAtFrom, createdAtTo);
+
+    // 반출 결정을 본문 반환 전에 fail-closed 로 기록(설계 §4-4) — append 실패 시 본문 미반환. payload 는 범위/행수만(원문 미포함).
+    await recordOffboardingAudit(securityAudit, request, principal, "tenant_data.export", "offboarding_metadata_export_disclosed", {
+      decision_kind: "tenant_data.export",
+      delivery: "metadata_csv",
+      created_at_from: nullableIso(createdAtFrom),
+      created_at_to: nullableIso(createdAtTo),
+      run_count: rows.runs.length,
+      human_task_count: rows.humanTasks.length,
+      artifact_count: rows.artifacts.length,
+    });
+
     const filename = `offboarding-export-${new Date().toISOString().slice(0, 10)}.csv`;
 
     reply
@@ -94,6 +120,49 @@ export function registerOffboardingExportRoutes(app: FastifyInstance, deps: ApiS
         createdAtTo,
       })));
   });
+}
+
+/** 반출 결정은 fail-closed audit 없이 응답하지 않는다(설계 §4-4). 미주입=서버 구성 오류 — 조용한 무감사 반출 금지. */
+export function requireOffboardingSecurityAudit(deps: ApiServerDeps): DurableSecurityAuditDecisionWriter {
+  if (deps.securityAudit === undefined) {
+    throw new ApiResponseError("CONTROL_PLANE_INTERNAL_ERROR", { reason: "offboarding_audit_not_configured" });
+  }
+  return deps.securityAudit;
+}
+
+export async function recordOffboardingAudit(
+  securityAudit: DurableSecurityAuditDecisionWriter,
+  request: FastifyRequest,
+  principal: AuthenticatedPrincipal,
+  action: "tenant_data.export" | "tenant_data.purge.request" | "tenant_data.purge.approve",
+  reason: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const occurredAt = new Date();
+  await securityAudit.recordDecision(
+    {
+      tenantId: principal.tenantId,
+      actor: { subjectId: principal.subjectId, roles: principal.roles },
+      action,
+      outcome: "allow",
+      reason,
+      correlationId: request.correlationId as CorrelationId,
+      // 각 반출 = 별개 audit 이벤트(idempotency_key UNIQUE) — correlation 재사용에도 충돌 없게 per-request UUID.
+      idempotencyKey: randomUUID() as IdempotencyKey,
+      occurredAt: occurredAt.toISOString() as IsoDateTime,
+      retentionUntil: new Date(
+        occurredAt.getTime() + OFFBOARDING_EXPORT_AUDIT_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+      ).toISOString() as IsoDateTime,
+      payloadSchemaRef: SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
+      failClosed: true,
+      payload,
+    },
+    { exported: true },
+  );
+}
+
+export function nullableIso(value: Date | null): string | null {
+  return value === null ? null : iso(value);
 }
 
 async function selectOffboardingExportRows(
@@ -285,7 +354,7 @@ function csvSection(
   return [csvRow(["section", name]), csvRow(header), ...rows.map(csvRow)].join("\n");
 }
 
-function dateTimeFilter(raw: unknown, reason: string): Date | null {
+export function dateTimeFilter(raw: unknown, reason: string): Date | null {
   if (raw === undefined) return null;
   if (typeof raw !== "string" || raw.length === 0) {
     throw new ApiResponseError("IR_SCHEMA_INVALID", { reason });
@@ -301,6 +370,6 @@ function maybeIso(value: Date | null): string {
   return value === null ? "" : iso(value);
 }
 
-function iso(value: Date): string {
+export function iso(value: Date): string {
   return value.toISOString();
 }

@@ -10,7 +10,7 @@ import type { PoolClient } from "pg";
 import type { AuthenticatedPrincipal } from "../../../ts/security-middleware-contract";
 import type { CompileOutcome } from "./compile-pipeline";
 import { isRecord } from "./command";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { redactGenerationDraftIr, redactGenerationFailureDetails, redactParamsContext } from "./scenario-generation-redaction";
 import { uniqueStrings } from "./scenario-generation-planner";
 import type { GenerationPlan, GenerationRequest } from "./scenario-generation-types";

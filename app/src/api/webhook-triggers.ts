@@ -7,8 +7,9 @@ import type { SecretRef } from "../../../ts/core-types";
 import type { AuthenticatedPrincipal, PrincipalId, TenantId } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
 import { isRecord } from "./command";
-import { ApiResponseError } from "./errors";
-import type { RunEnqueuer } from "./run-queue";
+import { ApiResponseError } from "../runtime/errors";
+import { isTenantOffboardingLocked } from "./offboarding-lock";
+import type { RunEnqueuer } from "../runtime/run-queue";
 import { createRunInTx } from "./server-create-run";
 import type { ApiServerDeps } from "./server-shared";
 import { UUID_RE } from "./server-shared";
@@ -90,6 +91,11 @@ export function registerWebhookTriggerRoutes(app: FastifyInstance, deps: ApiServ
       const signingPayload = webhookSigningPayload(headers.timestamp, headers.eventId, body);
       if (!verifyWebhookSignature(secret, headers.signature, signingPayload)) {
         throw new ApiResponseError("UNAUTHENTICATED", { reason: "invalid_webhook_signature" });
+      }
+
+      // 오프보딩 잠금(O3): skipJwtAuth 경로라 전역 preHandler 게이트 밖 — 서명 검증 후 발화 전에 명시 차단(409, 조용한 skip 금지).
+      if (await isTenantOffboardingLocked(deps.pool, tenantId)) {
+        throw new ApiResponseError("TENANT_OFFBOARDING", { reason: "tenant_offboarding_locked" });
       }
 
       const receipt = await withTenantTx(deps.pool, tenantId, (client) =>

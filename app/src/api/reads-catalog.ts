@@ -2,11 +2,11 @@
 import type { FastifyInstance } from "fastify";
 
 import { withTenantTx } from "../db/pool";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { paginate, parsePageParams } from "./list-query";
 import { UUID_RE } from "./reads-support";
 import { mapScenarioCertification, type ScenarioCertificationRow } from "./scenario-certification";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 import { summarizePageStateSelectors } from "./site-page-state-contract";
 
 // ── gateway call-summary(B4): stagehand_calls 사용량/비용 집계 ──
@@ -62,6 +62,11 @@ interface SiteRow {
   name: string;
   risk: string;
   approved: boolean;
+  // 기간 한정 승인 표면화(A3-3): 만료 경과 시 approval_status=expired(런타임 SITE_PROFILE_BLOCKED 게이트와 동일 판정).
+  approval_expired: boolean;
+  approved_by: string | null;
+  approved_at: Date | null;
+  approval_expires_at: Date | null;
   circuit_state: string;
   url_pattern: string;
   // 운영자-보조 세션 캡처 가능 여부 — page_state_selectors.loginUrl 설정 사이트만 '세션 등록' 노출(미설정 사이트의 412 클릭 회피).
@@ -93,14 +98,17 @@ function mapGatewayPolicy(r: GatewayPolicyRow): Record<string, unknown> {
   };
 }
 
-/** Site 행 → 계약 응답. approval_status는 approved 불리언에서 도출. circuit_status=circuit_state. */
+/** Site 행 → 계약 응답. approval_status: 미승인=pending, 승인 후 만료 경과=expired(게이트 복귀), 그 외=approved. */
 function mapSite(r: SiteRow): Record<string, unknown> {
   return {
     site_profile_id: r.id,
     name: r.name,
     url_pattern: r.url_pattern,
     risk: r.risk,
-    approval_status: r.approved ? "approved" : "pending",
+    approval_status: !r.approved ? "pending" : r.approval_expired ? "expired" : "approved",
+    approved_by: r.approved_by,
+    approved_at: r.approved_at !== null ? r.approved_at.toISOString() : null,
+    approval_expires_at: r.approval_expires_at !== null ? r.approval_expires_at.toISOString() : null,
     circuit_status: r.circuit_state,
     login_capable: r.login_capable,
     session_ready: r.session_ready,
@@ -270,6 +278,8 @@ export function registerCatalogReadRoutes(app: FastifyInstance, deps: ApiServerD
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<SiteRow>(
         `SELECT s.id, s.name, s.risk, s.approved, s.circuit_state, s.url_pattern, s.page_state_selectors,
+                (s.approval_expires_at IS NOT NULL AND s.approval_expires_at <= now()) AS approval_expired,
+                s.approved_by, s.approved_at, s.approval_expires_at,
                 (s.page_state_selectors->>'loginUrl') IS NOT NULL AS login_capable,
                 EXISTS (
                   SELECT 1 FROM browser_sessions bs
@@ -334,6 +344,8 @@ export function registerCatalogReadRoutes(app: FastifyInstance, deps: ApiServerD
       const row = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
         const result = await c.query<SiteRow>(
           `SELECT s.id, s.name, s.risk, s.approved, s.circuit_state, s.url_pattern, s.page_state_selectors,
+                  (s.approval_expires_at IS NOT NULL AND s.approval_expires_at <= now()) AS approval_expired,
+                  s.approved_by, s.approved_at, s.approval_expires_at,
                   (s.page_state_selectors->>'loginUrl') IS NOT NULL AS login_capable,
                   EXISTS (
                     SELECT 1 FROM browser_sessions bs
@@ -380,6 +392,46 @@ export function registerCatalogReadRoutes(app: FastifyInstance, deps: ApiServerD
         throw new ApiResponseError("RESOURCE_NOT_FOUND");
       }
       reply.code(200).send(mapSite(row));
+    },
+  );
+
+  // GET /v1/sites/{id}/approvals — 사이트 승인 이력(site_profile_approvals, 불변 감사 원장) 최신순.
+  //   고위험 승인의 사후 감사(누가/언제/왜/만료)를 콘솔에서 닫는다(A3-7) — 이전에는 INSERT만 있고 조회 경로가 없어
+  //   DB 직접 조회가 필요했다. 부재/cross-tenant(RLS) → 404(존재 비노출). idx_site_profile_approvals_site 커버.
+  app.get<{ Params: { id: string } }>(
+    "/v1/sites/:id/approvals",
+    { config: { rbacAction: "site.read" } },
+    async (request, reply) => {
+      const principal = requirePrincipal(request);
+      const id = request.params.id;
+      if (!UUID_RE.test(id)) {
+        throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      }
+      const items = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
+        const site = await c.query(`SELECT 1 FROM site_profiles WHERE id = $1::uuid`, [id]);
+        if ((site.rowCount ?? 0) === 0) return null;
+        const result = await c.query<{ approved_by: string; reason: string | null; expires_at: Date | null; created_at: Date }>(
+          `SELECT approved_by, reason, expires_at, created_at
+             FROM site_profile_approvals
+            WHERE site_profile_id = $1::uuid
+            ORDER BY created_at DESC
+            LIMIT 20`,
+          [id],
+        );
+        return result.rows;
+      });
+      if (items === null) {
+        throw new ApiResponseError("RESOURCE_NOT_FOUND");
+      }
+      reply.code(200).send({
+        items: items.map((r) => ({
+          approved_by: r.approved_by,
+          reason: r.reason,
+          expires_at: r.expires_at !== null ? r.expires_at.toISOString() : null,
+          created_at: r.created_at.toISOString(),
+        })),
+        next_cursor: null,
+      });
     },
   );
 }

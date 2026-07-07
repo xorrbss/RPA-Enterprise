@@ -55,6 +55,8 @@ export type ErrorCode =
   | "SHELL_COMMAND_NOT_ALLOWED"        // shell cmd_ref가 signed command registry 미등록
   | "UNAUTHENTICATED"                  // 인증 미성립(Bearer 토큰 누락/서명 무효) — authn 실패(auth-rbac.md §3)
   | "AUTHZ_FORBIDDEN"                  // 역할 권한 부족(일반 RBAC 거부 — auth-rbac.md §2)
+  // --- Tenant offboarding (rpa-offboarding-data-export-deletion-design O2/O3) ---
+  | "TENANT_OFFBOARDING"               // 오프보딩 진행 중 — 활성 원장 존재(중복 요청) 또는 approved 잠금의 쓰기 명령 거부(409)
   // --- Connector ---
   | "CONNECTOR_PERMISSION_DENIED"
   | "CONNECTOR_INCOMPATIBLE"           // runtime/ir version mismatch
@@ -131,6 +133,7 @@ export const ERROR_CATALOG: Record<ErrorCode, ErrorMeta> = {
   //   userMessage는 자원 존재/종류 비노출 위해 최소화. api-surface §0.1·auth-rbac §3/§5와 정합.
   UNAUTHENTICATED:             { retryable: false, httpStatus: 401, exceptionClass: "security", userMessage: "인증이 필요합니다.", operatorAction: "유효한 Bearer JWT 제시(auth-rbac.md §3) — 토큰 누락/서명 무효" },
   AUTHZ_FORBIDDEN:             { retryable: false, httpStatus: 403, exceptionClass: "security", userMessage: "권한이 없습니다.", operatorAction: "역할/권한 매트릭스 확인(auth-rbac.md §2)" },
+  TENANT_OFFBOARDING:          { retryable: false, httpStatus: 409, exceptionClass: "none",     userMessage: "이 테넌트는 오프보딩 진행 중입니다.", operatorAction: "보안 허브 오프보딩 원장 확인(취소는 유예기간 내 admin)" },
 
   CONNECTOR_PERMISSION_DENIED: { retryable: false, httpStatus: 403, exceptionClass: "security", userMessage: "커넥터 권한 위반.", operatorAction: "manifest permissions 확인" },
   CONNECTOR_INCOMPATIBLE:      { retryable: false, httpStatus: 409, exceptionClass: "system",   userMessage: "버전 비호환.", operatorAction: "runtime/IR 버전 호환 확인" },

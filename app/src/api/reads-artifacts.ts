@@ -12,9 +12,9 @@ import {
   type IsoDateTime,
 } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 import { UUID_RE } from "./reads-support";
-import { requirePrincipal, type ApiServerDeps } from "./server";
+import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 // artifact.read audit 보존일수 — worker artifact-lifecycle audit(DEFAULT_ARTIFACT_LIFECYCLE_AUDIT_RETENTION_DAYS=90)과
 // 동일(비발명, 기존 artifact audit 보존 정책 재사용). 전용 ops-defaults 행 도입 시 그 값으로 대체.

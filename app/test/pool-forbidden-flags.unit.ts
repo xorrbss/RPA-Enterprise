@@ -2,7 +2,7 @@
  * 단위 — DG-3 buildPoolForbiddenFlags: 워커가 미서비스 풀의 pool:<key> flag 를 forbiddenFlags 로 산출.
  * 실행: tsx test/pool-forbidden-flags.unit.ts
  */
-import { buildPoolForbiddenFlags, poolFlagFor } from "../src/worker/pool-forbidden-flags";
+import { buildPoolForbiddenFlags, poolFlagFor } from "../src/runtime/pool-forbidden-flags";
 import type { PgPool } from "../src/db/pool";
 
 let failures = 0;

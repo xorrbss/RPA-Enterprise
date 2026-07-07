@@ -2329,7 +2329,9 @@ describe("D7 운영 콘솔 shell", () => {
     );
     location.hash = "#security";
     (await screen.findByRole("button", { name: "승인" })).click();
-    (await screen.findByRole("button", { name: "확인" })).click();
+    // 새 승인 다이얼로그(SiteApprovalControls): 사유·만료 입력 + confirmLabel="승인".
+    const dialog = await screen.findByRole("dialog");
+    within(dialog).getByRole("button", { name: "승인" }).click();
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.id).toBe("site-1");
     expect(calls[0]?.key.length).toBeGreaterThan(0); // Idempotency-Key

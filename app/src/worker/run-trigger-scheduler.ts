@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import type { PoolClient } from "pg";
 
-import { ApiResponseError } from "../api/errors";
-import type { RunEnqueuer } from "../api/run-queue";
+import { ApiResponseError } from "../runtime/errors";
+import type { RunEnqueuer } from "../runtime/run-queue";
 import { createRunInTx } from "../api/server-create-run";
 import { withTenantTx, type PgPool } from "../db/pool";
 import { CronScheduleError, nextCronFireAfter } from "../runtime/run-trigger-schedule";
@@ -157,6 +157,11 @@ async function processTenantDueRunTriggers(client: PoolClient, input: ProcessTen
         AND status = 'enabled'
         AND next_fire_at IS NOT NULL
         AND next_fire_at <= $2::timestamptz
+        -- 오프보딩 잠금(O3): approved/purging 테넌트는 발화 대상에서 제외(신규 활동 금지). 취소 시 다시 발화.
+        AND NOT EXISTS (
+          SELECT 1 FROM tenant_offboarding_requests o
+           WHERE o.tenant_id = run_triggers.tenant_id AND o.status IN ('approved','purging')
+        )
       ORDER BY next_fire_at ASC, id ASC
       FOR UPDATE SKIP LOCKED
       LIMIT $3`,

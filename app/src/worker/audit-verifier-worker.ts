@@ -1,7 +1,7 @@
 import type pg from "pg";
 
-import { insertAuditVerificationRun } from "../api/audit-verification-runs";
-import { verifyAuditChainInTenantTx } from "../api/audit-record-hash";
+import { insertAuditVerificationRun } from "../runtime/audit-verification-runs";
+import { verifyAuditChainInTenantTx } from "../runtime/audit-record-hash";
 import { withTenantTx } from "../db/pool";
 import { errText, workerLog } from "../observability/log";
 import type { RuntimeJobResult, RuntimeWorkerJob } from "../../../ts/runtime-contract";

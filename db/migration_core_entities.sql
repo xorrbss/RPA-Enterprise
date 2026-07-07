@@ -35,9 +35,9 @@ CREATE TABLE site_profiles (
   url_pattern     text        NOT NULL,                     -- 사이트 식별 패턴(정규화)
   risk            text        NOT NULL DEFAULT 'green'
                     CHECK (risk IN ('green','amber','red')),  -- red = 승인 워크플로우 필요(amber=중간; api-surface/openapi SiteRisk와 정합)
-  approved        boolean     NOT NULL DEFAULT false,       -- risk=red 승인 여부(SITE_PROFILE_BLOCKED 게이트)
+  approved        boolean     NOT NULL DEFAULT false,       -- risk=red 승인 여부(SITE_PROFILE_BLOCKED 게이트; approval_expires_at 경과 시 게이트 복귀)
   approved_at     timestamptz,
-  approved_by     uuid,                                      -- approver subject id(JWT/session principal)
+  approved_by     text,                                      -- approver subject id(JWT sub 원문) — 비-UUID OIDC sub(auth0|…·이메일) 수용, uuid 캐스트 금지(scenario_releases.approved_by와 동일 규범)
   approval_reason text,
   approval_expires_at timestamptz,
   circuit_state   text        NOT NULL DEFAULT 'closed'
@@ -54,7 +54,7 @@ CREATE TABLE site_profile_approvals (
   id              uuid        PRIMARY KEY,
   tenant_id       uuid        NOT NULL,
   site_profile_id uuid        NOT NULL REFERENCES site_profiles(id),
-  approved_by     uuid        NOT NULL,
+  approved_by     text        NOT NULL,                      -- JWT sub 원문(비-UUID OIDC sub 수용)
   reason          text,
   expires_at      timestamptz,
   created_at      timestamptz NOT NULL DEFAULT now()
@@ -606,6 +606,33 @@ CREATE UNIQUE INDEX uq_promotion_requests_pending ON scenario_promotion_requests
 -- approver 인박스 — pending 최신순.
 CREATE INDEX idx_promotion_requests_pending ON scenario_promotion_requests (tenant_id, created_at DESC)
   WHERE status = 'pending';
+
+-- tenant_offboarding_requests — 테넌트 오프보딩 삭제 원장(설계 rpa-offboarding-data-export-deletion-design O2).
+--   maker-checker(요청자≠승인자 admin 2인, scenario_promotion_requests 선례) 2단계 삭제:
+--   pending → approved(soft: 쓰기 명령 차단 + purge_after=now()+grace) → (유예 경과) purging → purged(비가역).
+--   행별 deleted_at 을 도메인 테이블에 신설하는 대신 테넌트-원장 1테이블 + 상태 게이트 + purge sweeper 로 구성(설계 §4-2).
+--   원장 자신은 purge 대상에서 제외(처분 증빙, 무기한 보존 — Open Decision D5).
+CREATE TABLE tenant_offboarding_requests (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  status          text        NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending','approved','rejected','cancelled','purging','purged')),
+  reason          text        NOT NULL CHECK (length(trim(reason)) > 0),  -- 요청 사유 필수(maker-checker 감사)
+  requested_by    text        NOT NULL,                   -- PrincipalId(요청자; ::uuid 캐스트 금지 — OIDC sub 허용)
+  decided_by      text,                                   -- PrincipalId(승인/반려자; SoD: requested_by ≠ decided_by)
+  decision_reason text,                                   -- 승인/반려 메모(선택)
+  decided_at      timestamptz,
+  purge_after     timestamptz,                            -- 승인 시 now()+grace(기본 7d, ops-defaults offboarding.purge_grace_default)
+  purged_at       timestamptz,
+  held_rows       jsonb       NOT NULL DEFAULT '{}'::jsonb, -- legal_hold 로 잔존한 행 카운트(table→count; 조용한 skip 금지)
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now()
+);
+-- 테넌트당 활성(pending/approved/purging) 요청 1건만 — 중복 오프보딩 차단(부분 UNIQUE).
+CREATE UNIQUE INDEX uq_tenant_offboarding_active ON tenant_offboarding_requests (tenant_id)
+  WHERE status IN ('pending','approved','purging');
+-- 원장 조회 — 최신순.
+CREATE INDEX idx_tenant_offboarding_recent ON tenant_offboarding_requests (tenant_id, created_at DESC);
 
 -- ============================================================
 -- 2a. scenario release workflow / environment bindings
@@ -1514,6 +1541,25 @@ CREATE UNIQUE INDEX idx_artifacts_lifecycle_claim ON artifacts (tenant_id, lifec
 CREATE INDEX idx_artifacts_lifecycle_claim_expiry ON artifacts (tenant_id, lifecycle_claim_kind, lifecycle_claim_expires_at)
   WHERE lifecycle_claim_id IS NOT NULL;
 
+-- artifact_redaction_failures — 레다크션 terminal 실패 운영 알림 원장(ops-defaults §6 "N회 실패 → failed + 알림"의 알림 절반).
+--   artifacts 행은 RLS(artifacts_visible_isolation)가 redacted/not_required 만 앱 롤에 노출하므로(D8-A1 read 게이트),
+--   failed 확정 사실의 앱-가시 표면은 이 원장뿐이다. 워커(BYPASSRLS lifecycle 롤)가 finalize CAS 성공과 같은 tx 에서
+--   push 기록하고, ops-alerts source=artifact_redaction 이 읽는다(자동 발화 포함 — detected_at 은 행 타임스탬프라 세대 안정).
+--   증빙 내용/객체참조는 저장하지 않는다(메타만). failed 는 터미널(재-pending 없음)이라 아티팩트당 1행.
+CREATE TABLE artifact_redaction_failures (
+  id           uuid        PRIMARY KEY,
+  tenant_id    uuid        NOT NULL,
+  artifact_id  uuid        NOT NULL,
+  run_id       uuid,                                         -- 콘솔 딥링크용(실행 기록 경유 조사); generation artifact 는 NULL
+  failure_kind text        NOT NULL CHECK (failure_kind IN ('attempts_exhausted','terminal')),
+  attempts     int         NOT NULL CHECK (attempts >= 1),
+  detected_at  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, artifact_id),
+  FOREIGN KEY (tenant_id, artifact_id) REFERENCES artifacts(tenant_id, id)
+);
+CREATE INDEX idx_artifact_redaction_failures_tenant
+  ON artifact_redaction_failures (tenant_id, detected_at DESC);
+
 -- ============================================================
 -- 7a. document_jobs / document_extractions
 --    Browser RPA V2 IDP MVP: redaction-visible browser artifacts(text/CSV/JSON)에서 deterministic field extraction을
@@ -1694,8 +1740,8 @@ CREATE TABLE ops_alert_acknowledgements (
   tenant_id         uuid        NOT NULL,
   alert_id          text        NOT NULL CHECK (length(alert_id) > 0 AND length(alert_id) <= 300),
   detected_at       timestamptz NOT NULL,
-  source            text        NOT NULL CHECK (source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','dlq','bot_pool','scim_secret_rotation','audit_verifier','readiness_evidence','session_expiry')),
-  subject_type      text        NOT NULL CHECK (subject_type IN ('run','human_task','run_trigger','dlq','bot_pool','scim_provider','audit_verifier','readiness_evidence','browser_session')),
+  source            text        NOT NULL CHECK (source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','dlq','bot_pool','scim_secret_rotation','audit_verifier','readiness_evidence','session_expiry','artifact_redaction','security_abort')),
+  subject_type      text        NOT NULL CHECK (subject_type IN ('run','human_task','run_trigger','dlq','bot_pool','scim_provider','audit_verifier','readiness_evidence','browser_session','artifact')),
   subject_id        text,
   acknowledged_by   text        NOT NULL CHECK (length(acknowledged_by) > 0),
   acknowledged_at   timestamptz NOT NULL DEFAULT now(),
@@ -1717,8 +1763,8 @@ CREATE TABLE ops_notification_deliveries (
   tenant_id             uuid        NOT NULL,
   alert_id              text        NOT NULL CHECK (length(alert_id) > 0 AND length(alert_id) <= 300),
   detected_at           timestamptz NOT NULL,
-  source                text        NOT NULL CHECK (source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','dlq','bot_pool','scim_secret_rotation','audit_verifier','readiness_evidence','session_expiry')),
-  subject_type          text        NOT NULL CHECK (subject_type IN ('run','human_task','run_trigger','dlq','bot_pool','scim_provider','audit_verifier','readiness_evidence','browser_session')),
+  source                text        NOT NULL CHECK (source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','dlq','bot_pool','scim_secret_rotation','audit_verifier','readiness_evidence','session_expiry','artifact_redaction','security_abort')),
+  subject_type          text        NOT NULL CHECK (subject_type IN ('run','human_task','run_trigger','dlq','bot_pool','scim_provider','audit_verifier','readiness_evidence','browser_session','artifact')),
   subject_id            text,
   channel               text        NOT NULL CHECK (channel IN ('teams','slack','email','webhook')),
   provider_alias        text        NOT NULL CHECK (length(provider_alias) > 0 AND length(provider_alias) <= 120),
@@ -1765,7 +1811,7 @@ CREATE INDEX idx_ops_notification_deliveries_retention
 CREATE TABLE ops_alert_notification_routes (
   id                    uuid        PRIMARY KEY,
   tenant_id             uuid        NOT NULL,
-  source                text        CHECK (source IS NULL OR source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','session_expiry')),
+  source                text        CHECK (source IS NULL OR source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','session_expiry','artifact_redaction','security_abort')),
   min_severity          text        NOT NULL CHECK (min_severity IN ('warning','critical')),
   provider_alias        text        NOT NULL CHECK (length(provider_alias) > 0 AND length(provider_alias) <= 120),
   endpoint_secret_ref   text        NOT NULL CHECK (endpoint_secret_ref LIKE 'secret://%' AND length(endpoint_secret_ref) > length('secret://') AND length(endpoint_secret_ref) <= 500),
@@ -1802,8 +1848,8 @@ CREATE TABLE ops_notification_attempts (
   tenant_id             uuid        NOT NULL,
   alert_id              text        NOT NULL CHECK (length(alert_id) > 0 AND length(alert_id) <= 300),
   detected_at           timestamptz NOT NULL,
-  source                text        NOT NULL CHECK (source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','dlq','bot_pool','scim_secret_rotation','audit_verifier','readiness_evidence','session_expiry')),
-  subject_type          text        NOT NULL CHECK (subject_type IN ('run','human_task','run_trigger','dlq','bot_pool','scim_provider','audit_verifier','readiness_evidence','browser_session')),
+  source                text        NOT NULL CHECK (source IN ('run_sla','human_task_sla','trigger_fire','failure_spike','dlq','bot_pool','scim_secret_rotation','audit_verifier','readiness_evidence','session_expiry','artifact_redaction','security_abort')),
+  subject_type          text        NOT NULL CHECK (subject_type IN ('run','human_task','run_trigger','dlq','bot_pool','scim_provider','audit_verifier','readiness_evidence','browser_session','artifact')),
   subject_id            text,
   channel               text        NOT NULL CHECK (channel IN ('webhook')),
   provider_alias        text        NOT NULL CHECK (length(provider_alias) > 0 AND length(provider_alias) <= 120),
@@ -2528,7 +2574,9 @@ BEGIN
     'audit_log',
     'audit_verifier_runs',
     'scenario_promotion_requests',
-    'worker_pool_assignments'
+    'tenant_offboarding_requests',
+    'worker_pool_assignments',
+    'artifact_redaction_failures'
   ]
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', tenant_table);

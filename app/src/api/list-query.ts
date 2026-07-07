@@ -7,12 +7,12 @@
  * - status/kind 필터: 닫힌 enum이므로 무효값은 IR_SCHEMA_INVALID(422)로 거부(조용한 빈-결과 금지).
  *   enum 런타임 배열이 SSoT에 없어 `Record<State,true>`로 미러링 → 누락/오타가 컴파일타임 에러(드리프트 차단).
  */
+import { UUID_RE } from "./server-shared";
 import type { HumanTaskKind, HumanTaskState, RunState, WorkitemState } from "../../../ts/state-machine-types";
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface PageCursor {
   readonly createdAt: string;

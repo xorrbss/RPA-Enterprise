@@ -7,7 +7,7 @@ import { navigate } from "../../router";
 import { SlideOver } from "../../components/SlideOver";
 import { StepTrace } from "../../components/StepTrace";
 import { GenerationArtifactsPanel } from "../../components/GenerationArtifactsPanel";
-import { RunModeBadge, StatusBadge, errorCodeLabel, errorLabel } from "../../components/badges";
+import { RunModeBadge, StatusBadge, errorCodeLabel, errorLabel, errorOperatorActionLabel } from "../../components/badges";
 import { ErrorState, Loading } from "../../components/states";
 import { formatDateTime } from "../../util/time";
 import type { PromoteFromRunResult, RunDetail, ScenarioGenerationResult } from "../../api/types";
@@ -321,9 +321,14 @@ function ArrivalBanner({
       </span>
       {failed && reason !== null && (
         <span>
-          {errorCodeLabel(reason.code)}
+          {errorCodeLabel(reason.code, { terminal: true })}
           {reason.message !== "" && (
             <span className="subtle"> · {reason.message}</span>
+          )}
+          {/* U3-1: 계약 operatorAction 한국어 미러 배선 — 원인만 보이고 '다음에 뭘 해야 하는지'가 없던 갭.
+              미매핑 코드는 접근자가 raw code 폴백이라, 매핑된 경우에만 조치 줄을 그린다(raw 노출 금지). */}
+          {errorOperatorActionLabel(reason.code) !== reason.code && (
+            <span className="subtle"> · 권장 조치: {errorOperatorActionLabel(reason.code)}</span>
           )}
         </span>
       )}

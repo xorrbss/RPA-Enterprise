@@ -25,6 +25,7 @@ export function verifyWebhookSignature(
   return provided.length === expected.length && timingSafeEqual(provided, expected);
 }
 
+// [R2-5 동결] 인바운드 웹훅 HMAC 검증 페이로드의 바이트 형식 — 외부 발신자 계약. 통합/변경 금지.
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map((item) => canonicalize(item));

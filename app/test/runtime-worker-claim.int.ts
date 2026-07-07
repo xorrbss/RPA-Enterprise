@@ -995,6 +995,39 @@ async function main(): Promise<void> {
     check("red-site run remains queued", redRun.status === "queued", JSON.stringify(redRun));
     check("red-site block creates no lease", (await activeLeaseCount(pool, SITE_RED)) === 0);
 
+    // 기간 한정 승인 만료 집행(A3-3): approved=true라도 approval_expires_at 경과면 미승인과 동일하게 차단.
+    await withTenantTx(pool, TENANT_A, (c) =>
+      c.query(
+        `UPDATE site_profiles SET approved = true, approved_at = now(), approval_expires_at = now() - interval '1 hour'
+          WHERE id = $1::uuid`,
+        [SITE_RED],
+      ),
+    );
+    const redExpired = await configured.handle({
+      kind: "run_claim",
+      tenantId: TENANT_A as TenantId,
+      runId: RUN_RED as RunId,
+      correlationId: CORRELATION as CorrelationId,
+    });
+    check(
+      "red site with expired approval blocks",
+      redExpired.kind === "failed" && redExpired.code === "SITE_PROFILE_BLOCKED",
+      JSON.stringify(redExpired),
+    );
+    check("expired-approval block creates no lease", (await activeLeaseCount(pool, SITE_RED)) === 0);
+    // 미래 만료 승인은 통과 — 만료 검사가 유효 승인을 과차단하지 않음(negative control).
+    await withTenantTx(pool, TENANT_A, (c) =>
+      c.query(`UPDATE site_profiles SET approval_expires_at = now() + interval '1 hour' WHERE id = $1::uuid`, [SITE_RED]),
+    );
+    const redApproved = await configured.handle({
+      kind: "run_claim",
+      tenantId: TENANT_A as TenantId,
+      runId: RUN_RED as RunId,
+      correlationId: CORRELATION as CorrelationId,
+    });
+    check("red site with unexpired approval claims", redApproved.kind === "completed", JSON.stringify(redApproved));
+    check("approved red-site run claimed", (await runStatus(pool, RUN_RED)).status === "claimed");
+
     const gatewayWorker = new PgRuntimeWorker(pool, { workerId: GATEWAY_WORKER, browserLeasePlanResolver: planResolver });
     const gatewayWorkerClaim = await gatewayWorker.handle({
       kind: "run_claim",
@@ -1425,6 +1458,21 @@ async function main(): Promise<void> {
           retryableFailed.redactionAttempts === 5 &&
           retryableFailed.lifecycleClaimSet === false,
         JSON.stringify(retryableFailed),
+      );
+      // A4-3: failed 확정과 같은 tx 에 앱-가시 원장(artifact_redaction_failures) push — RLS 로 숨는 failed 행의
+      // 유일한 알림 원천. attempts_exhausted + 최종 시도 수가 기록된다.
+      const failureLedger = await withTenantTx(lifecycleBypassPool, TENANT_A, (c) =>
+        c.query<{ failure_kind: string; attempts: number }>(
+          `SELECT failure_kind, attempts FROM artifact_redaction_failures WHERE tenant_id = $1::uuid AND artifact_id = $2::uuid`,
+          [TENANT_A, ARTIFACT_REDACTION_RETRYABLE],
+        ),
+      );
+      check(
+        "artifact_redaction failed flip pushes app-visible failure ledger row",
+        failureLedger.rows.length === 1 &&
+          failureLedger.rows[0]?.failure_kind === "attempts_exhausted" &&
+          failureLedger.rows[0]?.attempts === 5,
+        JSON.stringify(failureLedger.rows),
       );
       check(
         "artifact_redaction retry threshold calls retryable fixture twice",

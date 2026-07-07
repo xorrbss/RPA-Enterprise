@@ -1,6 +1,7 @@
+import { isRecord } from "./server-shared";
 import type { PoolClient } from "pg";
 
-import { ApiResponseError } from "./errors";
+import { ApiResponseError } from "../runtime/errors";
 
 export type ScenarioCertificationStatus = "uncertified" | "certified" | "revoked";
 export type ScenarioGovernanceStage = "dev" | "review" | "pilot" | "certified" | "deprecated";
@@ -102,6 +103,3 @@ function toIso(value: Date | string | null): string | null {
   return value instanceof Date ? value.toISOString() : value;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
