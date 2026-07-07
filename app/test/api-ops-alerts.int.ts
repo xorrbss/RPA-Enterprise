@@ -409,9 +409,9 @@ async function main(): Promise<void> {
     check("run SLA route deep-links to run trace subject", alertById.get(`run_sla:${RUN_A}`)?.route === `#runTrace?run=${RUN_A}`, all.body);
     check("human task SLA route deep-links to task subject", alertById.get(`human_task_sla:${HT_CRITICAL}`)?.route === `#humanTasks?ht=${HT_CRITICAL}`, all.body);
     check("trigger fire route deep-links to trigger subject", alertById.get(`trigger_fire:${FIRE_A}`)?.route === `#automationOps?trigger=${TRIGGER_A}`, all.body);
-    check("bot pool alert targets orchestration panel", alertById.get("bot_pool:browser-default")?.route === "#orchestration?panel=botPools", all.body);
+    check("bot pool alert targets automation ops queue section", alertById.get("bot_pool:browser-default")?.route === "#automationOps?section=queue", all.body);
     check("audit verifier alert targets Audit Explorer", alertById.get(`audit_verifier:${AUDIT_VERIFIER_INVALID}`)?.route === "#auditExplorer", all.body);
-    check("readiness evidence alert targets production readiness panel", alertById.get("readiness_evidence:slo_oncall_signoff")?.route === "#automationOps?panel=productionReadiness", all.body);
+    check("readiness evidence alert targets production readiness section", alertById.get("readiness_evidence:slo_oncall_signoff")?.route === "#automationOps?section=readiness", all.body);
 
     const scimOnly = await app.inject({ method: "GET", url: "/v1/ops-alerts?source=scim_secret_rotation", headers: { authorization: `Bearer ${viewer}` } });
     const scimBody = scimOnly.json() as {
@@ -428,8 +428,8 @@ async function main(): Promise<void> {
       scimOnly.body,
     );
     check(
-      "SCIM SecretRef rotation alert routes to security console",
-      scimBody.items.every((item) => item.route?.startsWith("#security?panel=scim") === true),
+      "SCIM SecretRef rotation alert routes to security access section",
+      scimBody.items.every((item) => item.route?.startsWith("#security?section=access") === true),
       scimOnly.body,
     );
 
@@ -471,7 +471,7 @@ async function main(): Promise<void> {
         readinessBody.items.every((item) =>
           item.source === "readiness_evidence" &&
           item.subject_type === "readiness_evidence" &&
-          item.route === "#automationOps?panel=productionReadiness",
+          item.route === "#automationOps?section=readiness",
         ),
       readinessOnly.body,
     );

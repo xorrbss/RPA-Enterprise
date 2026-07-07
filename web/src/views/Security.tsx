@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { mergeParams, useHashParam } from "../router";
-import { useCan } from "../api/permissions";
+import { useCan, useRoles } from "../api/permissions";
 import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
@@ -101,6 +101,58 @@ function SectionAccessNotice({ title }: { title: string }): JSX.Element {
   );
 }
 
+function securitySectionMeta(key: SecuritySectionKey): (typeof SECURITY_SECTIONS)[number] {
+  return SECURITY_SECTIONS.find((section) => section.key === key) ?? SECURITY_SECTIONS[0]!;
+}
+
+function SecurityReadOnlySummary(props: {
+  readonly active: SecuritySectionKey;
+  readonly sites: readonly SiteItem[];
+  readonly sitesLoading: boolean;
+  readonly sitesError: boolean;
+}): JSX.Element {
+  const section = securitySectionMeta(props.active);
+  const pendingApprovals = props.sites.filter((site) => site.approval_status === "pending").length;
+  const missingSessions = props.sites.filter((site) => site.login_capable === true && site.session_ready !== true).length;
+  const openCircuits = props.sites.filter((site) => site.circuit_status === "open").length;
+
+  return (
+    <div className="security-view">
+      <section className="panel security-hub" aria-label="보안 읽기 전용 요약">
+        <div className="panel-head">
+          <div>
+            <h2>보안 읽기 전용 요약</h2>
+            <p className="subtle">직접 링크 접근에서는 허용된 상태 요약만 제공합니다. 관리 작업은 admin 역할에서만 열립니다.</p>
+          </div>
+          <span className="badge amber">읽기 전용</span>
+        </div>
+      </section>
+
+      <section className="panel security-section-summary" aria-label={`${section.label} 읽기 전용 섹션 요약`}>
+        <strong>{section.label}</strong>
+        <p className="subtle">{section.purpose}</p>
+        {props.sitesLoading ? (
+          <p className="subtle">사이트 보안 요약을 확인하는 중입니다.</p>
+        ) : props.sitesError ? (
+          <p className="form-alert red" role="alert">사이트 보안 요약을 불러오지 못했습니다.</p>
+        ) : (
+          <p className="subtle">
+            등록 사이트 {props.sites.length}개 · 승인 대기 {pendingApprovals}개 · 세션 미등록 {missingSessions}개 · 차단 회로 {openCircuits}개
+          </p>
+        )}
+      </section>
+
+      <section className="panel section-access-notice" role="status" aria-label="보안 deep link 권한 안내">
+        <strong>관리자 권한 필요</strong>
+        <p className="subtle">
+          security 메뉴는 admin-only 정책을 유지합니다. 현재 역할에서는 등록, 승인, 동기화, 정책 변경 같은 관리 기능을 표시하지 않습니다.
+        </p>
+        <p className="subtle">비밀값, 토큰, 비밀번호, 해석된 비밀 자료, 감사 원문 본문, 세션 본문은 표시하지 않습니다.</p>
+      </section>
+    </div>
+  );
+}
+
 function sessionEncryptionBadge(site: SiteItem): JSX.Element {
   const kid = site.enc_kid ?? null;
   if (kid === "dev-plaintext" || kid === "plaintext") {
@@ -115,6 +167,8 @@ function sessionEncryptionBadge(site: SiteItem): JSX.Element {
 export function SecurityView(): JSX.Element {
   const api = useApiClient();
   const can = useCan();
+  const roles = useRoles();
+  const isSecurityAdmin = roles.includes("admin");
   const [guideSite, setGuideSite] = useState<SiteItem | null>(null);
   const capabilities = useQuery({ queryKey: ["capabilities"], queryFn: () => api.getCapabilities(), retry: false });
   const serverCaptureEnabled = capabilities.data?.session_capture?.server?.enabled === true;
@@ -140,6 +194,18 @@ export function SecurityView(): JSX.Element {
   const focusSite = focusSiteId !== null ? sites.find((s) => s.site_profile_id === focusSiteId) ?? null : null;
   const focusNeedsSession = focusSite !== null && focusSite.login_capable === true && focusSite.session_ready !== true;
   const sessionQueue = useMemo(() => collectSessionRenewalQueue(sites), [sites]);
+
+  if (!isSecurityAdmin) {
+    return (
+      <SecurityReadOnlySummary
+        active={activeSection}
+        sites={sites}
+        sitesLoading={lv.query.isLoading}
+        sitesError={lv.query.isError}
+      />
+    );
+  }
+
   return (
     <div className="security-view">
       <SecuritySectionSelector active={activeSection} />

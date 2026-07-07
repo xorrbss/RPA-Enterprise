@@ -29,7 +29,7 @@ function jwt(roles: readonly string[]): string {
 describe("security connections panel", () => {
   beforeEach(() => {
     location.hash = "#security?section=secrets";
-    localStorage.setItem("rpa.token", jwt(["operator"]));
+    localStorage.setItem("rpa.token", jwt(["admin"]));
   });
 
   test("커넥터·템플릿·웹훅의 SecretRef를 보안 연결 현황으로 집계한다", async () => {

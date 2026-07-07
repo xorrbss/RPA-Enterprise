@@ -224,6 +224,45 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /ai-governance/evidence/summary:
+    get:
+      tags: [AIGovernance]
+      operationId: getAiGovernanceEvidenceSummary
+      summary: Summarize AI governance evidence
+      description: >
+        Return metadata-only aggregate counts for tenant-scoped AI governance evidence. The summary avoids
+        page truncation and never returns raw prompts, model outputs, endpoint URLs, tokens, passwords,
+        provider credentials, or resolved SecretRef values.
+      parameters:
+        - name: evidence_type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AiGovernanceEvidenceType'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AiGovernanceEvidenceStatus'
+        - name: subject_ref
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 300
+      responses:
+        '200':
+          description: AI governance evidence aggregate summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiGovernanceEvidenceSummary'
+        '422':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+
   # ============================================================
   # 1. Runs (실행 제어) — api-surface §1
   # ============================================================
@@ -1727,6 +1766,50 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuditLogPage'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /audit-log/summary:
+    get:
+      tags: [AuditLog]
+      operationId: getAuditLogSummary
+      description: Summarize tenant-scoped immutable audit records without exposing payload bodies.
+      summary: Summarize audit log records
+      parameters:
+        - name: action
+          in: query
+          required: false
+          schema: { type: string, minLength: 1 }
+        - name: outcome
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AuditOutcome'
+        - name: actor
+          in: query
+          required: false
+          schema: { type: string, minLength: 1 }
+        - name: correlation_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: occurred_at_from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Inclusive lower bound for occurred_at.
+        - name: occurred_at_to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Inclusive upper bound for occurred_at.
+      responses:
+        '200':
+          description: Tenant-scoped audit log aggregate summary. Payload bodies are intentionally omitted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogSummary'
         default:
           $ref: '#/components/responses/Error'
 
@@ -6648,6 +6731,72 @@ components:
             $ref: '#/components/schemas/AiGovernanceEvidence'
         next_cursor:
           type: [string, "null"]
+    AiGovernanceEvidenceSummary:
+      type: object
+      additionalProperties: false
+      required: [total_count, status_counts, expired_valid_count, latest, type_status_counts, filters]
+      properties:
+        total_count:
+          type: integer
+          minimum: 0
+        status_counts:
+          type: object
+          additionalProperties: false
+          required: [valid, deferred, failed]
+          properties:
+            valid: { type: integer, minimum: 0 }
+            deferred: { type: integer, minimum: 0 }
+            failed: { type: integer, minimum: 0 }
+        expired_valid_count:
+          type: integer
+          minimum: 0
+        latest:
+          oneOf:
+            - type: "null"
+            - type: object
+              additionalProperties: false
+              required: [evidence_type, status, subject_ref, evidence_at, recorded_at]
+              properties:
+                evidence_type:
+                  $ref: '#/components/schemas/AiGovernanceEvidenceType'
+                status:
+                  $ref: '#/components/schemas/AiGovernanceEvidenceStatus'
+                subject_ref:
+                  type: [string, "null"]
+                evidence_at:
+                  type: [string, "null"]
+                  format: date-time
+                recorded_at:
+                  type: [string, "null"]
+                  format: date-time
+        type_status_counts:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [evidence_type, total_count, valid, deferred, failed]
+            properties:
+              evidence_type:
+                $ref: '#/components/schemas/AiGovernanceEvidenceType'
+              total_count: { type: integer, minimum: 0 }
+              valid: { type: integer, minimum: 0 }
+              deferred: { type: integer, minimum: 0 }
+              failed: { type: integer, minimum: 0 }
+        filters:
+          type: object
+          additionalProperties: false
+          required: [evidence_type, status, subject_ref]
+          properties:
+            evidence_type:
+              oneOf:
+                - type: "null"
+                - $ref: '#/components/schemas/AiGovernanceEvidenceType'
+            status:
+              oneOf:
+                - type: "null"
+                - $ref: '#/components/schemas/AiGovernanceEvidenceStatus'
+            subject_ref:
+              type: [string, "null"]
     AiGovernanceEvidenceListQuery:
       type: object
       additionalProperties: false
@@ -7005,6 +7154,66 @@ components:
           items: { $ref: '#/components/schemas/AuditLog' }
         next_cursor:
           type: [string, "null"]
+    AuditLogSummary:
+      type: object
+      additionalProperties: false
+      required: [total_count, outcome_counts, hash_linked_count, legal_hold_count, latest, filters]
+      properties:
+        total_count:
+          type: integer
+          minimum: 0
+        outcome_counts:
+          type: object
+          additionalProperties: false
+          required: [allow, deny, blocked, error]
+          properties:
+            allow: { type: integer, minimum: 0 }
+            deny: { type: integer, minimum: 0 }
+            blocked: { type: integer, minimum: 0 }
+            error: { type: integer, minimum: 0 }
+        hash_linked_count:
+          type: integer
+          minimum: 0
+        legal_hold_count:
+          type: integer
+          minimum: 0
+        latest:
+          oneOf:
+            - type: "null"
+            - type: object
+              additionalProperties: false
+              required: [sequence_no, occurred_at, hash, previous_hash]
+              properties:
+                sequence_no:
+                  type: integer
+                  minimum: 1
+                occurred_at:
+                  type: [string, "null"]
+                  format: date-time
+                hash:
+                  type: [string, "null"]
+                previous_hash:
+                  type: [string, "null"]
+        filters:
+          type: object
+          additionalProperties: false
+          required: [action, outcome, actor, correlation_id, occurred_at_from, occurred_at_to]
+          properties:
+            action: { type: [string, "null"] }
+            outcome:
+              oneOf:
+                - type: "null"
+                - $ref: '#/components/schemas/AuditOutcome'
+            actor: { type: [string, "null"] }
+            correlation_id:
+              type: [string, "null"]
+              format: uuid
+            occurred_at_from:
+              type: [string, "null"]
+              format: date-time
+            occurred_at_to:
+              type: [string, "null"]
+              format: date-time
     AuditLogListQuery:
       type: object
       additionalProperties: false

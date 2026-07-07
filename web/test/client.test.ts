@@ -522,6 +522,27 @@ describe("HttpApiClient 계약", () => {
     });
   });
 
+  test("AI governance evidence summary → GET /v1/ai-governance/evidence/summary + filters", async () => {
+    const { calls, client } = harness({
+      body: {
+        total_count: 1,
+        status_counts: { valid: 1, deferred: 0, failed: 0 },
+        expired_valid_count: 0,
+        latest: null,
+        type_status_counts: [],
+        filters: { evidence_type: "model_registry", status: "valid", subject_ref: "model:codex-prod-primary" },
+      },
+    });
+    await client.getAiGovernanceEvidenceSummary({
+      evidence_type: "model_registry",
+      status: "valid",
+      subject_ref: "model:codex-prod-primary",
+    });
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/ai-governance/evidence/summary?evidence_type=model_registry&status=valid&subject_ref=model%3Acodex-prod-primary");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
+  });
+
   test("automation adoption evidence list and record routes", async () => {
     const listHarness = harness({ body: { items: [], next_cursor: null } });
     await listHarness.client.listAutomationAdoptionEvidence("idea-123", {
@@ -761,6 +782,23 @@ describe("HttpApiClient 계약", () => {
     });
     expect(calls[0]?.method).toBe("GET");
     expect(calls[0]?.url).toBe("http://api.test/v1/audit-log?action=artifact.read&outcome=allow&actor=viewer-a&occurred_at_from=2026-06-01T00%3A00%3A00.000Z&occurred_at_to=2026-06-30T23%3A59%3A59.999Z&limit=25");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
+  });
+
+  test("getAuditLogSummary → GET /v1/audit-log/summary + 필터 쿼리", async () => {
+    const { calls, client } = harness({
+      body: {
+        total_count: 1,
+        outcome_counts: { allow: 1, deny: 0, blocked: 0, error: 0 },
+        hash_linked_count: 1,
+        legal_hold_count: 0,
+        latest: null,
+        filters: { action: "secret.resolve", outcome: "allow", actor: "admin-a", correlation_id: null, occurred_at_from: null, occurred_at_to: null },
+      },
+    });
+    await client.getAuditLogSummary({ action: "secret.resolve", outcome: "allow", actor: "admin-a" });
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/audit-log/summary?action=secret.resolve&outcome=allow&actor=admin-a");
     expect(calls[0]?.headers.get("authorization")).toBe("Bearer jwt-123");
   });
 

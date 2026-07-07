@@ -200,6 +200,30 @@ async function main(): Promise<void> {
       });
       check("action/outcome/actor/correlation filters match one row", filtered.statusCode === 200 && filtered.json().items?.length === 1 && filtered.json().items?.[0]?.audit_id === AUDIT_A_NEW, filtered.body);
 
+      const summary = await app.inject({
+        method: "GET",
+        url: "/v1/audit-log/summary?action=artifact.read",
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      const summaryBody = summary.json() as {
+        total_count: number;
+        outcome_counts: { allow: number; deny: number; blocked: number; error: number };
+        hash_linked_count: number;
+        latest: { sequence_no: number; hash: string | null; previous_hash: string | null } | null;
+      };
+      check("audit summary returns full filtered counts without page truncation",
+        summary.statusCode === 200 &&
+          summaryBody.total_count === 3 &&
+          summaryBody.outcome_counts.allow === 2 &&
+          summaryBody.outcome_counts.deny === 1 &&
+          summaryBody.hash_linked_count === 3 &&
+          summaryBody.latest?.sequence_no === 2 &&
+          summaryBody.latest.hash === HASH_A_NEW,
+        summary.body);
+      check("audit summary omits payload material",
+        !summary.body.includes("must-not-leak") && !summary.body.includes("artifact-new"),
+        summary.body);
+
       const period = await app.inject({
         method: "GET",
         url: "/v1/audit-log?occurred_at_from=2026-06-22T00%3A00%3A00.000Z&occurred_at_to=2026-06-22T23%3A59%3A59.999Z",

@@ -25,6 +25,28 @@ describe("viewFromHash — 딥링크 쿼리 파라미터 지원", () => {
     expect(viewFromHash("#workitems?foo=bar")).toBe("workitems");
   });
 
+  test("운영 알림·도입 증빙 route hint는 실제 등록된 콘솔 view로 해석된다", () => {
+    const routeHints = [
+      ["#runTrace?run=11111111-2222-3333-4444-555555555555", "runTrace"],
+      ["#runTrace?status=failed_system", "runTrace"],
+      ["#humanTasks?ht=human-task-1", "humanTasks"],
+      ["#workitems?wi=workitem-1", "workitems"],
+      ["#automationOps?trigger=trigger-1", "automationOps"],
+      ["#automationOps?section=queue", "automationOps"],
+      ["#automationOps?section=readiness", "automationOps"],
+      ["#auditExplorer", "auditExplorer"],
+      ["#security?section=access&provider=scim-1", "security"],
+      ["#security?section=sites&site=site-1", "security"],
+      ["#security?section=ai", "security"],
+      ["#dashboard?focus=evidence-packet", "dashboard"],
+      ["#dashboard?focus=automation-report", "dashboard"],
+    ] as const;
+
+    for (const [hash, view] of routeHints) {
+      expect(viewFromHash(hash)).toBe(view);
+    }
+  });
+
   test("알 수 없는/빈 해시 → myWork(디폴트 랜딩) 폴백(조용한 빈화면 금지)", () => {
     expect(viewFromHash("#nope")).toBe("myWork");
     expect(viewFromHash("")).toBe("myWork");

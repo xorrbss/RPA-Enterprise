@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "../src/App";
@@ -20,7 +20,10 @@ function renderApp(client: ApiClient = fakeClient()): void {
 
 // 실행 상세 패널을 열어 단계 트레이스를 마운트.
 async function openDetail(): Promise<void> {
-  location.hash = "#runTrace";
+  act(() => {
+    location.hash = "#runTrace";
+    window.dispatchEvent(new Event("hashchange"));
+  });
   (await screen.findByRole("button", { name: "실행 추적 상세 보기" }, { timeout: 10000 })).click();
 }
 

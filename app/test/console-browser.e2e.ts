@@ -290,6 +290,50 @@ function apiFixture(url: URL): unknown {
       gates: [],
     };
   }
+  if (pathname === "/api/v1/audit-log/summary") {
+    return {
+      total_count: 1,
+      outcome_counts: { allow: 1, deny: 0, blocked: 0, error: 0 },
+      hash_linked_count: 1,
+      legal_hold_count: 0,
+      latest: {
+        sequence_no: 1,
+        occurred_at: "2026-06-24T09:00:00.000Z",
+        hash: "hash-e2e-1",
+        previous_hash: null,
+      },
+      filters: {
+        action: searchParams.get("action"),
+        outcome: null,
+        actor: null,
+        correlation_id: null,
+        occurred_at_from: null,
+        occurred_at_to: null,
+      },
+    };
+  }
+  if (pathname === "/api/v1/ai-governance/evidence/summary") {
+    return {
+      total_count: 1,
+      status_counts: { valid: 1, deferred: 0, failed: 0 },
+      expired_valid_count: 0,
+      latest: {
+        evidence_type: "model_registry",
+        status: "valid",
+        subject_ref: "model:e2e",
+        evidence_at: "2026-06-24T09:00:00.000Z",
+        recorded_at: "2026-06-24T09:01:00.000Z",
+      },
+      type_status_counts: [
+        { evidence_type: "model_registry", total_count: 1, valid: 1, deferred: 0, failed: 0 },
+      ],
+      filters: {
+        evidence_type: null,
+        status: null,
+        subject_ref: null,
+      },
+    };
+  }
   // human-tasks / dlq / sites / scenarios 등 → 빈 페이지(정직)
   return { items: [], next_cursor: null };
 }

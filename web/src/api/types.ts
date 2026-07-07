@@ -1188,6 +1188,41 @@ export interface AiGovernanceEvidenceListParams extends ListParams {
   readonly subject_ref?: string;
 }
 
+export interface AiGovernanceEvidenceSummaryParams {
+  readonly evidence_type?: AiGovernanceEvidenceType;
+  readonly status?: AiGovernanceEvidenceStatus;
+  readonly subject_ref?: string;
+}
+
+export interface AiGovernanceEvidenceSummary {
+  readonly total_count: number;
+  readonly status_counts: {
+    readonly valid: number;
+    readonly deferred: number;
+    readonly failed: number;
+  };
+  readonly expired_valid_count: number;
+  readonly latest: null | {
+    readonly evidence_type: AiGovernanceEvidenceType;
+    readonly status: AiGovernanceEvidenceStatus;
+    readonly subject_ref: string | null;
+    readonly evidence_at: string | null;
+    readonly recorded_at: string | null;
+  };
+  readonly type_status_counts: readonly {
+    readonly evidence_type: AiGovernanceEvidenceType;
+    readonly total_count: number;
+    readonly valid: number;
+    readonly deferred: number;
+    readonly failed: number;
+  }[];
+  readonly filters: {
+    readonly evidence_type: AiGovernanceEvidenceType | null;
+    readonly status: AiGovernanceEvidenceStatus | null;
+    readonly subject_ref: string | null;
+  };
+}
+
 export type AiGovernanceRuntimePolicyMode = "observe" | "warn" | "block";
 
 export interface AiGovernanceRuntimePolicy {
@@ -1509,6 +1544,41 @@ export interface AuditLogListParams extends ListParams {
   readonly correlation_id?: string;
   readonly occurred_at_from?: string;
   readonly occurred_at_to?: string;
+}
+
+export interface AuditLogSummaryParams {
+  readonly action?: string;
+  readonly outcome?: AuditOutcome;
+  readonly actor?: string;
+  readonly correlation_id?: string;
+  readonly occurred_at_from?: string;
+  readonly occurred_at_to?: string;
+}
+
+export interface AuditLogSummary {
+  readonly total_count: number;
+  readonly outcome_counts: {
+    readonly allow: number;
+    readonly deny: number;
+    readonly blocked: number;
+    readonly error: number;
+  };
+  readonly hash_linked_count: number;
+  readonly legal_hold_count: number;
+  readonly latest: null | {
+    readonly sequence_no: number;
+    readonly occurred_at: string | null;
+    readonly hash: string | null;
+    readonly previous_hash: string | null;
+  };
+  readonly filters: {
+    readonly action: string | null;
+    readonly outcome: AuditOutcome | null;
+    readonly actor: string | null;
+    readonly correlation_id: string | null;
+    readonly occurred_at_from: string | null;
+    readonly occurred_at_to: string | null;
+  };
 }
 
 export interface AuditLogExportParams extends AuditLogListParams {

@@ -99,8 +99,9 @@ describe("Credential reference lifecycle actions", () => {
         }),
       }),
     );
-    expect(await screen.findByRole("status", { name: "Credential 운영 권한 안내" })).toBeInTheDocument();
-    expect(screen.getByText("권한 확인 필요")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "보안 읽기 전용 요약" })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "보안 deep link 권한 안내" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "비밀·연결·감사 읽기 전용 섹션 요약" })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "자격증명 동시성 정책" })).toBeNull();
     expect(screen.queryByRole("button", { name: "참조 등록" })).toBeNull();
     expect(screen.queryByRole("button", { name: "회전" })).toBeNull();

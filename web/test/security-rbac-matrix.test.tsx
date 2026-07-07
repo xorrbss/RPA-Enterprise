@@ -29,7 +29,7 @@ function jwt(roles: readonly string[]): string {
 describe("security RBAC matrix panel", () => {
   beforeEach(() => {
     location.hash = "#security?section=access";
-    localStorage.setItem("rpa.token", jwt(["operator", "legacy_role"]));
+    localStorage.setItem("rpa.token", jwt(["admin", "operator", "legacy_role"]));
   });
 
   test("현재 토큰 역할과 핵심 액션 허용/차단을 표시한다", async () => {
@@ -37,7 +37,7 @@ describe("security RBAC matrix panel", () => {
 
     expect(await screen.findByRole("heading", { name: "RBAC 역할 권한 매트릭스" })).toBeInTheDocument();
     expect(screen.getByText("현재 토큰 역할")).toBeInTheDocument();
-    expect(screen.getByText("운영자, 미등록 1개")).toBeInTheDocument();
+    expect(screen.getByText(/미등록 1개/)).toBeInTheDocument();
     expect(screen.getByText("토큰에 미등록 역할이 포함되어 있습니다: legacy_role")).toBeInTheDocument();
     expect(screen.getByText("미허용 액션은 백엔드 RBAC에서 차단되며, 이 표는 같은 권한 매트릭스를 화면에 표시합니다.")).toBeInTheDocument();
 
@@ -45,9 +45,9 @@ describe("security RBAC matrix panel", () => {
     expect(within(runCreateRow).getAllByText("허용").length).toBeGreaterThan(0);
 
     const promoteRow = screen.getByRole("row", { name: /운영 버전 승격/ });
-    expect(within(promoteRow).getByText("차단")).toBeInTheDocument();
+    expect(within(promoteRow).getAllByText("허용").length).toBeGreaterThan(0);
 
     const secretRow = screen.getByRole("row", { name: /SecretRef 사용/ });
-    expect(within(secretRow).getByText("차단")).toBeInTheDocument();
+    expect(within(secretRow).getAllByText("허용").length).toBeGreaterThan(0);
   });
 });

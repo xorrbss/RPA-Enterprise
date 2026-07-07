@@ -53,6 +53,20 @@ interface AuditLogFilters {
   readonly occurredAtTo?: Date;
 }
 
+interface AuditLogSummaryRow {
+  readonly total_count: number;
+  readonly allow_count: number;
+  readonly deny_count: number;
+  readonly blocked_count: number;
+  readonly error_count: number;
+  readonly hash_linked_count: number;
+  readonly legal_hold_count: number;
+  readonly latest_sequence_no: string | null;
+  readonly latest_occurred_at: Date | null;
+  readonly latest_hash: string | null;
+  readonly latest_previous_hash: string | null;
+}
+
 interface VerificationRunFilters {
   readonly status?: AuditVerificationRunStatus;
 }
@@ -66,6 +80,15 @@ export function registerAuditLogRoutes(app: FastifyInstance, deps: ApiServerDeps
     const rows = await selectAuditLogRows(deps, principal.tenantId, filters, limit + 1, cursor);
 
     reply.code(200).send(paginate(rows, limit, (row) => ({ createdAt: row.cursor_at, id: row.id }), mapAuditLogRow));
+  });
+
+  app.get("/v1/audit-log/summary", { config: { rbacAction: "audit.read" } }, async (request, reply) => {
+    const principal = requirePrincipal(request);
+    const query = request.query as Record<string, unknown>;
+    const filters = parseAuditLogFilters(query);
+    const summary = await selectAuditLogSummary(deps, principal.tenantId, filters);
+
+    reply.code(200).send(summary);
   });
 
   app.get("/v1/audit-log/export", { config: { rbacAction: "audit.read" } }, async (request, reply) => {
@@ -176,6 +199,99 @@ async function selectAuditLogRows(
       ],
     );
     return result.rows;
+  });
+}
+
+async function selectAuditLogSummary(
+  deps: ApiServerDeps,
+  tenantId: string,
+  filters: AuditLogFilters,
+): Promise<Record<string, unknown>> {
+  return withTenantTx(deps.pool, tenantId, async (client) => {
+    const result = await client.query<AuditLogSummaryRow>(
+      `WITH filtered AS (
+         SELECT sequence_no, outcome, occurred_at, legal_hold, previous_hash, hash
+           FROM audit_log
+          WHERE tenant_id = $1::uuid
+            AND deleted_at IS NULL
+            AND ($2::text IS NULL OR action = $2)
+            AND ($3::text IS NULL OR outcome = $3)
+            AND ($4::text IS NULL OR actor->>'subjectId' = $4)
+            AND ($5::uuid IS NULL OR correlation_id = $5::uuid)
+            AND ($6::timestamptz IS NULL OR occurred_at >= $6::timestamptz)
+            AND ($7::timestamptz IS NULL OR occurred_at <= $7::timestamptz)
+       ),
+       latest AS (
+         SELECT sequence_no::text AS latest_sequence_no,
+                occurred_at AS latest_occurred_at,
+                hash AS latest_hash,
+                previous_hash AS latest_previous_hash
+           FROM filtered
+          ORDER BY occurred_at DESC, sequence_no DESC
+          LIMIT 1
+       )
+       SELECT count(*)::int AS total_count,
+              count(*) FILTER (WHERE outcome = 'allow')::int AS allow_count,
+              count(*) FILTER (WHERE outcome = 'deny')::int AS deny_count,
+              count(*) FILTER (WHERE outcome = 'blocked')::int AS blocked_count,
+              count(*) FILTER (WHERE outcome = 'error')::int AS error_count,
+              count(*) FILTER (WHERE hash IS NOT NULL AND length(hash) > 0)::int AS hash_linked_count,
+              count(*) FILTER (WHERE legal_hold = true)::int AS legal_hold_count,
+              latest.latest_sequence_no,
+              latest.latest_occurred_at,
+              latest.latest_hash,
+              latest.latest_previous_hash
+         FROM filtered
+         LEFT JOIN latest ON true
+        GROUP BY latest.latest_sequence_no, latest.latest_occurred_at, latest.latest_hash, latest.latest_previous_hash`,
+      [
+        tenantId,
+        filters.action ?? null,
+        filters.outcome ?? null,
+        filters.actorSub ?? null,
+        filters.correlationId ?? null,
+        filters.occurredAtFrom?.toISOString() ?? null,
+        filters.occurredAtTo?.toISOString() ?? null,
+      ],
+    );
+    const row = result.rows[0] ?? {
+      total_count: 0,
+      allow_count: 0,
+      deny_count: 0,
+      blocked_count: 0,
+      error_count: 0,
+      hash_linked_count: 0,
+      legal_hold_count: 0,
+      latest_sequence_no: null,
+      latest_occurred_at: null,
+      latest_hash: null,
+      latest_previous_hash: null,
+    };
+    return {
+      total_count: row.total_count,
+      outcome_counts: {
+        allow: row.allow_count,
+        deny: row.deny_count,
+        blocked: row.blocked_count,
+        error: row.error_count,
+      },
+      hash_linked_count: row.hash_linked_count,
+      legal_hold_count: row.legal_hold_count,
+      latest: row.latest_sequence_no === null ? null : {
+        sequence_no: Number(row.latest_sequence_no),
+        occurred_at: row.latest_occurred_at?.toISOString() ?? null,
+        hash: row.latest_hash,
+        previous_hash: row.latest_previous_hash,
+      },
+      filters: {
+        action: filters.action ?? null,
+        outcome: filters.outcome ?? null,
+        actor: filters.actorSub ?? null,
+        correlation_id: filters.correlationId ?? null,
+        occurred_at_from: filters.occurredAtFrom?.toISOString() ?? null,
+        occurred_at_to: filters.occurredAtTo?.toISOString() ?? null,
+      },
+    };
   });
 }
 

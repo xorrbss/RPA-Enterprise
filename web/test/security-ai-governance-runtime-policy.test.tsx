@@ -67,7 +67,7 @@ describe("AI governance runtime policy panel", () => {
     location.hash = "#security?section=ai";
   });
 
-  test("viewer sees current runtime policy without manage controls", async () => {
+  test("viewer AI runtime policy deep link shows the read-only security summary only", async () => {
     localStorage.setItem("rpa.token", jwt(["viewer"]));
     const getAiGovernanceRuntimePolicy = vi.fn(async (): Promise<AiGovernanceRuntimePolicyEnvelope> => ({
       configured: true,
@@ -75,15 +75,12 @@ describe("AI governance runtime policy panel", () => {
     }));
     renderApp(fakeClient({ getAiGovernanceRuntimePolicy }));
 
-    const panel = await screen.findByRole("region", { name: "AI runtime policy" });
-    expect(await within(panel).findByText("AI runtime policy")).toBeInTheDocument();
-    expect(await within(panel).findByText("subject subject-map:ai-runtime/prod")).toBeInTheDocument();
-    expect(await within(panel).findByText("owner team:ai-governance-oncall")).toBeInTheDocument();
-    expect(await within(panel).findByText("decision policy-decision:ai-governance/runtime-enforcement")).toBeInTheDocument();
-    expect((await within(panel).findAllByText("ai_governance.enforce")).length).toBeGreaterThan(0);
-    expect(within(panel).getByText("Admin role is required to manage AI runtime policy.")).toBeInTheDocument();
-    expect(within(panel).queryByRole("button", { name: "Save runtime policy" })).toBeNull();
-    expect(getAiGovernanceRuntimePolicy).toHaveBeenCalled();
+    expect(await screen.findByRole("heading", { name: "보안 읽기 전용 요약" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "AI 거버넌스 읽기 전용 섹션 요약" })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "보안 deep link 권한 안내" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "AI runtime policy" })).toBeNull();
+    expect(screen.queryByText("subject subject-map:ai-runtime/prod")).toBeNull();
+    expect(getAiGovernanceRuntimePolicy).not.toHaveBeenCalled();
   });
 
   test("admin upserts block policy with opaque refs and idempotency key", async () => {

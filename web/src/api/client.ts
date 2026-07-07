@@ -4,6 +4,8 @@ import {
   type AiGovernanceEvidence,
   type AiGovernanceEvidenceListParams,
   type AiGovernanceEvidenceRequest,
+  type AiGovernanceEvidenceSummaryParams,
+  type AiGovernanceEvidenceSummary,
   type AiGovernanceRuntimePolicy,
   type AiGovernanceRuntimePolicyEnvelope,
   type AiGovernanceRuntimePolicyRequest,
@@ -16,6 +18,8 @@ import {
   type BotPoolItem,
   type AuditLogItem,
   type AuditLogExportParams,
+  type AuditLogSummaryParams,
+  type AuditLogSummary,
   type AuditVerificationRun,
   type AuditVerificationRunListParams,
   type AutomationPerformanceReport,
@@ -202,6 +206,7 @@ export interface ApiClient {
   listProductionReadinessEvidence(p?: ListParams & { evidence_type?: ProductionReadinessEvidenceType }): Promise<Paginated<ProductionReadinessEvidence>>;
   recordProductionReadinessEvidence(body: ProductionReadinessEvidenceRequest, idempotencyKey: string): Promise<ProductionReadinessEvidence>;
   listAiGovernanceEvidence(p?: AiGovernanceEvidenceListParams): Promise<Paginated<AiGovernanceEvidence>>;
+  getAiGovernanceEvidenceSummary(p?: AiGovernanceEvidenceSummaryParams): Promise<AiGovernanceEvidenceSummary>;
   recordAiGovernanceEvidence(body: AiGovernanceEvidenceRequest, idempotencyKey: string): Promise<AiGovernanceEvidence>;
   getAiGovernanceRuntimePolicy(): Promise<AiGovernanceRuntimePolicyEnvelope>;
   upsertAiGovernanceRuntimePolicy(body: AiGovernanceRuntimePolicyRequest, idempotencyKey: string): Promise<AiGovernanceRuntimePolicy>;
@@ -214,6 +219,7 @@ export interface ApiClient {
   createProcessMiningImport(body: ProcessMiningImportCreateBody, idempotencyKey: string): Promise<ProcessMiningImportItem>;
   listAutomationIdeas(p?: AutomationIdeaListParams): Promise<Paginated<AutomationIdeaItem>>;
   listAuditLog(p?: AuditLogListParams): Promise<Paginated<AuditLogItem>>;
+  getAuditLogSummary(p?: AuditLogSummaryParams): Promise<AuditLogSummary>;
   exportAuditLogCsv(p?: AuditLogExportParams): Promise<string>;
   listAuditVerificationRuns(p?: AuditVerificationRunListParams): Promise<Paginated<AuditVerificationRun>>;
   runAuditVerification(idempotencyKey: string, body?: { legal_hold?: boolean }): Promise<AuditVerificationRun>;
@@ -478,10 +484,10 @@ function parseEtagVersion(value: string | null): number | undefined {
   return Number.isInteger(n) && n >= 1 ? n : undefined;
 }
 
-function queryString(p?: ListParams): string {
+function queryString<T extends object>(p?: T): string {
   if (p === undefined) return "";
   const sp = new URLSearchParams();
-  for (const [k, v] of Object.entries(p)) {
+  for (const [k, v] of Object.entries(p as Record<string, string | number | boolean | null | undefined>)) {
     if (v !== undefined && v !== null) sp.set(k, String(v));
   }
   const s = sp.toString();
@@ -680,6 +686,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     listProductionReadinessEvidence: (p) => get(`/v1/ops/production-readiness/evidence${queryString(p)}`),
     recordProductionReadinessEvidence: (body, idempotencyKey) => post(`/v1/ops/production-readiness/evidence`, idempotencyKey, body),
     listAiGovernanceEvidence: (p) => get(`/v1/ai-governance/evidence${queryString(p)}`),
+    getAiGovernanceEvidenceSummary: (p) => get(`/v1/ai-governance/evidence/summary${queryString(p)}`),
     recordAiGovernanceEvidence: (body, idempotencyKey) => post(`/v1/ai-governance/evidence`, idempotencyKey, body),
     getAiGovernanceRuntimePolicy: () => get(`/v1/ai-governance/runtime-policy`),
     upsertAiGovernanceRuntimePolicy: (body, idempotencyKey) =>
@@ -703,6 +710,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
     createProcessMiningImport: (body, key) => post(`/v1/process-mining/imports`, key, body),
     listAutomationIdeas: (p) => get(`/v1/automation-ideas${queryString(p)}`),
     listAuditLog: (p) => get(`/v1/audit-log${queryString(p)}`),
+    getAuditLogSummary: (p) => get(`/v1/audit-log/summary${queryString(p)}`),
     exportAuditLogCsv: (p) => getText(`/v1/audit-log/export${queryString({ ...p, format: "csv" })}`, "text/csv"),
     listAuditVerificationRuns: (p) => get(`/v1/audit-log/verification-runs${queryString(p)}`),
     runAuditVerification: (idempotencyKey, body) => post(`/v1/audit-log/verification-runs/verify`, idempotencyKey, body ?? {}),
