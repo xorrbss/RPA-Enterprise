@@ -24,7 +24,6 @@ const GatewayView = lazy(() => import("./views/Gateway").then((module) => ({ def
 const ScenariosView = lazy(() => import("./views/Scenarios").then((module) => ({ default: module.ScenariosView })));
 const PlaygroundView = lazy(() => import("./views/Playground").then((module) => ({ default: module.PlaygroundView })));
 const OpenGateView = lazy(() => import("./views/OpenGate").then((module) => ({ default: module.OpenGateView })));
-const IdempotencyView = lazy(() => import("./views/Idempotency").then((module) => ({ default: module.IdempotencyView })));
 
 // 라우트 → 뷰. read 백엔드가 있는 뷰는 실 연결, 그 외는 정직한 placeholder(D7.2+ 워크플로우 대상).
 function renderView(view: ViewKey): JSX.Element {
@@ -65,8 +64,6 @@ function renderView(view: ViewKey): JSX.Element {
       return <PlaygroundView />;
     case "openGate":
       return <OpenGateView />;
-    case "idempotency":
-      return <IdempotencyView />;
     default:
       return <PlaceholderView title="알 수 없는 화면" note="대시보드로 이동하세요." />;
   }

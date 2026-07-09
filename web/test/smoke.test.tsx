@@ -373,7 +373,7 @@ describe("D7 운영 콘솔 shell", () => {
   test("사이드바는 역할 정책으로 필터된 nav item을 렌더", () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
-    expect(nav.querySelectorAll(".nav-item")).toHaveLength(17); // R2: irValidation 은퇴
+    expect(nav.querySelectorAll(".nav-item")).toHaveLength(16); // R2·R3: irValidation·idempotency 은퇴
     expect(within(nav).getByRole("button", { name: "도입 증빙" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: "보안/개인정보" })).toBeInTheDocument();
     expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
@@ -441,19 +441,6 @@ describe("D7 운영 콘솔 shell", () => {
     expect(screen.queryByText(/ARTIFACT_NOT_REDACTED/)).toBeNull();
   });
 
-  test("idempotency: 중복 방지 운영 점검 뷰 렌더(Placeholder 아님)", async () => {
-    renderApp();
-    location.hash = "#idempotency";
-    await waitFor(() =>
-      expect(screen.getByText("중복 방지 메커니즘")).toBeInTheDocument(),
-    );
-    expect(screen.getByText("운영 명령 중복 처리 흐름")).toBeInTheDocument();
-    // 완료 재제출은 부작용 재실행 없이 최초 응답 반환 — 핵심 의미 노출
-    expect(
-      screen.getByText("부작용 재실행 없이 최초 응답 반환"),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("준비 중")).toBeNull(); // Placeholder 배지 미노출
-  });
 
   test("오류 상태 표면화 (조용한 빈화면 금지)", async () => {
     location.hash = "#dashboard"; // 대시보드의 listRuns 오류 표면화 테스트 — 랜딩 디폴트=myWork 이므로 명시 이동.

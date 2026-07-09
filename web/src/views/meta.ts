@@ -22,5 +22,4 @@ export const VIEW_META: Record<ViewKey, { title: string; subtitle: string; icon:
   auditExplorer: { title: "감사 이력", subtitle: "보안 판단, 처리자, 결과, 추적 번호를 조회", icon: "ScrollText", helpText: "누가·언제·무엇을 했고 보안 판단 결과가 어땠는지, 추적 번호로 조회하는 감사 기록 화면입니다." },
   llmGateway: { title: "AI 모델 설정", subtitle: "AI 실행기, 실시간 응답, 예산, 결과 형식 정책", icon: "Bot", helpText: "자동화가 사용하는 AI 모델과 실시간 응답·예산·결과 형식 정책을 설정합니다." },
   security: { title: "보안/개인정보", subtitle: "비밀번호, 개인정보 마스킹, 사이트 접근 정책, 감사 이벤트", icon: "ShieldCheck", helpText: "비밀번호 보관, 개인정보 마스킹, 사이트 접근 정책, 보안 이벤트 같은 보안·개인정보 설정을 관리합니다." },
-  idempotency: { title: "중복 방지", subtitle: "같은 데이터를 반복 저장하거나 전송하지 않도록 보장", icon: "DatabaseZap", helpText: "같은 데이터를 중복 저장하거나 두 번 전송하지 않도록 막는 중복 방지 동작을 설명하는 화면입니다." },
 };

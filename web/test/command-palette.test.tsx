@@ -61,24 +61,24 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
     vi.unstubAllEnvs();
   });
 
-  test("standard operator는 중복 방지 화면을 검색 결과로 보지 않는다", async () => {
+  test("standard operator는 화면 요소 저장소를 검색 결과로 보지 않는다", async () => { // R3: 중복 방지 은퇴 → 잔존 advanced 화면으로 검증
     renderApp();
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
     const dialog = await screen.findByRole("dialog", { name: "전역 검색 및 화면 이동" });
-    fireEvent.change(within(dialog).getByRole("combobox"), { target: { value: "중복 방지" } });
-    expect(within(dialog).queryByText("중복 방지")).toBeNull();
+    fireEvent.change(within(dialog).getByRole("combobox"), { target: { value: "화면 요소 저장소" } });
+    expect(within(dialog).queryByText("화면 요소 저장소")).toBeNull();
     expect(await within(dialog).findByText(POLICY_FILTERED_MESSAGE)).toBeInTheDocument();
     expect(within(dialog).getByText(POLICY_FILTERED_DETAIL)).toBeInTheDocument();
     expect(within(dialog).getByText(POLICY_FILTERED_ADVANCED_ACTION)).toBeInTheDocument();
     expect(within(dialog).queryByText(LOOKUP_FAILURE_MESSAGE)).toBeNull();
   });
 
-  test("admin은 중복 방지 화면을 검색해 이동할 수 있다", async () => {
+  test("admin은 AI 모델 설정 화면을 검색해 이동할 수 있다", async () => { // R3: 중복 방지 은퇴
     localStorage.setItem("rpa.token", jwt(["admin"]));
-    const dialog = await openPaletteWithQuery("중복 방지");
-    expect(within(dialog).getByText("중복 방지")).toBeInTheDocument();
+    const dialog = await openPaletteWithQuery("AI 모델 설정");
+    expect(within(dialog).getByText("AI 모델 설정")).toBeInTheDocument();
     fireEvent.keyDown(dialog, { key: "Enter" });
-    await waitFor(() => expect(location.hash).toBe("#idempotency"));
+    await waitFor(() => expect(location.hash).toBe("#llmGateway"));
   });
 
   test("검색 버튼으로 열고 자동화 이름 검색", async () => {
@@ -151,7 +151,7 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
     expect(within(dialog).queryByText(NO_RESULTS_MESSAGE)).toBeNull();
     expect(within(dialog).queryByText(LOOKUP_FAILURE_MESSAGE)).toBeNull();
 
-    fireEvent.change(input, { target: { value: "중복 방지" } });
+    fireEvent.change(input, { target: { value: "화면 요소 저장소" } }); // R3: 중복 방지 은퇴
     await waitFor(() => expect(within(dialog).getByText(POLICY_FILTERED_ADVANCED_ACTION)).toBeInTheDocument());
     expect(within(dialog).getByText(POLICY_FILTERED_DETAIL)).toBeInTheDocument();
     expect(within(dialog).queryByText(NO_RESULTS_MESSAGE)).toBeNull();

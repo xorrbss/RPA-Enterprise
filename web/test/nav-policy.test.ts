@@ -79,7 +79,6 @@ describe("Phase 15 nav policy", () => {
       "auditExplorer",
       "llmGateway",
       "security",
-      "idempotency",
     ]);
   });
 
@@ -96,7 +95,6 @@ describe("Phase 15 nav policy", () => {
       "objectRepository",
       "security",
       "llmGateway",
-      "idempotency",
       "openGate",
       "approvalInbox",
     ] as const) {
@@ -122,7 +120,6 @@ describe("Phase 15 nav policy", () => {
       "connectorCatalog",
       "objectRepository",
       "auditExplorer",
-      "idempotency",
     ]);
     expect(views).not.toContain("openGate");
   });
