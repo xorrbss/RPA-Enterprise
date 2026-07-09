@@ -59,7 +59,8 @@ describe("layout nav policy", () => {
     expect(within(menu).getByRole("menuitem", { name: /테스트 실행/ })).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: /운영 예약/ })).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: /사이트\/세션 등록/ })).toBeInTheDocument();
-    expect(within(menu).getByRole("menuitem", { name: /증빙 확인/ })).toBeInTheDocument();
+    // T1: 조회 액션("증빙 확인")은 생성 메뉴에서 제외 — 커맨드 팔레트 quick action이 담당.
+    expect(within(menu).queryByRole("menuitem", { name: /증빙 확인/ })).toBeNull();
 
     fireEvent.click(within(menu).getByRole("menuitem", { name: /테스트 실행/ }));
 
@@ -95,20 +96,11 @@ describe("layout nav policy", () => {
     expect(screen.queryByRole("menu", { name: "새로 만들기" })).toBeNull();
   });
 
-  test("viewer quick start does not expose write actions", () => {
+  test("viewer does not get a global create button at all", () => {
+    // T1: 생성 항목이 0개면 버튼 자체를 숨긴다 — viewer에게 "+ 새로 만들기"가 남던 게이팅 불일치 해소(감사 P2).
     localStorage.setItem("rpa.token", jwt(["viewer"]));
     renderApp();
-    fireEvent.click(screen.getByRole("button", { name: /새로 만들기/ }));
-
-    const menu = screen.getByRole("menu", { name: "새로 만들기" });
-    expect(within(menu).queryByRole("menuitem", { name: /자동화 만들기/ })).toBeNull();
-    expect(within(menu).queryByRole("menuitem", { name: /템플릿에서 시작/ })).toBeNull();
-    expect(within(menu).queryByRole("menuitem", { name: /테스트 실행/ })).toBeNull();
-    expect(within(menu).queryByRole("menuitem", { name: /운영 예약/ })).toBeNull();
-    expect(within(menu).queryByRole("menuitem", { name: /사이트\/세션 등록/ })).toBeNull();
-    fireEvent.click(within(menu).getByRole("menuitem", { name: /증빙 확인/ }));
-
-    expect(location.hash).toBe("#adoptionEvidence");
+    expect(screen.queryByRole("button", { name: /새로 만들기/ })).toBeNull();
   });
 
   test("operator advanced mode adds allowed expert tools only", () => {

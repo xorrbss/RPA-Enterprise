@@ -20,24 +20,8 @@ export const ALERT_SOURCE_FILTER_OPTIONS: ReadonlyArray<{ readonly value: AlertS
   { value: "audit_verifier", label: "감사 체인" },
 ];
 
-export interface OpsAlertGroup {
-  readonly representative: OpsAlertItem;
-  readonly count: number;
-}
-
-export function groupOpsAlerts(alerts: readonly OpsAlertItem[]): OpsAlertGroup[] {
-  const groups = new Map<string, { representative: OpsAlertItem; count: number }>();
-  alerts.forEach((alert) => {
-    const key = `${alert.subject_type}:${alert.source}`;
-    const existing = groups.get(key);
-    if (existing === undefined) {
-      groups.set(key, { representative: alert, count: 1 });
-      return;
-    }
-    existing.count += 1;
-  });
-  return [...groups.values()];
-}
+// 그룹핑은 공용 유틸로 이동(T1/T2) — 알림 센터·대시보드·상단바 벨이 같은 규칙을 소비한다. 기존 import 경로 호환 재수출.
+export { groupOpsAlerts, type OpsAlertGroup } from "../../util/ops-alerts";
 
 export function localizeStatusText(value: string): string {
   // 알림 detail 문장 내 raw enum → 운영자 한국어. 상태(run/human-task state·발송 상태)에 더해 사람 확인 종류(kind)도

@@ -24,6 +24,7 @@ import { CommandPalette } from "./CommandPalette";
 import { Freshness } from "./Freshness";
 import { OffboardingBanner } from "./OffboardingBanner";
 import { GlobalCreateMenu, LogoutButton, RolesChip, SearchButton, SubjectChip, TopbarContextBadge } from "./layout/TopbarActions";
+import { TopbarAlertBell } from "./layout/TopbarAlertBell";
 
 const ICONS: Record<string, LucideIcon> = {
   Video, PlaySquare, LayoutDashboard, ClipboardCheck, ListChecks,
@@ -282,44 +283,32 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
               </div>
             )}
           </div>
+          {/* T1: 데스크톱·모바일 동일 구성 — 계정·역할·로그아웃은 팝오버로 이동해 상단바를 행동(알림·만들기·검색) 중심으로 유지. */}
           <span className="topbar-actions">
-            {isMobileNav ? (
-              <>
-                <TopbarContextBadge />
-                <Freshness />
-                <GlobalCreateMenu roles={roles} />
-                <SearchButton onClick={() => setPaletteOpen(true)} />
-                <span className="account-menu" onKeyDown={onAccountKeyDown}>
-                  <button
-                    className="btn icon-btn mobile-account-button"
-                    type="button"
-                    aria-label="계정 메뉴"
-                    aria-expanded={accountOpen}
-                    aria-controls={accountMenuId}
-                    onClick={() => setAccountOpen((current) => !current)}
-                  >
-                    <UserCircle size={16} aria-hidden="true" />
-                  </button>
-                  {accountOpen && (
-                    <div id={accountMenuId} className="account-menu-popover" role="region" aria-label="계정 및 역할">
-                      <SubjectChip />
-                      <RolesChip roles={roles} />
-                      <LogoutButton className="btn account-menu-logout" />
-                    </div>
-                  )}
-                </span>
-              </>
-            ) : (
-              <>
-                <TopbarContextBadge />
-                <SubjectChip />
-                <RolesChip roles={roles} />
-                <Freshness />
-                <GlobalCreateMenu roles={roles} />
-                <SearchButton onClick={() => setPaletteOpen(true)} />
-                <LogoutButton />
-              </>
-            )}
+            <TopbarContextBadge />
+            <TopbarAlertBell />
+            <Freshness />
+            <GlobalCreateMenu roles={roles} />
+            <SearchButton onClick={() => setPaletteOpen(true)} />
+            <span className="account-menu" onKeyDown={onAccountKeyDown}>
+              <button
+                className="btn icon-btn account-menu-button mobile-account-button"
+                type="button"
+                aria-label="계정 메뉴"
+                aria-expanded={accountOpen}
+                aria-controls={accountMenuId}
+                onClick={() => setAccountOpen((current) => !current)}
+              >
+                <UserCircle size={16} aria-hidden="true" />
+              </button>
+              {accountOpen && (
+                <div id={accountMenuId} className="account-menu-popover" role="region" aria-label="계정 및 역할">
+                  <SubjectChip />
+                  <RolesChip roles={roles} />
+                  <LogoutButton className="btn account-menu-logout" />
+                </div>
+              )}
+            </span>
           </span>
         </header>
         <OffboardingBanner />

@@ -24,11 +24,18 @@ function renderApp(client: ApiClient = fakeClient()): void {
 }
 
 describe("layout subject chip", () => {
-  test("shows the current account identifier", () => {
+  // T1: 계정·역할 칩은 상단바 직접 노출 → 계정 팝오버로 이동. 기본은 숨김, 팝오버를 열어 확인한다.
+  function openAccountMenu(): void {
+    fireEvent.click(screen.getByRole("button", { name: "계정 메뉴" }));
+  }
+
+  test("shows the current account identifier in the account popover", () => {
     localStorage.setItem("rpa.token", jwt("auth0|alice", ["operator"]));
     location.hash = "#dashboard";
 
     renderApp();
+    expect(screen.queryByLabelText("현재 접속 계정 auth0|alice")).toBeNull();
+    openAccountMenu();
 
     expect(screen.getByLabelText("현재 접속 계정 auth0|alice")).toBeInTheDocument();
     expect(screen.getByText("auth0|alice")).toBeInTheDocument();
@@ -40,6 +47,7 @@ describe("layout subject chip", () => {
     location.hash = "#dashboard";
 
     renderApp();
+    openAccountMenu();
 
     const chip = screen.getByLabelText(`현재 접속 계정 ${subject}`);
     expect(chip).toHaveAttribute("title", `현재 접속 계정 ${subject}`);
@@ -47,17 +55,20 @@ describe("layout subject chip", () => {
     expect(screen.queryByText(subject)).toBeNull();
   });
 
-  test("shows tenant/environment from production readiness and links to readiness", async () => {
+  test("shows tenant/environment neutrally (no readiness status chip) and links to readiness", async () => {
     localStorage.setItem("rpa.token", jwt("auth0|alice", ["operator"]));
     location.hash = "#automationOps?section=schedule";
 
     renderApp();
 
-    const badge = await screen.findByRole("button", { name: /tenant\/environment 컨텍스트: tenant tenant-a, environment 통제 운영, readiness 차단/ });
-    expect(badge).toHaveClass("topbar-context-badge", "red");
+    // fake readiness는 blocked(blocker_count 2)지만 컨텍스트 배지는 중립이어야 한다 —
+    // "차단"이 env 옆에 붙으면 환경 전체 차단으로 오독(감사 P0-2). 신호는 알림 벨이 담당.
+    const badge = await screen.findByRole("button", { name: /tenant\/environment 컨텍스트: tenant tenant-a, environment 통제 운영/ });
+    expect(badge).not.toHaveClass("red");
+    expect(badge).not.toHaveClass("amber");
     expect(within(badge).getByText("tenant-a")).toBeInTheDocument();
     expect(within(badge).getByText("통제 운영")).toBeInTheDocument();
-    expect(within(badge).getByText("차단")).toBeInTheDocument();
+    expect(within(badge).queryByText("차단")).toBeNull();
 
     fireEvent.click(badge);
 
