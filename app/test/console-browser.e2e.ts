@@ -497,11 +497,11 @@ async function main(): Promise<void> {
       }
     });
 
-    // 1) 부팅 → 로그인 랜딩은 '내 할 일'(myWork).
+    // 1) 부팅 → 로그인 랜딩은 '만들기 콘솔'(create — E1: 첫 화면=무엇을 시킬까).
     await page.goto(`${base}/`, { waitUntil: "networkidle0", timeout: 30_000 });
     await page.waitForSelector("h1", { timeout: 15_000 });
     const landingTitle = await page.$eval("h1", (el) => el.textContent ?? "");
-    check("부팅 랜딩 = 내 할 일(myWork)", landingTitle === "내 할 일", landingTitle);
+    check("부팅 랜딩 = 만들기 콘솔(create)", landingTitle === "만들기 콘솔", landingTitle);
 
     // 1b) #dashboard 로 전체 이동 → 시드 실행 렌더(대시보드는 더 이상 기본 랜딩이 아니라 명시 이동).
     await page.goto(`${base}/#dashboard`, { waitUntil: "networkidle0", timeout: 30_000 });
@@ -512,9 +512,9 @@ async function main(): Promise<void> {
     check("dashboard 최근 실행 행 렌더", dash.includes("상세 보기") || dash.includes(SEEDED_RUN_ID.slice(0, 8)), dash.slice(0, 300));
     check("시드 실행이 '실행 중'으로 표시(StatusBadge 한국어 라벨)", dash.includes("실행 중"), dash.slice(0, 200));
     // e2e-token 은 역할 클레임이 없어(roles=[]) 역할 스코프 nav(Phase 15)가 viewer 폴백을 렌더한다:
-    //   내 할 일·사람 확인·작업 목록·실행 기록·대시보드·도입 증빙·감사 이력 = 7개. 로그인 랜딩은 myWork.
-    const navBtnCount = await page.$$eval("nav.sidebar button", (b) => b.length);
-    check("사이드바 역할 스코프 nav 렌더(viewer 7개)", navBtnCount === 7, String(navBtnCount));
+    //   내 할 일·사람 확인·만들기 콘솔·실행 기록·대시보드 = 5개(E1 §2.3 — 도입 증빙·감사 이력은 고급 강등). 랜딩은 create.
+    const navBtnCount = await page.$$eval("nav.sidebar .nav-item", (b) => b.length); // E1: viewer도 고급 토글이 생겨 버튼 총수 대신 nav 항목만 계수
+    check("사이드바 역할 스코프 nav 렌더(viewer 5개)", navBtnCount === 5, String(navBtnCount));
 
     // 2) 해시 라우팅 → workitems, 시드 작업항목 렌더
     await page.evaluate(() => {

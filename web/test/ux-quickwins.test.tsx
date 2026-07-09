@@ -381,8 +381,8 @@ describe("UX quick-wins (A)", () => {
     expect(within(nav).getByText("자동화")).toBeInTheDocument();
     expect(within(nav).getByText("현황")).toBeInTheDocument();
     expect(within(nav).getByText("설정·점검")).toBeInTheDocument();
-    expect(nav.querySelectorAll(".nav-item")).toHaveLength(16); // create는 표준 제작 진입점, playground는 Studio 테스트 작업대로 흡수, irValidation·idempotency는 R2·R3 은퇴, openGate는 internal flag 없으면 숨김
-    expect(within(nav).getByRole("button", { name: "도입 증빙" })).toBeInTheDocument();
+    expect(nav.querySelectorAll(".nav-item")).toHaveLength(13); // E1: 전 역할 standard = 13(스튜디오·도입 증빙·감사 이력은 고급 강등)
+    expect(within(nav).queryByRole("button", { name: "도입 증빙" })).toBeNull(); // E1: 고급 모드 소속
     expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
   });
 

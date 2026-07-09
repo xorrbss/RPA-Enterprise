@@ -50,10 +50,10 @@ describe("viewFromHash — 딥링크 쿼리 파라미터 지원", () => {
     }
   });
 
-  test("알 수 없는/빈 해시 → myWork(디폴트 랜딩) 폴백(조용한 빈화면 금지)", () => {
-    expect(viewFromHash("#nope")).toBe("myWork");
-    expect(viewFromHash("")).toBe("myWork");
-    expect(viewFromHash("#?run=x")).toBe("myWork");
+  test("알 수 없는/빈 해시 → create(디폴트 랜딩) 폴백(조용한 빈화면 금지)", () => { // E1: 기본 랜딩=만들기 홈
+    expect(viewFromHash("#nope")).toBe("create");
+    expect(viewFromHash("")).toBe("create");
+    expect(viewFromHash("#?run=x")).toBe("create");
   });
 });
 

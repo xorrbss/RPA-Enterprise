@@ -85,7 +85,7 @@ function drawerNavItemCount(dialog: HTMLElement): number {
   return dialog.querySelectorAll(".nav-item").length;
 }
 
-const OPERATOR_STANDARD_NAV_ITEM_COUNT = 11;
+const OPERATOR_STANDARD_NAV_ITEM_COUNT = 8; // E1(§2.3): 스튜디오·도입 증빙·감사 이력은 고급 강등
 
 describe("mobile drawer navigation", () => {
   beforeEach(() => {
@@ -157,7 +157,7 @@ describe("mobile drawer navigation", () => {
     expect(dialog).toHaveAttribute("aria-modal", "true");
     expect(within(dialog).getByRole("navigation", { name: "모바일 주 메뉴" })).toBeInTheDocument();
     expect(drawerNavItemCount(dialog)).toBe(OPERATOR_STANDARD_NAV_ITEM_COUNT);
-    expect(within(dialog).getByRole("button", { name: "도입 증빙" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "실행 기록" })).toBeInTheDocument(); // E1: 도입 증빙은 고급 강등 — 표준 대표 항목으로 검증
     expect(within(dialog).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
     expect(within(dialog).queryByRole("button", { name: "보안/개인정보" })).toBeNull();
   });
@@ -184,7 +184,7 @@ describe("mobile drawer navigation", () => {
 
     expect(within(dialog).queryByRole("button", { name: "업무 발굴/ROI" })).toBeNull();
     expect(drawerNavItemCount(dialog)).toBe(OPERATOR_STANDARD_NAV_ITEM_COUNT);
-    expect(within(dialog).getByRole("button", { name: "도입 증빙" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "실행 기록" })).toBeInTheDocument(); // E1: 도입 증빙은 고급 강등 — 표준 대표 항목으로 검증
   });
 
   test("Escape closes drawer and restores focus", async () => {

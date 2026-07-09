@@ -64,7 +64,7 @@ function credentialLabel(policy: ConcurrencyPolicy): string {
 
 function navigateSearchItem(item: GlobalSearchItem): void {
   if (item.type === "run") navigate("runTrace", { run: item.id });
-  else if (item.type === "scenario") navigate("scenarioStudio", { scenario: item.id, focus: "test" });
+  else if (item.type === "scenario") navigate("create", { scenario: item.id, focus: "test" }); // E1: 테스트 동선은 create 소유(스튜디오는 고급 강등)
   else if (item.type === "human_task") navigate("humanTasks", { ht: item.id });
   else if (item.type === "principal") navigate("security", { section: "access", principal: item.id });
   else if (item.type === "credential") {
@@ -76,7 +76,7 @@ function navigateSearchItem(item: GlobalSearchItem): void {
 
 function searchItemView(item: GlobalSearchItem): ViewKey {
   if (item.type === "run") return "runTrace";
-  if (item.type === "scenario") return "scenarioStudio";
+  if (item.type === "scenario") return "create";
   if (item.type === "human_task") return "humanTasks";
   return "security";
 }
@@ -111,7 +111,7 @@ export function CommandPalette({
   );
   const advancedVisibleViewSet = useMemo(() => new Set<ViewKey>(advancedVisibleViews), [advancedVisibleViews]);
   const securityVisible = visibleViewSet.has("security");
-  const scenarioStudioVisible = visibleViewSet.has("scenarioStudio");
+  const scenarioStudioVisible = visibleViewSet.has("create"); // E1: 자동화 검색 가시성도 create 기준
 
   const globalSearch = useQuery({
     queryKey: ["palette-global-search", q],
@@ -293,7 +293,7 @@ export function CommandPalette({
               label: s.name,
               hint: `테스트 실행으로 이동 · 변경 ${s.version}`,
               run: () => {
-                navigate("scenarioStudio", { scenario: s.scenario_id, focus: "test" });
+                navigate("create", { scenario: s.scenario_id, focus: "test" });
                 onClose();
               },
             }));

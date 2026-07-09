@@ -21,44 +21,24 @@ function visible(roles: readonly string[], mode: "standard" | "advanced" = "stan
 }
 
 describe("Phase 15 nav policy", () => {
+  // E1(§2.3): 기본(standard) 모드 = 만들기 콘솔 — 전 역할 create/humanTasks/runTrace/dashboard,
+  // operator+ workitems·automationOps·documentIdp. scenarioStudio/adoptionEvidence/auditExplorer는 고급으로 강등.
   test("viewer standard nav is read-only and compact", () => {
-    // 생명주기 그룹 순서: 내 업무(myWork/humanTasks/workitems) → 자동화(runTrace) → 현황(dashboard).
-    expect(visible(["viewer"])).toEqual(["myWork", "humanTasks", "workitems", "runTrace", "dashboard", "adoptionEvidence", "auditExplorer"]);
+    expect(visible(["viewer"])).toEqual(["myWork", "humanTasks", "create", "runTrace", "dashboard"]);
   });
 
   test("operator standard nav exposes the lifecycle IA (내 업무→자동화→현황)", () => {
     expect(getVisibleNavGroups(ctx(["operator"]))).toEqual([
       { label: "내 업무", keys: ["myWork", "humanTasks", "workitems"] },
-      { label: "자동화", keys: ["create", "scenarioStudio", "runTrace", "automationOps", "documentIdp"] },
-      { label: "현황", keys: ["dashboard", "adoptionEvidence"] },
-      { label: "설정·점검", keys: ["auditExplorer"] },
+      { label: "자동화", keys: ["create", "runTrace", "automationOps", "documentIdp"] },
+      { label: "현황", keys: ["dashboard"] },
     ]);
   });
 
   test("reviewer and approver standard nav stay role-scoped", () => {
     // 결재 인박스 메뉴는 은퇴 — 결재 목록은 '사람 확인'의 소스 탭으로 흡수(별도 뷰키 없음).
-    expect(visible(["reviewer"])).toEqual([
-      "myWork",
-      "humanTasks",
-      "workitems",
-      "create",
-      "scenarioStudio",
-      "runTrace",
-      "dashboard",
-      "adoptionEvidence",
-      "auditExplorer",
-    ]);
-    expect(visible(["approver"])).toEqual([
-      "myWork",
-      "humanTasks",
-      "workitems",
-      "create",
-      "scenarioStudio",
-      "runTrace",
-      "dashboard",
-      "adoptionEvidence",
-      "auditExplorer",
-    ]);
+    expect(visible(["reviewer"])).toEqual(["myWork", "humanTasks", "create", "runTrace", "dashboard"]);
+    expect(visible(["approver"])).toEqual(["myWork", "humanTasks", "create", "runTrace", "dashboard"]);
   });
 
   test("admin sees management and diagnostic views, except internal open gate without flag", () => {
@@ -67,16 +47,13 @@ describe("Phase 15 nav policy", () => {
       "humanTasks",
       "workitems",
       "create",
-      "scenarioStudio",
       "runTrace",
       "automationOps",
       "documentIdp",
       "dashboard",
-      "adoptionEvidence",
       "coePipeline",
       "connectorCatalog",
       "objectRepository",
-      "auditExplorer",
       "llmGateway",
       "security",
     ]);
@@ -90,6 +67,9 @@ describe("Phase 15 nav policy", () => {
   test("standard operator hides internal, admin, and demoted advanced screens", () => {
     const views = visible(["operator"]);
     for (const hidden of [
+      "scenarioStudio",
+      "adoptionEvidence",
+      "auditExplorer",
       "coePipeline",
       "connectorCatalog",
       "objectRepository",

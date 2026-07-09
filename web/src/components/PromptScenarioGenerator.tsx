@@ -54,6 +54,11 @@ export function PromptScenarioGenerator({
   const [prompt, setPrompt] = useState("");
   const [name, setName] = useState("");
   const [mode, setMode] = useState<ScenarioGenerationRequest["mode"]>(defaultMode);
+  // E1: create가 기본 랜딩이 되며 mode 딥링크(#create?mode=…)가 이미 마운트된 생성기에 도달한다 —
+  // 초기값 고정이면 딥링크가 무시되므로 defaultMode 변경을 동기화한다(입력 중 초안은 보존, 리마운트 없음).
+  useEffect(() => {
+    setMode(defaultMode);
+  }, [defaultMode]);
   const [startUrl, setStartUrl] = useState("");
   const [siteProfileId, setSiteProfileId] = useState("");
   const [browserIdentityId, setBrowserIdentityId] = useState("");

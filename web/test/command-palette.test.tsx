@@ -278,7 +278,7 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
       }),
     );
     await clickPaletteResult(dialog, "월말정산봇");
-    await waitFor(() => expect(location.hash).toBe("#scenarioStudio?scenario=sc-1&focus=test"));
+    await waitFor(() => expect(location.hash).toBe("#create?scenario=sc-1&focus=test"));
   });
 
   test("실행 결과 클릭 → 실행 기록 run 딥링크로 이동", async () => {
