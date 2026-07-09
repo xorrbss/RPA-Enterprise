@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
-import { ApiError, type ApiErrorBody, type CreateRunBody, type RunMode, type ScenarioItem } from "../api/types";
+import { ApiError, type CreateRunBody, type RunMode, type ScenarioItem } from "../api/types";
 import {
   coerceParamValue,
   extractScenarioParamFields,
@@ -15,6 +15,7 @@ import {
 } from "../api/scenario-params";
 import { errorLabel } from "./badges";
 import { navigate } from "../router";
+import { modelRequiredOf } from "./run-scenario/model-required";
 import { ParamFieldInput } from "./run-scenario/ParamFieldInput";
 import { ReadinessCard } from "./run-scenario/ReadinessCard";
 import {
@@ -30,14 +31,6 @@ import {
 // 조용한 실패 금지: ApiError 는 **패널 안**에 표면화(닫힌 패널 뒤 배지로 가려 '무반응'처럼 보이던 문제 해소).
 // 다정책+기본없음 테넌트는 createRun 이 model_required(422) → AI 모델 선택 폼을 노출해 재실행(임의선택 금지, Gateway 뷰 동형).
 // RBAC: run.create 미보유 시 숨김(백엔드가 최종 강제).
-
-// createRun 의 model_required(다정책+기본없음 → 임의선택 불가) 판별. error-catalog 본문 details.reason 으로 식별.
-function modelRequiredOf(body: ApiErrorBody | null): { available: number } | null {
-  const details = body?.details;
-  if (details === undefined || details.reason !== "model_required") return null;
-  const available = typeof details.available === "number" ? details.available : 0;
-  return { available };
-}
 
 export function RunScenarioButton({ scenario, runMode = "prod" }: { readonly scenario: ScenarioItem; readonly runMode?: RunMode }): JSX.Element | null {
   const api = useApiClient();
