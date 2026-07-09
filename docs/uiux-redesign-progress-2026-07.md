@@ -1,0 +1,51 @@
+# UI/UX 재설계 전량 구현 — 진행 레지스터 (append-only)
+
+미션: E0~E7 · R1~R6 · T1~T8 전량 구현. 설계 SSoT·규칙은 아래 3문서(재논의 금지).
+
+- `docs/rpa-easy-authoring-detailed-design-2026-07-09.md` (E계열)
+- `docs/rpa-console-simplification-review-2026-07-09.md` (R계열)
+- `docs/rpa-console-uiux-audit-remediation-design-2026-07-10.md` (T계열 + E/R 수용 기준 보강 §7)
+
+규칙 요약: 1 슬라이스 = 1 브랜치 = 1 PR(origin/main에서 분기, 스택 금지) → typecheck/test/build green →
+PR → CI green → 머지 → main green 확인 후 다음. 문서 file:line은 착수 직전 재추적. 계약 루트 무변경.
+
+## 착수 전 검증 포인트 결과 (2026-07-10 확인)
+
+| # | 항목 | 결과 |
+|---|---|---|
+| T§8-① | DEAD_LETTER 라벨 폴백 | **확정** — `badges.tsx` STATUS_LABELS는 소문자 `dead_letter`만 보유, `statusLabel()`이 대문자 키에서 raw 폴백(`badges.tsx:26-55`). tone은 정상(RED set에 대문자 포함). 해결: 조회 시 소문자 정규화 폴백(T4) |
+| T§8-② | run 소요 시간 필드 | **부재** — `RunItem`(`types-runs.ts:7-19`)은 run_id·as_of·updated_at?뿐, duration은 StepSummary에만. → T6 소요 열 **보류**, 실행 번호(run_id 축약) 열 + updated_at 상대 표기로 대체(날조 금지) |
+| T§8-③ | Gateway 비용 한도 단위 | **USD 확정** — `ops-defaults.md:103` `llm.budget.max_cost_per_run` $0.85(run 누계 상한) → T3에서 "$" 병기 |
+| T§8-④ | readiness 벨 문구 | **가능** — `summary.blocker_count` 존재(`TopbarActions.tsx:151`) → "운영 전환 준비 차단 N건" |
+| T§8-⑤ | automationOps section 딥링크 | **소비 확정** — `Orchestration.tsx:96` `useHashParam("section")` |
+| E§12-① | url_ref 해석 | **심볼릭 키 확정** — seed IR `"entry_url"`/`"orders_url"`(`app/dev/seed-scenarios.ts:124,154`). StepCards는 사이트 데이터로 해석 시도, 불가 시 키 원문 |
+| E§12-② | planner studio_mode 방출 | **확정** — `app/src/api/scenario-generation-planner.ts:204` `studio_mode:"easy"` |
+| E§12-③ | session.capture 역할 | rbac-policy.ts 내 5곳 존재 — 역할 포함 범위는 E3 착수 시 라인 문맥 확인 |
+| E§12-④ | runScenarioGeneration run_mode | **미확정** — 설계 기본 채택: 보정 후에도 `createRun(run_mode:"test")` 경로 통일, E4 착수 시 재확인 |
+| E§12-⑤ | 템플릿 목록 API | **확정** — `api.listConnectors`/`api.listTemplates`(`ConnectorCatalog.tsx:77,112`) |
+
+## 슬라이스 진행
+
+| 슬라이스 | 상태 | PR | 검증 | 특이사항 |
+|---|---|---|---|---|
+| T1 상단바 재설계 | 대기 | — | — | — |
+| T2 알림 그룹핑 일원화 | 대기 | — | — | — |
+| T3 표기 규칙 | 대기 | — | — | 비용 단위=$ 확정 |
+| T4 용어 교정+copy-gate | 대기 | — | — | DEAD_LETTER=소문자 정규화 |
+| T5 사람 확인 결정 우선 | 대기 | — | — | — |
+| T6 실행 기록 식별성 | 대기 | — | — | 소요 열 보류(§8-②), 실행 번호+updated_at 상대 표기 |
+| T8 표면 하드닝 | 대기 | — | — | SectionTabs는 R6 후 |
+| R2 irValidation 은퇴 | 대기 | — | — | — |
+| R3 idempotency 은퇴 | 대기 | — | — | — |
+| R5 Dashboard adoption 탭 | 대기 | — | — | — |
+| R6 automationOps today 삭제 | 대기 | — | — | — |
+| E0 siteReadiness 추출 | 대기 | — | — | — |
+| E1 create 홈+라우트 | 대기 | — | — | — |
+| R4 myWork 은퇴 | 대기 | — | — | E1 후 |
+| E2 위저드+StepCards | 대기 | — | — | — |
+| E3 PRECHECK 인라인 | 대기 | — | — | — |
+| E4 TestProgress | 대기 | — | — | — |
+| R1 playground 은퇴 | 대기 | — | — | E4 후 |
+| E5′ edit 모드 | 대기 | — | — | — |
+| E6 템플릿 갤러리+easy-labels | 대기 | — | — | — |
+| E7+T7 관리 콘솔 정리+스튜디오 액션 | 대기 | — | — | E2 후 |
