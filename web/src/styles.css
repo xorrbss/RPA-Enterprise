@@ -405,6 +405,9 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 .step-cards-advanced { justify-self: start; font-size: 12px; }
 .step-cards-raw { margin: 0; font-size: 11px; max-height: 320px; overflow: auto; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; }
 .generation-draft-preview { display: grid; gap: 8px; }
+/* E4: 인라인 테스트 진행(배너+카드 오버레이). */
+.inline-test-progress { display: grid; gap: 10px; }
+.inline-test-progress-failure { margin: 0; }
 .ops-signal-panel { overflow: hidden; }
 .ops-signal-body { padding: 14px 16px; display: grid; gap: 12px; }
 .ops-signal-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }

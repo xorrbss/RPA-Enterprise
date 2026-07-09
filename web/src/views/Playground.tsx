@@ -9,6 +9,7 @@ import { RunScenarioButton } from "../components/RunScenarioButton";
 import { mergeParams, navigate, useHashIdParam } from "../router";
 import type { ScenarioItem } from "../api/types";
 import { StepCards } from "../components/easy-create/StepCards";
+import { TestProgress } from "../components/easy-create/TestProgress";
 
 // 테스트 실행(playground) — 저장된 자동화의 실행 계획(IR → 단계·흐름)을 정적으로 미리본 뒤, 그대로 실제 실행을
 // 시작할 수 있다(RunScenarioButton = createRun, run.create 게이팅). 실제 브라우저 작업은 worker/Chrome가
@@ -79,7 +80,7 @@ function TestProgressPanel(props: {
       tone: canStart ? "green" : props.canRun ? "muted" : "amber",
       current: planReady && !canStart,
       detail: canStart
-        ? "실행 시작 시 테스트 run이 등록되고 해당 run 화면으로 이동합니다."
+        ? "실행 시작 시 테스트 run이 등록되고 아래 단계에 진행이 실시간 표시됩니다." // E4: 인라인 관찰(화면 이동 없음)
         : props.canRun
           ? "선택한 자동화가 현재 목록에 있을 때 실행 버튼이 표시됩니다."
           : "run.create 권한이 있어야 테스트를 시작할 수 있습니다.",
@@ -114,7 +115,7 @@ function TestProgressPanel(props: {
           ))}
         </ol>
         <p className="subtle" style={{ margin: 0 }}>
-          테스트 시작은 새 run을 만드는 실제 작업입니다. 성공하면 생성된 run의 실행 기록/증빙 화면으로 바로 이동합니다.
+          테스트 시작은 새 run을 만드는 실제 작업입니다. 진행과 결과는 아래에서 바로 확인하고, 상세 증빙은 실행 기록에서 봅니다.
         </p>
       </div>
     </section>
@@ -131,6 +132,8 @@ export function ScenarioTestWorkbench({
   const api = useApiClient();
   const can = useCan();
   const scenarioParam = useHashIdParam("scenario");
+  // E4: 시작한 테스트 run 을 해시에 보존 — 새로고침/딥링크로 인라인 진행이 복원된다(§2.2).
+  const testRunId = useHashIdParam("run");
   const list = useListView<ScenarioItem>(
     ["scenarios", "playground"],
     (params) => api.listScenarios(params),
@@ -159,13 +162,13 @@ export function ScenarioTestWorkbench({
 
   function selectScenario(next: string): void {
     setSel(next);
-    mergeParams({ scenario: next.length > 0 ? next : null });
+    mergeParams({ scenario: next.length > 0 ? next : null, run: null });
   }
 
   return (
     <section className={embedded ? "scenario-test-workbench" : undefined} aria-label="계획·테스트 작업대">
       <p className="badge" style={{ display: "block", marginBottom: 12, whiteSpace: "normal" }}>
-        실행 계획(단계·흐름)을 미리 본 뒤 그대로 실제 실행을 시작할 수 있습니다. 실제 브라우저 작업은 worker/Chrome가 연결된 환경에서 수행되며, 진행 상황은 ‘실행 기록’에서 확인합니다.
+        실행 계획(단계·흐름)을 미리 본 뒤 그대로 실제 실행을 시작할 수 있습니다. 실행을 시작하면 아래 단계에 진행 상태가 실시간으로 표시되고, 상세 증빙은 실행 기록에서 확인합니다.
       </p>
       {!embedded && can("scenario.create") && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
@@ -222,9 +225,12 @@ export function ScenarioTestWorkbench({
             <>
               {selected !== undefined ? (
                 <div style={{ position: "relative", display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
-                  {can("run.create") && <RunScenarioButton scenario={selected} runMode="test" />}
+                  {/* E4: 테스트 시작이 화면을 튕기지 않는다 — 같은 화면에서 단계 카드에 진행을 오버레이(인라인 관찰). */}
+                  {can("run.create") && (
+                    <RunScenarioButton scenario={selected} runMode="test" onStarted={(runId) => mergeParams({ run: runId })} />
+                  )}
                   <button className="btn" type="button" onClick={() => navigate("runTrace", { scenario: selected.scenario_id })}>실행 기록 보기</button>
-                  {can("run.create") && <span className="subtle">실행 시작 시 실제 실행이 등록되고 진행 화면으로 바로 이동합니다.</span>}
+                  {can("run.create") && <span className="subtle">실행을 시작하면 아래 단계에 진행 상태가 실시간으로 표시됩니다.</span>}
                 </div>
               ) : (
                 <p className="subtle" role="status" style={{ margin: "0 0 12px" }}>
@@ -235,6 +241,8 @@ export function ScenarioTestWorkbench({
                 <Loading />
               ) : detail.isError ? (
                 <ErrorState message="선택한 자동화 정보를 불러오지 못했습니다. 목록을 새로고침하거나 다른 자동화를 선택하세요." onRetry={() => void detail.refetch()} />
+              ) : testRunId !== null ? (
+                <TestProgress runId={testRunId} ir={detail.data?.ir} />
               ) : (
                 <StepCards ir={detail.data?.ir} emptyMessage="실행 계획을 표시할 자동화 정의가 없습니다." />
               )}
