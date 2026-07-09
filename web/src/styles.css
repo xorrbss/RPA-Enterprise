@@ -361,6 +361,9 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 .queue-control-groups { display: grid; gap: 8px; justify-items: end; }
 .queue-bulk-actions { border-top: 1px dashed var(--line-strong); padding-top: 8px; }
 .queue-bulk-actions:empty { display: none; }
+/* T6: 실행 기록 식별성 — 실행 번호 축약(mono)·우선순위 셀 고정폭(칩/셀렉트 정렬 통일). */
+.run-short-id { font-size: 11px; background: transparent; padding: 0; }
+.run-priority-cell { display: inline-flex; gap: 6px; align-items: center; min-width: 128px; flex-wrap: wrap; }
 .ops-signal-panel { overflow: hidden; }
 .ops-signal-body { padding: 14px 16px; display: grid; gap: 12px; }
 .ops-signal-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
