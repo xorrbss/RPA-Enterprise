@@ -124,14 +124,17 @@ describe("scenario-studio-first-action", () => {
       }),
     );
 
-    expect(await screen.findByRole("button", { name: "계획·테스트" })).toBeInTheDocument();
-    expect(screen.getByText("테스트 가능 · v3")).toBeInTheDocument();
+    // T7: 기본 노출은 [열기][실행], 나머지는 더 보기 메뉴로.
+    expect(await screen.findByRole("button", { name: "열기" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "계획·테스트" })).toBeNull();
+    expect(screen.queryByText(/테스트 가능 · v/)).toBeNull(); // 관찰 안 한 값 단정 열 제거
 
     fireEvent.click(screen.getByRole("button", { name: "실행" }));
     fireEvent.click(await screen.findByRole("button", { name: "실행 시작" }));
 
     await waitFor(() => expect(calls).toEqual([{ runMode: "test", scenarioVersionId: "ver-test-path" }]));
-    expect(location.hash).toBe("#runTrace?run=run-studio-test&focus=artifacts");
+    // E4: 스튜디오 행 실행도 화면 유지 + run 해시 보존(인라인 진행).
+    await waitFor(() => expect(location.hash).toContain("run=run-studio-test"));
   });
 
   test("saved automation can open focused studio with test and evidence continuation", async () => {
@@ -161,7 +164,7 @@ describe("scenario-studio-first-action", () => {
       }),
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "집중 작업" }));
+    fireEvent.click(await screen.findByRole("button", { name: "열기" })); // T7: 집중 작업 → 열기
 
     await waitFor(() => expect(location.hash).toBe("#scenarioStudio?mode=focus&scenario=sc-focus"));
     const studio = await screen.findByRole("region", { name: "집중 자동화 스튜디오" });

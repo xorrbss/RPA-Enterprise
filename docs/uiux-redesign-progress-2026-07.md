@@ -43,9 +43,9 @@ PR → CI green → 머지 → main green 확인 후 다음. 문서 file:line은
 | E1 랜딩·내비 전환+확인 스트립 | ✅머지 | #433 | web 994·e2e 10/10·CI 12/12 | DEFAULT_VIEW=create·navMode §2.3 슬림(viewer std 5·operator std 8)·확인 스트립 이관(review-queue 공용 훅)·팔레트 자동화 딥링크 create 소유·생성기 mode 딥링크 동기화 결함 수정. 홈 전면 재구성은 E2와 병행 |
 | R4 myWork 은퇴 | ✅머지 | #434 | web 988·e2e 10/10·CI 12/12 | 뷰 삭제·5곳 해제·#myWork→#create·확인 큐는 E1 스트립이 흡수 |
 | E2 번역기+StepCards | ✅머지 | #435 | web 1010·CI 12/12 | step-sentences(§5 전수 22케이스)+StepCards. 소비면 2곳 배선: 초안 미리보기(GenerationResult)·계획 미리보기(workbench Plan 대체=T7 절반). url_ref는 기존 urlRefLabel 공유. 위저드 셸·useEasyGeneration은 E3/E4로 |
-| E3 준비 확인 인라인 | 진행 | — | — | 대부분 STALE(사이트 인라인 등록·blocked 보정 가이드는 Phase 7 선반영) — 잔여=세션 등록 인라인화(corridor CTA→CaptureGuide 다이얼로그, 화면 이동 제거) |
+| E3 준비 확인 인라인 | ✅머지 | #438 | web 1015·CI 12/12 | 대부분 STALE(사이트 인라인 등록·blocked 보정 가이드는 Phase 7 선반영) — 잔여=세션 등록 인라인화(corridor CTA→CaptureGuide 다이얼로그, 화면 이동 제거) |
 | E4 인라인 테스트 진행 | ✅머지 | #436 | web 1014·CI 12/12 | TestProgress(getRun/steps 폴링+SSE, 배너 §4.7, 9상태 오버레이)·RunScenarioButton onStarted·워크벤치 인라인(run 해시 보존, 화면 튕김 제거) |
 | R1 playground 은퇴 | ✅머지 | #437 | web 1014·CI 12/12 | 뷰키 5곳 해제(리다이렉트·워크벤치·테스트는 기존 유지) |
 | E5′ edit 모드 | 대기 | — | — | — |
 | E6 템플릿 갤러리+easy-labels | 대기 | — | — | — |
-| E7+T7 관리 콘솔 정리+스튜디오 액션 | 대기 | — | — | E2 후 |
+| E7+T7 스튜디오 액션 재편 | 진행 | — | — | 행 [열기][실행]+더 보기(테스트 계획·편집·이력·배포·운영 기준·보관), 용어 단일화(테스트), 실행 기준 단정 배지 열 삭제 |

@@ -66,7 +66,7 @@ async function openScenarioManagementActions(scenarioName: string): Promise<HTML
   if (row === null) {
     throw new Error(`scenario row not found: ${scenarioName}`);
   }
-  fireEvent.click(within(row).getByText("관리 작업"));
+  fireEvent.click(within(row).getByText("더 보기")); // T7: 관리 작업 → 더 보기 메뉴로 통합
   return row;
 }
 
