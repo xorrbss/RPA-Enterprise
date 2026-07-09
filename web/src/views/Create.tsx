@@ -11,6 +11,7 @@ import { PromptScenarioGenerator } from "../components/PromptScenarioGenerator";
 import { navigate, useHashParam } from "../router";
 import { ScenarioTestWorkbench } from "./Playground";
 import { ReviewStrip } from "./create/ReviewStrip";
+import { TemplateGallery } from "./create/TemplateGallery";
 import { AutomationStartChooser } from "./scenarios/AutomationStartChooser";
 import { ScenarioSetupCorridor, queryState } from "./scenarios/ScenarioSetupCorridor";
 
@@ -103,7 +104,7 @@ export function CreateView(): JSX.Element {
             <AutomationStartChooser
               onBrowserText={focusNaturalLanguageInput}
               onBrowserRecord={focusRecorder}
-              onTemplate={() => navigate("connectorCatalog", { focus: "templates" })}
+              onTemplate={() => document.getElementById("create-template-start")?.scrollIntoView?.({ block: "center" })} // E6: 홈 갤러리로(카탈로그는 admin 표준)
               onDocument={() => navigate("documentIdp", { source: "create-console" })}
               onConnector={() => navigate("connectorCatalog", { focus: "connectors" })}
               onManual={() => navigate("scenarioStudio", { expert: "manual" })}
@@ -133,6 +134,8 @@ export function CreateView(): JSX.Element {
         </section>
       )}
 
+      {/* E6: 업무 사용자의 템플릿 경로 — 커넥터 카탈로그(관리 콘솔)가 유일 경로였던 것을 홈에 제공. */}
+      <TemplateGallery canCreateScenario={can("scenario.create")} />
       <ScenarioSetupCorridor
         sites={sites}
         siteState={queryState(sitesQuery)}
