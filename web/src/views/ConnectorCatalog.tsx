@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
@@ -11,7 +11,7 @@ import type {
   TemplateCatalogKind,
 } from "../api/types";
 import { EmptyState, ErrorState, Loading, desktopStateForError } from "../components/states";
-import { navigate } from "../router";
+import { navigate, useHashParam } from "../router";
 import { ConnectorDetailPanel } from "./connectors/ConnectorDetailPanel";
 import { TemplatePreviewPanel } from "./connectors/TemplatePreviewPanel";
 import {
@@ -58,6 +58,9 @@ export function ConnectorCatalogView(): JSX.Element {
   const [templateCursor, setTemplateCursor] = useState<string | null>(null);
   const [nextTemplateCursor, setNextTemplateCursor] = useState<string | null>(null);
   const [templateItems, setTemplateItems] = useState<TemplateCatalogItem[]>([]);
+  const focusParam = useHashParam("focus");
+  const connectorSectionRef = useRef<HTMLElement | null>(null);
+  const templateSectionRef = useRef<HTMLElement | null>(null);
 
   const connectorParams = useMemo(
     () => ({
@@ -134,6 +137,17 @@ export function ConnectorCatalogView(): JSX.Element {
         : appendUniqueTemplates(current, templateQuery.data.items),
     );
   }, [templateCursor, templateQuery.data]);
+  useEffect(() => {
+    const target =
+      focusParam === "templates"
+        ? templateSectionRef.current
+        : focusParam === "connectors"
+          ? connectorSectionRef.current
+          : null;
+    if (target === null) return;
+    target.scrollIntoView?.({ block: "start" });
+    target.focus({ preventScroll: true });
+  }, [focusParam]);
 
   function resetConnectorPaging(): void {
     setConnectorCursor(null);
@@ -233,7 +247,7 @@ export function ConnectorCatalogView(): JSX.Element {
       </section>
 
       <div className="catalog-layout">
-        <section className="panel" aria-label="커넥터 목록">
+        <section ref={connectorSectionRef} className="panel" aria-label="커넥터 목록" tabIndex={-1}>
           <div className="panel-head">
             <h2>커넥터</h2>
             <div className="inline-actions">
@@ -320,7 +334,7 @@ export function ConnectorCatalogView(): JSX.Element {
         <ConnectorDetailPanel connector={selectedConnector} canCreateScenario={canCreateScenario} onCreateDraft={openConnectorDraft} />
       </div>
 
-      <section className="panel" aria-label="템플릿 목록">
+      <section ref={templateSectionRef} className="panel" aria-label="템플릿 목록" tabIndex={-1}>
         <div className="panel-head">
           <h2>템플릿</h2>
           <div className="inline-actions">

@@ -68,6 +68,69 @@ describe("adoption evidence route", () => {
     expect(document.body.textContent ?? "").not.toContain("raw_prompt");
   });
 
+  test("readiness uses approved sites and successful test runs as shared criteria", async () => {
+    localStorage.setItem("rpa.token", jwt(["admin"]));
+    renderApp(
+      fakeClient({
+        getAuthReadiness: async () => ({
+          ...(await fakeClient().getAuthReadiness()),
+          status: "ok",
+          enterprise_sso_ready: true,
+          role_mapping: { configured: true, mapped_values: 3 },
+          operational_gaps: [],
+          current_principal: {
+            ...(await fakeClient().getAuthReadiness()).current_principal,
+            subject_id: "admin-a",
+            roles: ["admin"],
+          },
+        }),
+        listSites: async () => ({
+          items: [
+            {
+              site_profile_id: "site-pending",
+              name: "승인 대기 포털",
+              risk: "green",
+              approval_status: "pending",
+              circuit_status: "closed",
+              login_capable: true,
+              session_ready: true,
+            },
+          ],
+          next_cursor: null,
+        }),
+        listScenarios: async () => ({
+          items: [{ scenario_id: "scenario-1", name: "Invoice lookup", version: 1, latest_version_id: "version-1", promotion_status: "draft" }],
+          next_cursor: null,
+        }),
+        listRuns: async () => ({
+          items: [
+            {
+              run_id: "run-failed-test",
+              status: "failed_system",
+              run_mode: "test",
+              scenario_name: "Invoice lookup",
+              current_node: null,
+              as_of: "2026-06-30T03:00:00.000Z",
+              failure_reason: null,
+            },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+
+    const readiness = await screen.findByRole("region", { name: "파일럿 준비 상태" });
+    const siteGate = within(readiness).getByText("사이트").closest("li");
+    const testGate = within(readiness).getByText("테스트 실행").closest("li");
+    if (siteGate === null || testGate === null) throw new Error("readiness gate not found");
+
+    await waitFor(() => expect(siteGate).toHaveTextContent("차단"));
+    expect(siteGate).toHaveTextContent("등록된 사이트가 있지만 아직 승인된 실행 대상은 없습니다.");
+    await waitFor(() => expect(testGate).toHaveTextContent("차단"));
+    expect(testGate).toHaveTextContent("최근 테스트가 시스템 실패 상태입니다.");
+    expect(readiness).not.toHaveTextContent("9/9 준비");
+  });
+
   test("recent execution evidence opens the latest run artifacts focus", async () => {
     renderApp(
       fakeClient({

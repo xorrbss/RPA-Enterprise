@@ -227,7 +227,7 @@ describe("로그인 세션 등록 안내/진입", () => {
     await waitFor(() => expect(location.hash).toBe(`#security?section=sites&site=${LOGIN_SITE.site_profile_id}`));
   });
 
-  test("실행 상세 — navigate 단계 실패 시 세션 재등록 힌트 + 보안으로 이동", async () => {
+  test("실행 상세 — navigate 단계 실패 시 상태 패널 세션 복구 CTA + 보안으로 이동", async () => {
     const RUN_ID = "11111111-aaaa-bbbb-cccc-000000000099";
     renderApp(
       fakeClient({
@@ -245,9 +245,9 @@ describe("로그인 세션 등록 안내/진입", () => {
       }),
     );
     location.hash = `#runTrace?run=${RUN_ID}`;
-    const banner = await screen.findByRole("status", { name: "세션 등록 안내" });
-    expect(within(banner).getByText(/세션이 만료됐을 수 있어요/)).toBeInTheDocument();
-    fireEvent.click(within(banner).getByRole("button", { name: /세션 등록하러 가기/ }));
+    const panel = await screen.findByRole("region", { name: "테스트 실행 상태" });
+    expect(await within(panel).findByText(/세션이 만료됐을 수 있어요/)).toBeInTheDocument();
+    fireEvent.click(await within(panel).findByRole("button", { name: "사이트·세션 설정 확인" }));
     await waitFor(() => expect(location.hash).toBe("#security?section=sites"));
   });
 });

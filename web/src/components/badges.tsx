@@ -9,7 +9,7 @@ const BLUE = new Set(["running", "processing", "queued", "claimed", "completing"
 
 export type Tone = "green" | "red" | "amber" | "blue" | "muted";
 // kind: 같은 enum 문자열이 도메인별로 다른 tone일 때 호출부가 분리(RQ-026). 현재는 circuit만.
-// export: 색 결정 단일 출처 — ArrivalBanner 등 .badge 색을 재사용하는 호출부가 직접 복제하지 않게 한다(DRY).
+// export: 색 결정 단일 출처 — 상태 패널 등 .badge 색을 재사용하는 호출부가 직접 복제하지 않게 한다(DRY).
 export function tone(status: string, kind?: "circuit"): Tone {
   // circuit_status "open" = 서킷 차단(경보) → red. 그 외 "open"(HumanTask 열림)은 BLUE(중립-활성)로 떨어진다.
   if (kind === "circuit" && status === "open") return "red";

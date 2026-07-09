@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../../api/context";
 import type { FailureReason, RunMode, StepSummary } from "../../api/types";
-import { actionLabel, errorCodeLabel, StatusBadge } from "../../components/badges";
+import { actionLabel, errorCodeLabel, errorOperatorActionLabel, StatusBadge } from "../../components/badges";
 import { navigate } from "../../router";
 import { formatDateTime } from "../../util/time";
 import { SUSPENDED } from "./constants";
@@ -32,10 +32,13 @@ export function TestRunStatusPanel({
   runId,
   status,
   runMode,
+  attempts,
   scenarioId,
   reason,
   canScheduleRuns,
   canRerun,
+  humanTaskLoading,
+  pendingHumanTaskId,
   onFocusArtifacts,
   onFocusStepTrace,
   onFocusRerunControls,
@@ -43,10 +46,13 @@ export function TestRunStatusPanel({
   runId: string;
   status: string;
   runMode: RunMode | undefined;
+  attempts: number;
   scenarioId: string | null;
   reason: FailureReason | null;
   canScheduleRuns: boolean;
   canRerun: boolean;
+  humanTaskLoading: boolean;
+  pendingHumanTaskId: string | null;
   onFocusArtifacts: () => void;
   onFocusStepTrace: () => void;
   onFocusRerunControls: () => void;
@@ -58,6 +64,7 @@ export function TestRunStatusPanel({
   });
   const steps = stepSignals.data?.items ?? [];
   const failed = isFailedRunStatus(status);
+  const suspended = SUSPENDED.has(status);
   const navFailed = steps.some(
     (step) =>
       step.action === "navigate" &&
@@ -66,8 +73,12 @@ export function TestRunStatusPanel({
         step.exception !== null),
   );
   const siteRecovery = navFailed || (reason !== null && SITE_RECOVERY_CODES.has(reason.code));
-  const summary = runStatusSummary(status, runMode, reason, siteRecovery);
+  const summary = runStatusSummary(status, runMode, attempts, reason, siteRecovery);
   const visibleSteps = steps.slice(-4);
+  const openHumanTask = (): void => {
+    if (pendingHumanTaskId !== null) navigate("humanTasks", { ht: pendingHumanTaskId });
+    else navigate("humanTasks", { run_id: runId });
+  };
 
   return (
     <section className={`test-run-status-panel ${summary.tone}`} aria-label="테스트 실행 상태">
@@ -102,6 +113,19 @@ export function TestRunStatusPanel({
                   운영 예약·트리거 설정
                 </button>
               )}
+            </>
+          ) : suspended ? (
+            <>
+              <button className="btn primary" type="button" disabled={humanTaskLoading} onClick={openHumanTask}>
+                {humanTaskLoading
+                  ? "사람 확인 업무 찾는 중"
+                  : pendingHumanTaskId !== null
+                    ? "연결된 사람 확인 업무 처리하기"
+                    : "사람 확인 인박스에서 처리하기"}
+              </button>
+              <button className="btn" type="button" onClick={onFocusStepTrace}>
+                단계 트레이스 확인
+              </button>
             </>
           ) : failed && siteRecovery ? (
             <>
@@ -156,7 +180,7 @@ export function TestRunStatusPanel({
                   </span>
                 </span>
                 {step.exception !== null && (
-                  <span className="badge red">{errorCodeLabel(step.exception.code, { terminal: true })}</span>
+                  <span className="badge red">{diagnosticErrorLabel(step.exception.code, { terminal: true })}</span>
                 )}
               </li>
             ))}
@@ -174,6 +198,7 @@ function isFailedRunStatus(status: string): boolean {
 function runStatusSummary(
   status: string,
   runMode: RunMode | undefined,
+  attempts: number,
   reason: FailureReason | null,
   siteRecovery: boolean,
 ): {
@@ -190,9 +215,19 @@ function runStatusSummary(
       tone: "green",
       kicker: `${testLabel} 완료`,
       title: runMode === "test" ? "테스트 성공" : "실행 성공",
-      detail: "실행이 끝났습니다. 산출물과 metadata-only 증빙을 먼저 확인하세요.",
+      detail: `실행이 종료되었습니다${terminalAttemptText(attempts)}. 산출물과 metadata-only 증빙을 먼저 확인하세요.`,
       actionTitle: "증빙 확인",
       actionDetail: "검증된 실행 결과를 확인한 뒤 운영 예약이나 봇 승격으로 이어갈 수 있습니다.",
+    };
+  }
+  if (status === "cancelled") {
+    return {
+      tone: "muted",
+      kicker: `${testLabel} 취소됨`,
+      title: runMode === "test" ? "테스트 취소됨" : "실행 취소됨",
+      detail: `실행이 취소되어 종료되었습니다${terminalAttemptText(attempts)}. 취소는 실패로 분류하지 않고 종료 기록만 확인합니다.`,
+      actionTitle: "취소된 실행",
+      actionDetail: "필요하면 단계 트레이스와 증빙 저장 상태에서 취소 직전 기록을 확인하세요.",
     };
   }
   if (isFailedRunStatus(status)) {
@@ -202,11 +237,11 @@ function runStatusSummary(
       title: runMode === "test" ? "테스트 실패" : "실행 실패",
       detail:
         reason !== null
-          ? `${errorCodeLabel(reason.code, { terminal: true })}${reason.message !== "" ? ` · ${reason.message}` : ""}`
-          : "단계 기록에서 실패 지점을 확인해야 합니다.",
+          ? `실행이 종료되었습니다${terminalAttemptText(attempts)}. ${failureReasonDetail(reason)}`
+          : `실행이 종료되었습니다${terminalAttemptText(attempts)}. 자세한 원인은 아래 단계 트레이스를 확인하세요.`,
       actionTitle: siteRecovery ? "사이트·세션 복구" : "실패 복구",
       actionDetail: siteRecovery
-        ? "페이지 이동이나 세션 관련 실패 신호가 있어 실행 대상 설정을 먼저 확인합니다."
+        ? "페이지 이동이나 세션 관련 실패 신호가 있습니다. 로그인이 필요한 사이트라면 등록된 세션이 만료됐을 수 있어요."
         : "기술 원문보다 먼저 재실행 또는 단계 확인으로 복구 경로를 잡습니다.",
     };
   }
@@ -260,6 +295,27 @@ function activeRunHeading(status: string, runMode: RunMode | undefined): string 
     default:
       return runMode === "test" ? "테스트 상태 확인" : "실행 상태 확인";
   }
+}
+
+function terminalAttemptText(attempts: number): string {
+  return attempts > 1 ? ` · 시도 ${attempts}회` : "";
+}
+
+function failureReasonDetail(reason: FailureReason): string {
+  const label = diagnosticErrorLabel(reason.code, { terminal: true });
+  const message = reason.message.trim();
+  const operatorAction = errorOperatorActionLabel(reason.code);
+  return [
+    label,
+    message !== "" ? message : null,
+    operatorAction !== reason.code ? `권장 조치: ${operatorAction}` : null,
+  ].filter((part): part is string => part !== null).join(" · ");
+}
+
+function diagnosticErrorLabel(code: string, opts?: { terminal?: boolean }): string {
+  const label = errorCodeLabel(code, opts);
+  if (label !== code) return label;
+  return `오류 원인 확인 필요 · 진단 코드 ${code}`;
 }
 
 function stepTone(step: StepSummary): "green" | "red" | "amber" | "blue" | "muted" {
