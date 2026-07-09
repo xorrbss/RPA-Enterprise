@@ -30,13 +30,14 @@ export function IntakeSection({
   onCreated: (idea: AutomationIdeaItem) => Promise<void>;
 }): JSX.Element {
   const api = useApiClient();
-  const [title, setTitle] = useState("거래처 포털 지급 상태 확인");
-  const [description, setDescription] = useState("거래처 포털에서 지급 상태를 확인하고 예외만 재무 운영팀에 전달합니다.");
-  const [owner, setOwner] = useState("재무운영팀");
-  const [department, setDepartment] = useState("재무");
+  // T8: 예시 값 프리필 제거 — 실데이터와 예시를 구분할 수 없었다(감사 P2). 예시는 placeholder로만 보인다.
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [owner, setOwner] = useState("");
+  const [department, setDepartment] = useState("");
   const [priority, setPriority] = useState<AutomationIdeaPriority>("high");
-  const [score, setScore] = useState("82");
-  const [sourceItemRef, setSourceItemRef] = useState("candidate:vendor-status");
+  const [score, setScore] = useState("");
+  const [sourceItemRef, setSourceItemRef] = useState("");
 
   const createIdea = useMutation({
     mutationFn: () =>
@@ -82,15 +83,15 @@ export function IntakeSection({
       <div className="form-grid coe-form">
         <label className="field">
           <span>업무명</span>
-          <input value={title} onChange={(event) => setTitle(event.target.value)} />
+          <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="예: 거래처 포털 지급 상태 확인" />
         </label>
         <label className="field">
           <span>업무 담당자</span>
-          <input value={owner} onChange={(event) => setOwner(event.target.value)} />
+          <input value={owner} onChange={(event) => setOwner(event.target.value)} placeholder="예: 재무운영팀" />
         </label>
         <label className="field">
           <span>부서</span>
-          <input value={department} onChange={(event) => setDepartment(event.target.value)} />
+          <input value={department} onChange={(event) => setDepartment(event.target.value)} placeholder="예: 재무" />
         </label>
         <label className="field">
           <span>발굴 출처</span>
@@ -116,7 +117,7 @@ export function IntakeSection({
             </label>
             <label className="field">
               <span>원본 항목 참조</span>
-              <input value={sourceItemRef} onChange={(event) => setSourceItemRef(event.target.value)} />
+              <input value={sourceItemRef} onChange={(event) => setSourceItemRef(event.target.value)} placeholder="예: candidate:vendor-status" />
             </label>
           </>
         )}
@@ -132,7 +133,7 @@ export function IntakeSection({
         </label>
         <label className="field coe-description">
           <span>설명</span>
-          <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} />
+          <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} placeholder="예: 거래처 포털에서 지급 상태를 확인하고 예외만 재무 운영팀에 전달합니다." />
         </label>
       </div>
       <div className="inline-actions coe-actions">

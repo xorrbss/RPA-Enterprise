@@ -58,6 +58,11 @@ function queryPendingDetail(query: { readonly isFetching: boolean; readonly data
   return query.isFetching && query.data === undefined ? "확인 중입니다." : "아직 판단할 수 있는 데이터가 없습니다.";
 }
 
+// T8: 서버 gap 문장들은 각자 마침표로 끝난다 — 끝 마침표를 걷어내고 " · "로 이어 이중 문장부호를 막는다.
+function joinGapSentences(gaps: readonly string[]): string {
+  return gaps.map((gap) => gap.trim().replace(/\.+$/, "")).join(" · ");
+}
+
 function queryErrorDetail(error: unknown): string {
   const state = desktopStateForError(error);
   return `${state.title}: ${state.message}`;
@@ -109,7 +114,8 @@ function buildReadinessGates(args: {
               key: "sso",
               label: "SSO",
               status: auth.status === "blocked" ? "blocked" : "needs",
-              detail: auth.operational_gaps.length > 0 ? auth.operational_gaps.join(", ") : "SSO 설정 확인이 필요합니다.",
+              // T8: 각 gap 문장이 마침표로 끝나 join(", ")이 "…않았습니다.," 이중 문장부호를 만들었다(감사 P0-4).
+              detail: auth.operational_gaps.length > 0 ? joinGapSentences(auth.operational_gaps) : "SSO 설정 확인이 필요합니다.",
               action: { label: "접속 설정 확인", view: "security", params: { section: "access" }, requiredAction: "rbac.grant" },
             },
   );

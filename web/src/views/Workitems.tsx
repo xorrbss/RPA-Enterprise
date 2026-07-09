@@ -118,7 +118,15 @@ export function WorkitemsView(): JSX.Element {
         columns={[
           { header: "참조", render: (r) => r.unique_reference },
           { header: "상태", render: (r) => <StatusBadge status={r.status} /> },
-          { header: "작업 항목", render: (r) => <span title={trackingTitle(r.workitem_id)}>작업 항목</span> },
+          {
+            // T8: 전 행이 동일한 무의미 라벨("작업 항목")이던 열 — 실 필드(시도·처리 담당) 요약으로 교체.
+            header: "처리 현황",
+            render: (r) => (
+              <span title={trackingTitle(r.workitem_id)}>
+                {r.attempts}회 시도{r.checked_out_by !== null ? ` · ${r.checked_out_by}` : " · 미점유"}
+              </span>
+            ),
+          },
           {
             header: "작업",
             render: (r) => (
