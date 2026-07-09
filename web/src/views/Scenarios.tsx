@@ -229,33 +229,32 @@ export function ScenariosView(): JSX.Element {
               </span>
             ),
           },
-          { header: "실행 기준", render: (r) => <span className="badge blue">테스트 가능 · v{r.version}</span> },
           {
-            header: "테스트 동선",
+            // T7(감사 P1-6): 행당 액션 6개 → [열기][실행] + ⋯ 메뉴. "집중 작업/계획·테스트/테스트 작업대"
+            // 용어 혼재는 "열기(집중 스튜디오)"와 "테스트"로 단일화. '실행 기준' 배지 열은 관찰하지 않은
+            // 값("테스트 가능")을 단정하던 열이라 제거 — 마지막 테스트 결과 표기는 계약 확보 후(열린 결정).
+            header: "작업",
             render: (r) => (
               <div className="scenario-test-actions">
                 <button className="btn" type="button" onClick={() => openFocusedStudio(r.scenario_id)}>
-                  집중 작업
+                  열기
                 </button>
-                <button className="btn" type="button" onClick={() => openTestWorkbench(r.scenario_id)}>
-                  계획·테스트
-                </button>
-                <span className="scenario-direct-run">
-                  <span className="badge blue">테스트</span>
-                  <RunScenarioButton scenario={r} runMode="test" />
-                </span>
-                {can("scenario.update") && (
-                  <button
-                    className="btn"
-                    type="button"
-                    onClick={() => setForm({ kind: "edit", scenarioId: r.scenario_id, name: r.name, version: r.version })}
-                  >
-                    편집
-                  </button>
-                )}
+                <RunScenarioButton scenario={r} runMode="test" />
                 <details className="developer-details scenario-management-menu">
-                  <summary>관리 작업</summary>
+                  <summary aria-label={`${r.name} 더 보기`}>더 보기</summary>
                   <div className="scenario-management-actions">
+                    <button className="btn" type="button" onClick={() => openTestWorkbench(r.scenario_id)}>
+                      테스트 계획 보기
+                    </button>
+                    {can("scenario.update") && (
+                      <button
+                        className="btn"
+                        type="button"
+                        onClick={() => setForm({ kind: "edit", scenarioId: r.scenario_id, name: r.name, version: r.version })}
+                      >
+                        편집
+                      </button>
+                    )}
                     <button className="btn" type="button" onClick={() => setVersionsFor(r)}>
                       이력
                     </button>
@@ -319,7 +318,7 @@ function ExpertStudioIntro(props: {
         <p className="eyebrow">전문가 경로</p>
         <h2>저장된 자동화 관리</h2>
         <p className="subtle">
-          새 자동화의 기본 흐름은 만들기 콘솔에서 시작합니다. 이 화면은 버전, 배포 기준, 수동 정의, 집중 작업을 다루는 전문가 스튜디오입니다.
+          새 자동화의 기본 흐름은 만들기 콘솔에서 시작합니다. 이 화면은 버전, 배포 기준, 수동 정의를 다루는 전문가 스튜디오입니다. 행의 [열기]로 개별 자동화에 집중합니다.
         </p>
       </div>
       <span className="scenario-create-actions">
@@ -334,7 +333,7 @@ function ExpertStudioIntro(props: {
           </button>
         )}
         <button className="btn" type="button" onClick={props.onOpenTest}>
-          테스트 작업대
+          테스트
         </button>
       </span>
     </section>

@@ -50,11 +50,12 @@ describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 �
     expect(await getWorkbench()).toBeInTheDocument();
   });
 
-  test("시나리오 목록의 계획·테스트는 Studio 작업대 선택 딥링크로 이동한다", async () => {
+  test("시나리오 목록의 '테스트 계획 보기'(더 보기)는 Studio 작업대 선택 딥링크로 이동한다", async () => { // T7
     renderApp(withScenario());
     location.hash = "#scenarioStudio";
 
-    fireEvent.click(await screen.findByRole("button", { name: "계획·테스트" }));
+    fireEvent.click((await screen.findAllByText("더 보기"))[0]!);
+    fireEvent.click(await screen.findByRole("button", { name: "테스트 계획 보기" }));
 
     await waitFor(() => expect(location.hash).toBe("#scenarioStudio?scenario=sc1&focus=test"));
     expect(await within(await getWorkbench()).findByRole("combobox")).toHaveValue("sc1");
