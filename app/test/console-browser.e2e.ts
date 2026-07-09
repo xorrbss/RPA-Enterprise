@@ -274,7 +274,7 @@ function apiFixture(url: URL): unknown {
         subject_id: "e2e-subject",
         tenant_id: "00000000-0000-4000-8000-0000000000a1",
         // 실서버 계약 미러: 효과 역할 = 토큰 클레임 ∪ 수동 부여. e2e-token 은 roles 클레임이 없고 부여도 없으므로 [].
-        // (nav/useRoles 가 이 응답을 게이팅에 쓰므로 고정 admin 이면 '역할 스코프 nav(viewer 6개)' 단정과 모순.)
+        // (nav/useRoles 가 이 응답을 게이팅에 쓰므로 고정 admin 이면 '역할 스코프 nav(viewer 7개)' 단정과 모순.)
         roles: [],
         source: "jwt",
         display_name: null,
@@ -512,9 +512,9 @@ async function main(): Promise<void> {
     check("dashboard 최근 실행 행 렌더", dash.includes("상세 보기") || dash.includes(SEEDED_RUN_ID.slice(0, 8)), dash.slice(0, 300));
     check("시드 실행이 '실행 중'으로 표시(StatusBadge 한국어 라벨)", dash.includes("실행 중"), dash.slice(0, 200));
     // e2e-token 은 역할 클레임이 없어(roles=[]) 역할 스코프 nav(Phase 15)가 viewer 폴백을 렌더한다:
-    //   내 할 일·사람 확인·작업 목록·실행 기록·대시보드·감사 이력 = 6개. 로그인 랜딩은 myWork.
+    //   내 할 일·사람 확인·작업 목록·실행 기록·대시보드·도입 증빙·감사 이력 = 7개. 로그인 랜딩은 myWork.
     const navBtnCount = await page.$$eval("nav.sidebar button", (b) => b.length);
-    check("사이드바 역할 스코프 nav 렌더(viewer 6개)", navBtnCount === 6, String(navBtnCount));
+    check("사이드바 역할 스코프 nav 렌더(viewer 7개)", navBtnCount === 7, String(navBtnCount));
 
     // 2) 해시 라우팅 → workitems, 시드 작업항목 렌더
     await page.evaluate(() => {
