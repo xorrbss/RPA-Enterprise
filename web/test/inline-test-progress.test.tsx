@@ -132,3 +132,39 @@ describe("inline test progress (E4)", () => {
     expect(screen.getByText(/원인:/)).toBeInTheDocument();
   });
 });
+
+describe("setup corridor inline session capture (E3)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    localStorage.setItem("rpa.token", jwt(["operator", "admin"]));
+  });
+
+  test("만들기 홈 준비 단계의 '세션 등록'은 화면 이동 없이 안내 다이얼로그를 연다", async () => {
+    location.hash = "#create";
+    renderApp(
+      client({
+        listSites: async () => ({
+          items: [
+            {
+              site_profile_id: "10000000-0000-4000-8000-0000000000a1",
+              risk: "green",
+              approval_status: "approved",
+              circuit_status: "closed",
+              name: "그룹웨어",
+              url_pattern: "https://gw.example",
+              login_capable: true,
+              session_ready: false,
+            },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "세션 등록" }));
+
+    // 다이얼로그가 그 자리에서 열리고(운영자 PC 등록 프레이밍), 화면은 만들기 홈에 머문다.
+    expect(await screen.findByText(/브라우저 로그인 세션 등록 — 그룹웨어/)).toBeInTheDocument();
+    expect(location.hash).toContain("#create");
+  });
+});
