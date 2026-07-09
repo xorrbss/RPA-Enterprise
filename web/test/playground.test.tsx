@@ -70,7 +70,7 @@ describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 �
     expect(flow).toHaveTextContent("3. 테스트 시작");
     expect(flow).toHaveTextContent("4. 기록/증빙 확인");
     await waitFor(() => expect(flow).toHaveTextContent("표시 중"));
-    expect(flow).toHaveTextContent("실행 시작 시 테스트 run이 등록되고 해당 run 화면으로 이동합니다.");
+    expect(flow).toHaveTextContent("실행 시작 시 테스트 run이 등록되고 아래 단계에 진행이 실시간 표시됩니다."); // E4
   });
 
   test("Playground scenario 딥링크는 선택값과 실행 계획을 복원한다", async () => {
@@ -207,14 +207,15 @@ describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 �
     expect(within(workbench).queryByRole("button", { name: "실행" })).toBeNull(); // run.create 미보유
   });
 
-  // P0-1 "시작 → 관찰 직행": 실행 시작 성공 시 그 run의 산출물 중심 라이브 트레이스로 자동 드릴다운(수동 이동·UUID 복붙 제거).
-  test("실행 시작 성공 → #runTrace?run=<생성된 run_id>&focus=artifacts 자동 드릴다운", async () => {
+  // E4 "시작 → 인라인 관찰": 실행 시작이 화면을 튕기지 않고 같은 화면에 run 해시를 보존한다(상세 증빙은 버튼 딥링크).
+  test("실행 시작 성공 → 화면 유지 + run 해시 보존(인라인 진행, E4)", async () => {
     renderApp(withScenario({ createRun: async () => ({ run_id: "run-xyz", status: "queued", run_mode: "test" }) }));
     location.hash = "#playground";
     const workbench = await getWorkbench();
     fireEvent.change(await within(workbench).findByRole("combobox"), { target: { value: "sc1" } });
     fireEvent.click(await within(workbench).findByRole("button", { name: "실행" }));
     fireEvent.click(await within(workbench).findByRole("button", { name: "실행 시작" }));
-    await waitFor(() => expect(location.hash).toBe("#runTrace?run=run-xyz&focus=artifacts"));
+    await waitFor(() => expect(location.hash).toContain("run=run-xyz"));
+    expect(location.hash).toContain("#scenarioStudio"); // 화면 유지
   });
 });

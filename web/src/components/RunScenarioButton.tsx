@@ -32,7 +32,7 @@ import {
 // 다정책+기본없음 테넌트는 createRun 이 model_required(422) → AI 모델 선택 폼을 노출해 재실행(임의선택 금지, Gateway 뷰 동형).
 // RBAC: run.create 미보유 시 숨김(백엔드가 최종 강제).
 
-export function RunScenarioButton({ scenario, runMode = "prod" }: { readonly scenario: ScenarioItem; readonly runMode?: RunMode }): JSX.Element | null {
+export function RunScenarioButton({ scenario, runMode = "prod", onStarted }: { readonly scenario: ScenarioItem; readonly runMode?: RunMode; readonly onStarted?: (runId: string) => void }): JSX.Element | null {
   const api = useApiClient();
   const can = useCan();
   const qc = useQueryClient();
@@ -115,8 +115,9 @@ export function RunScenarioButton({ scenario, runMode = "prod" }: { readonly sce
       setModelRequired(null);
       setCheckedModel("");
       void qc.invalidateQueries({ queryKey: ["runs"] });
-      // 시작 → 관찰 직행(P0-1): 방금 만든 run 의 라이브 트레이스로 즉시 이동(수동 '실행 기록 보기'·UUID 복붙 제거).
-      navigate("runTrace", { run: result.run_id, focus: "artifacts" });
+      // E4: 호스트가 인라인 진행을 제공하면 화면을 튕기지 않는다(onStarted). 기본은 기존 라이브 트레이스 직행.
+      if (onStarted !== undefined) onStarted(result.run_id);
+      else navigate("runTrace", { run: result.run_id, focus: "artifacts" });
     },
     onError: (e) => {
       // model_required → AI 모델 선택 노출(임의선택 금지). 그 외 에러는 코드 표면화. 둘 다 패널 안에 표시.
