@@ -35,7 +35,6 @@ const ADVANCED_NON_VIEWER_ROLES: readonly ConsoleRole[] = ["operator", "reviewer
 // E1(§2.3 확정): 기본(standard) 모드 = 만들기 콘솔 — 전 역할 create/humanTasks/runTrace/dashboard,
 // operator+ workitems·automationOps·documentIdp. 나머지는 고급(advanced) = 관리 콘솔로 강등(차단 아님 — 모드 전환으로 접근).
 const VIEW_VISIBILITY: Record<ViewKey, ViewVisibilityPolicy> = {
-  myWork: { standardRoles: ALL_ROLES }, // R4 은퇴 예정(E1 머지 후)
   create: { standardRoles: ALL_ROLES }, // 홈은 전 역할 — viewer는 읽기 전용 홈, 쓰기 CTA는 useCan 게이팅
   dashboard: { standardRoles: ALL_ROLES },
   runTrace: { standardRoles: ALL_ROLES },
@@ -61,7 +60,7 @@ const VIEW_VISIBILITY: Record<ViewKey, ViewVisibilityPolicy> = {
 // 자동화 생명주기 순의 4그룹(내 업무→자동화→현황→설정·점검) — "등록하면 알아서 돌고, 확인할 때만 내 인박스" 멘탈모델을
 // 메뉴 구조로. 결재 인박스는 '사람 확인'의 결재 목록 탭으로 흡수(별도 메뉴 은퇴). 가시성 정책(VIEW_VISIBILITY)은 불변 — 묶음만 재편.
 const NAV_POLICY_GROUPS: readonly VisibleNavGroup[] = [
-  { label: "내 업무", keys: ["myWork", "humanTasks", "workitems"] },
+  { label: "내 업무", keys: ["humanTasks", "workitems"] },
   { label: "자동화", keys: ["create", "scenarioStudio", "runTrace", "automationOps", "documentIdp"] },
   { label: "현황", keys: ["dashboard", "adoptionEvidence"] },
   { label: "설정·점검", keys: ["coePipeline", "connectorCatalog", "objectRepository", "auditExplorer", "llmGateway", "security", "openGate"] },

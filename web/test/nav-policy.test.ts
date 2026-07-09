@@ -24,12 +24,12 @@ describe("Phase 15 nav policy", () => {
   // E1(§2.3): 기본(standard) 모드 = 만들기 콘솔 — 전 역할 create/humanTasks/runTrace/dashboard,
   // operator+ workitems·automationOps·documentIdp. scenarioStudio/adoptionEvidence/auditExplorer는 고급으로 강등.
   test("viewer standard nav is read-only and compact", () => {
-    expect(visible(["viewer"])).toEqual(["myWork", "humanTasks", "create", "runTrace", "dashboard"]);
+    expect(visible(["viewer"])).toEqual(["humanTasks", "create", "runTrace", "dashboard"]);
   });
 
   test("operator standard nav exposes the lifecycle IA (내 업무→자동화→현황)", () => {
     expect(getVisibleNavGroups(ctx(["operator"]))).toEqual([
-      { label: "내 업무", keys: ["myWork", "humanTasks", "workitems"] },
+      { label: "내 업무", keys: ["humanTasks", "workitems"] },
       { label: "자동화", keys: ["create", "runTrace", "automationOps", "documentIdp"] },
       { label: "현황", keys: ["dashboard"] },
     ]);
@@ -37,13 +37,12 @@ describe("Phase 15 nav policy", () => {
 
   test("reviewer and approver standard nav stay role-scoped", () => {
     // 결재 인박스 메뉴는 은퇴 — 결재 목록은 '사람 확인'의 소스 탭으로 흡수(별도 뷰키 없음).
-    expect(visible(["reviewer"])).toEqual(["myWork", "humanTasks", "create", "runTrace", "dashboard"]);
-    expect(visible(["approver"])).toEqual(["myWork", "humanTasks", "create", "runTrace", "dashboard"]);
+    expect(visible(["reviewer"])).toEqual(["humanTasks", "create", "runTrace", "dashboard"]);
+    expect(visible(["approver"])).toEqual(["humanTasks", "create", "runTrace", "dashboard"]);
   });
 
   test("admin sees management and diagnostic views, except internal open gate without flag", () => {
     expect(visible(["admin"])).toEqual([
-      "myWork",
       "humanTasks",
       "workitems",
       "create",
@@ -86,7 +85,6 @@ describe("Phase 15 nav policy", () => {
     expect(hasAdvancedNav({ roles: ["operator"], flags })).toBe(true);
     const views = visible(["operator"], "advanced");
     expect(views).toEqual([
-      "myWork",
       "humanTasks",
       "workitems",
       "create",

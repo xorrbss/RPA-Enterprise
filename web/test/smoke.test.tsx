@@ -375,7 +375,7 @@ describe("D7 운영 콘솔 shell", () => {
   test("사이드바는 역할 정책으로 필터된 nav item을 렌더", () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
-    expect(nav.querySelectorAll(".nav-item")).toHaveLength(13); // E1: 스튜디오·도입 증빙·감사 이력은 고급으로 강등(전 역할 standard 13)
+    expect(nav.querySelectorAll(".nav-item")).toHaveLength(12); // E1 §2.3 + R4(내 할 일 은퇴)
     expect(within(nav).queryByRole("button", { name: "도입 증빙" })).toBeNull(); // E1: 고급 모드 소속
     expect(within(nav).getByRole("button", { name: "보안/개인정보" })).toBeInTheDocument();
     expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();

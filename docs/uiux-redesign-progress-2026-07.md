@@ -40,8 +40,8 @@ PR → CI green → 머지 → main green 확인 후 다음. 문서 file:line은
 | R5 Dashboard adoption 탭 | ✅STALE(선반영) | — | 실측 확인 | 도입 패널 3종은 이미 별도 뷰(adoptionEvidence)로 분리·Dashboard 미렌더(Phase 7에서 이동됨). 목표 동등 달성 — 작업 불요 |
 | R6 automationOps today 삭제 | ✅머지 | #430 | web 994·CI 12/12 | today 탭·렌더 삭제, 기본=schedule, 정적 저장가능/준비중 컬럼 삭제, 운영 헬스 상세는 큐 섹션으로 이동 |
 | E0 준비판정·모델판별 공용화 | ✅머지 | #432 | web 994·CI 12/12 | siteReadiness는 STALE(components/readiness.ts에 기추출) — model_required 판별만 공용 추출(run-scenario/model-required.ts) |
-| E1 랜딩·내비 전환+확인 스트립 | 진행 | — | — | DEFAULT_VIEW=create·navMode §2.3 슬림(viewer std 5·operator std 8)·확인 스트립 이관(review-queue 공용 훅)·팔레트 자동화 딥링크 create 소유·생성기 mode 딥링크 동기화 결함 수정. 홈 전면 재구성은 E2와 병행 |
-| R4 myWork 은퇴 | 대기 | — | — | E1 후 |
+| E1 랜딩·내비 전환+확인 스트립 | ✅머지 | #433 | web 994·e2e 10/10·CI 12/12 | DEFAULT_VIEW=create·navMode §2.3 슬림(viewer std 5·operator std 8)·확인 스트립 이관(review-queue 공용 훅)·팔레트 자동화 딥링크 create 소유·생성기 mode 딥링크 동기화 결함 수정. 홈 전면 재구성은 E2와 병행 |
+| R4 myWork 은퇴 | 진행 | — | — | 뷰 삭제·5곳 해제·#myWork→#create·확인 큐는 E1 스트립이 흡수 |
 | E2 위저드+StepCards | 대기 | — | — | — |
 | E3 PRECHECK 인라인 | 대기 | — | — | — |
 | E4 TestProgress | 대기 | — | — | — |
