@@ -20,7 +20,6 @@ export const VIEW_META: Record<ViewKey, { title: string; subtitle: string; icon:
   humanTasks: { title: "사람 확인", subtitle: "보안문자, 추가 인증, 승인, 검증 업무를 담당자 기준으로 처리", icon: "Inbox", helpText: "보안문자·추가 인증·승인·검증처럼 사람이 직접 처리해야 하는 작업을 담당자별로 모아 처리합니다." },
   runTrace: { title: "실행 기록", subtitle: "자동화가 어떤 순서로 판단하고 실행했는지 조회", icon: "Route", helpText: "특정 실행이 어떤 순서로 판단하고 무엇을 실행했는지 단계별로 되짚어 보는 화면입니다." },
   auditExplorer: { title: "감사 이력", subtitle: "보안 판단, 처리자, 결과, 추적 번호를 조회", icon: "ScrollText", helpText: "누가·언제·무엇을 했고 보안 판단 결과가 어땠는지, 추적 번호로 조회하는 감사 기록 화면입니다." },
-  irValidation: { title: "자동화 검사", subtitle: "자동화 정의의 문법, 연결, 성공 기준을 배포 전에 검사", icon: "FileCode2", helpText: "자동화 정의를 배포하기 전에 문법·연결·성공 기준이 올바른지 미리 검사합니다(저장은 하지 않습니다)." },
   llmGateway: { title: "AI 모델 설정", subtitle: "AI 실행기, 실시간 응답, 예산, 결과 형식 정책", icon: "Bot", helpText: "자동화가 사용하는 AI 모델과 실시간 응답·예산·결과 형식 정책을 설정합니다." },
   security: { title: "보안/개인정보", subtitle: "비밀번호, 개인정보 마스킹, 사이트 접근 정책, 감사 이벤트", icon: "ShieldCheck", helpText: "비밀번호 보관, 개인정보 마스킹, 사이트 접근 정책, 보안 이벤트 같은 보안·개인정보 설정을 관리합니다." },
   idempotency: { title: "중복 방지", subtitle: "같은 데이터를 반복 저장하거나 전송하지 않도록 보장", icon: "DatabaseZap", helpText: "같은 데이터를 중복 저장하거나 두 번 전송하지 않도록 막는 중복 방지 동작을 설명하는 화면입니다." },

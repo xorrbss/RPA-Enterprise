@@ -44,7 +44,7 @@ describe("layout nav policy", () => {
     for (const label of ["내 할 일", "RPA 운영 대시보드", "도입 증빙", "사람 확인", "작업 목록", "만들기 콘솔", "자동화 스튜디오", "실행 기록", "실행 예약·알림", "문서 자동화"]) {
       expect(within(nav).getByRole("button", { name: label })).toBeInTheDocument();
     }
-    for (const hidden of ["Product-open 점검", "중복 방지", "보안/개인정보", "AI 모델 설정", "자동화 검사"]) {
+    for (const hidden of ["Product-open 점검", "중복 방지", "보안/개인정보", "AI 모델 설정"]) {
       expect(within(nav).queryByRole("button", { name: hidden })).toBeNull();
     }
   });
@@ -107,7 +107,6 @@ describe("layout nav policy", () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
     fireEvent.click(within(nav).getByRole("button", { name: "고급" }));
-    expect(within(nav).getByRole("button", { name: "자동화 검사" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: "중복 방지" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: "커넥터/템플릿" })).toBeInTheDocument();
     expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
@@ -118,7 +117,7 @@ describe("layout nav policy", () => {
     localStorage.setItem("rpa.token", jwt(["admin"]));
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
-    for (const label of ["보안/개인정보", "AI 모델 설정", "업무 발굴/ROI", "커넥터/템플릿", "화면 요소 저장소", "자동화 검사", "중복 방지"]) {
+    for (const label of ["보안/개인정보", "AI 모델 설정", "업무 발굴/ROI", "커넥터/템플릿", "화면 요소 저장소", "중복 방지"]) {
       expect(within(nav).getByRole("button", { name: label })).toBeInTheDocument();
     }
     expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();

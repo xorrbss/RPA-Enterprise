@@ -22,7 +22,6 @@ const AuditExplorerView = lazy(() => import("./views/AuditExplorer").then((modul
 const SecurityView = lazy(() => import("./views/Security").then((module) => ({ default: module.SecurityView })));
 const GatewayView = lazy(() => import("./views/Gateway").then((module) => ({ default: module.GatewayView })));
 const ScenariosView = lazy(() => import("./views/Scenarios").then((module) => ({ default: module.ScenariosView })));
-const IrValidationView = lazy(() => import("./views/IrValidation").then((module) => ({ default: module.IrValidationView })));
 const PlaygroundView = lazy(() => import("./views/Playground").then((module) => ({ default: module.PlaygroundView })));
 const OpenGateView = lazy(() => import("./views/OpenGate").then((module) => ({ default: module.OpenGateView })));
 const IdempotencyView = lazy(() => import("./views/Idempotency").then((module) => ({ default: module.IdempotencyView })));
@@ -66,8 +65,6 @@ function renderView(view: ViewKey): JSX.Element {
       return <PlaygroundView />;
     case "openGate":
       return <OpenGateView />;
-    case "irValidation":
-      return <IrValidationView />;
     case "idempotency":
       return <IdempotencyView />;
     default:

@@ -373,7 +373,7 @@ describe("D7 운영 콘솔 shell", () => {
   test("사이드바는 역할 정책으로 필터된 nav item을 렌더", () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
-    expect(nav.querySelectorAll(".nav-item")).toHaveLength(18);
+    expect(nav.querySelectorAll(".nav-item")).toHaveLength(17); // R2: irValidation 은퇴
     expect(within(nav).getByRole("button", { name: "도입 증빙" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: "보안/개인정보" })).toBeInTheDocument();
     expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
@@ -1959,65 +1959,6 @@ describe("D7 운영 콘솔 shell", () => {
     await waitFor(() =>
       expect(calls.some((c) => c.status === "running")).toBe(true),
     );
-  });
-
-  test("시나리오 검사: validate 디스패치 + ValidationReport 렌더", async () => {
-    const calls: Array<{ id: string }> = [];
-    renderApp(
-      fakeClient({
-        validateScenario: async (id) => {
-          calls.push({ id });
-          return {
-            valid: false,
-            report: {
-              errors: [{ rule: "V3", message: "no branch matched" }],
-              warnings: [],
-            },
-          };
-        },
-      }),
-    );
-    location.hash = "#irValidation";
-    const idInput = await screen.findByLabelText("검사할 자동화");
-    fireEvent.change(idInput, { target: { value: "scn-1" } });
-    screen.getByRole("button", { name: "검증 실행" }).click();
-    await waitFor(() => expect(calls).toHaveLength(1));
-    await waitFor(() =>
-      expect(screen.getByText("검증 실패")).toBeInTheDocument(),
-    );
-    expect(
-      screen.getByText(
-        "조건 분기 대상 단계가 없습니다. 다음 단계 연결을 확인하세요.",
-      ),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/no branch matched/)).not.toBeVisible();
-  });
-
-  // F3 — validate 성공 표기는 자동화 정의 검사(dry-run이 실제 보고한 것)만 말하고 '승격 가능'을 단정하지 않는다(조용한 false 금지).
-  // 승격은 별개 명령(admin·If-Match version)이라 이 화면이 관찰하지 못한 값 → scenarioStudio로 안내만 한다(막다른 길 해소).
-  test("시나리오 검사: valid → 자동화 정의 검사 통과(승격 가능 단정 없음) + 자동화 만들기 안내 동선", async () => {
-    renderApp(
-      fakeClient({
-        validateScenario: async () => ({
-          valid: true,
-          report: { errors: [], warnings: [] },
-        }),
-      }),
-    );
-    location.hash = "#irValidation";
-    fireEvent.change(await screen.findByLabelText("검사할 자동화"), {
-      target: { value: "scn-1" },
-    });
-    screen.getByRole("button", { name: "검증 실행" }).click();
-    await waitFor(() =>
-      expect(screen.getByText("자동화 정의 검사 통과")).toBeInTheDocument(),
-    );
-    expect(screen.queryByText(/승격 가능/)).toBeNull(); // 거짓금지 회귀 가드(재유입 시 실패)
-    const goto = await screen.findByRole("button", {
-      name: /자동화 만들기에서 진행/,
-    });
-    goto.click();
-    await waitFor(() => expect(location.hash).toBe("#create")); // navigate 실배선(죽은 버튼 아님)
   });
 
   test("운영자 명령 실패 → 코드 표면화", async () => {

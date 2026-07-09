@@ -33,9 +33,9 @@ PR → CI green → 머지 → main green 확인 후 다음. 문서 file:line은
 | T3 표기 규칙 | ✅머지 | #424 | web 990·CI 11/11 | Workitems raw ISO→formatDateTime·N건 통일·Gateway 폼 단위(토큰·USD/실행)·저장/편집 구분 캡션. PolicyReadout 단위는 기구현 확인 |
 | T4 용어 교정+copy-gate | ✅머지 | #425 | web 991·lint:copy·CI 11/11+게이트 | statusLabel 소문자 정규화·문구 교정 12곳·tools/copy-gate.mjs+allowlist(OpenGate·ENV키 2종)+CI 스텝 |
 | T5 사람 확인 결정 우선 | ✅머지 | #426 | web 996·CI 12/12 | [승인][반려] 단축(approval·비구조화·체인 단건 재사용)·0-타일 조건 렌더·필터/일괄 2줄 분리·principalLabel 식별자+이름 미등록 |
-| T6 실행 기록 식별성 | 진행 | — | — | 실행 번호 #8자 병기(미노출 정책 감사 근거로 개정, 전체 번호는 툴팁 유지)·updated_at 툴팁·우선순위 셀 고정폭. 소요 열 보류(§8-②) |
+| T6 실행 기록 식별성 | ✅머지 | #427 | web 997·CI 12/12 | 실행 번호 #8자 병기(미노출 정책 감사 근거로 개정, 전체 번호는 툴팁 유지)·updated_at 툴팁·우선순위 셀 고정폭. 소요 열 보류(§8-②) |
 | T8 표면 하드닝 | 대기 | — | — | SectionTabs는 R6 후 |
-| R2 irValidation 은퇴 | 대기 | — | — | — |
+| R2 irValidation 은퇴 | 진행 | — | — | 뷰 삭제·5곳 등록 해제·#irValidation→#scenarioStudio·ReadinessCard 검사 화면 링크 제거·은퇴 테스트 3건 삭제 |
 | R3 idempotency 은퇴 | 대기 | — | — | — |
 | R5 Dashboard adoption 탭 | 대기 | — | — | — |
 | R6 automationOps today 삭제 | 대기 | — | — | — |

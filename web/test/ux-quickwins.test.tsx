@@ -381,9 +381,17 @@ describe("UX quick-wins (A)", () => {
     expect(within(nav).getByText("자동화")).toBeInTheDocument();
     expect(within(nav).getByText("현황")).toBeInTheDocument();
     expect(within(nav).getByText("설정·점검")).toBeInTheDocument();
-    expect(nav.querySelectorAll(".nav-item")).toHaveLength(18); // create는 표준 제작 진입점, playground는 Studio의 테스트 작업대로 흡수, openGate는 internal flag 없으면 숨김
+    expect(nav.querySelectorAll(".nav-item")).toHaveLength(17); // create는 표준 제작 진입점, playground는 Studio 테스트 작업대로 흡수, irValidation은 R2 은퇴, openGate는 internal flag 없으면 숨김
     expect(within(nav).getByRole("button", { name: "도입 증빙" })).toBeInTheDocument();
     expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
+  });
+
+  // R2: 자동화 검사 뷰 은퇴 — 북마크(#irValidation)는 스튜디오로 리다이렉트(조용한 빈화면 금지).
+  test("R2: 레거시 #irValidation 해시 → #scenarioStudio 리다이렉트", async () => {
+    location.hash = "#irValidation";
+    renderApp();
+    await waitFor(() => expect(location.hash).toBe("#scenarioStudio"));
+    expect(await screen.findByRole("heading", { level: 1, name: "자동화 스튜디오" })).toBeInTheDocument();
   });
 
   // A6 회귀 가드: 그룹이 모든 뷰를 정확히 한 번씩 덮어야 한다(누락/중복 시 nav에서 사라짐).

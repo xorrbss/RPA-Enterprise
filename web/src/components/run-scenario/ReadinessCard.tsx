@@ -90,12 +90,8 @@ export function ReadinessCard({
     <section className="readiness-card" aria-label="실행 전 준비 점검">
       <strong>실행 전 준비 점검</strong>
       <CheckRow tone={paramTone} label="실행값" detail={paramText} />
-      <CheckRow
-        tone={validationTone}
-        label="실행 전 검사"
-        detail={validationText}
-        action={<button className="linklike" type="button" onClick={() => navigate("irValidation")}>검사 화면</button>}
-      />
+      {/* R2: 수동 검사 화면(irValidation) 은퇴 — 검증은 저장·실행 시 자동 수행되므로 상태 표시만 남긴다. */}
+      <CheckRow tone={validationTone} label="실행 전 검사" detail={validationText} />
       <CheckRow
         tone={modelTone}
         label="모델 정책"
