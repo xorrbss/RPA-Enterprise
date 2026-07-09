@@ -20,7 +20,6 @@ export const VIEW_KEYS = [
   "auditExplorer",
   "llmGateway",
   "security",
-  "idempotency",
 ] as const;
 
 export type ViewKey = (typeof VIEW_KEYS)[number];
@@ -30,7 +29,7 @@ export type ViewKey = (typeof VIEW_KEYS)[number];
 export const NAV_GROUPS: readonly { readonly label: string; readonly keys: readonly ViewKey[] }[] = [
   { label: "제작", keys: ["create", "coePipeline", "connectorCatalog", "objectRepository", "scenarioStudio", "playground"] },
   { label: "운영", keys: ["myWork", "dashboard", "adoptionEvidence", "automationOps", "documentIdp", "runTrace", "workitems", "humanTasks", "auditExplorer"] },
-  { label: "고급 설정", keys: ["llmGateway", "security", "idempotency", "openGate"] },
+  { label: "고급 설정", keys: ["llmGateway", "security", "openGate"] },
 ];
 
 const DEFAULT_VIEW: ViewKey = "myWork";

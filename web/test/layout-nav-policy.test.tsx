@@ -44,7 +44,7 @@ describe("layout nav policy", () => {
     for (const label of ["내 할 일", "RPA 운영 대시보드", "도입 증빙", "사람 확인", "작업 목록", "만들기 콘솔", "자동화 스튜디오", "실행 기록", "실행 예약·알림", "문서 자동화"]) {
       expect(within(nav).getByRole("button", { name: label })).toBeInTheDocument();
     }
-    for (const hidden of ["Product-open 점검", "중복 방지", "보안/개인정보", "AI 모델 설정"]) {
+    for (const hidden of ["Product-open 점검", "보안/개인정보", "AI 모델 설정"]) {
       expect(within(nav).queryByRole("button", { name: hidden })).toBeNull();
     }
   });
@@ -107,7 +107,7 @@ describe("layout nav policy", () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
     fireEvent.click(within(nav).getByRole("button", { name: "고급" }));
-    expect(within(nav).getByRole("button", { name: "중복 방지" })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: "화면 요소 저장소" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: "커넥터/템플릿" })).toBeInTheDocument();
     expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
     expect(within(nav).queryByRole("button", { name: "보안/개인정보" })).toBeNull();
@@ -117,18 +117,18 @@ describe("layout nav policy", () => {
     localStorage.setItem("rpa.token", jwt(["admin"]));
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
-    for (const label of ["보안/개인정보", "AI 모델 설정", "업무 발굴/ROI", "커넥터/템플릿", "화면 요소 저장소", "중복 방지"]) {
+    for (const label of ["보안/개인정보", "AI 모델 설정", "업무 발굴/ROI", "커넥터/템플릿", "화면 요소 저장소"]) {
       expect(within(nav).getByRole("button", { name: label })).toBeInTheDocument();
     }
     expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
   });
 
   test("hidden direct URL still renders the view without adding it to nav", () => {
-    location.hash = "#idempotency";
+    location.hash = "#coePipeline"; // R3: 중복 방지 은퇴 → 잔존 hidden 화면으로 검증
     renderApp();
-    expect(screen.getByRole("heading", { level: 1, name: "중복 방지" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "업무 발굴/ROI" })).toBeInTheDocument();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
-    expect(within(nav).queryByRole("button", { name: "중복 방지" })).toBeNull();
-    expect(location.hash).toBe("#idempotency");
+    expect(within(nav).queryByRole("button", { name: "업무 발굴/ROI" })).toBeNull();
+    expect(location.hash).toBe("#coePipeline");
   });
 });

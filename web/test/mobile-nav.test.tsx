@@ -175,14 +175,14 @@ describe("mobile drawer navigation", () => {
   });
 
   test("hidden direct URL renders the view but stays out of the mobile drawer", () => {
-    location.hash = "#idempotency";
+    location.hash = "#coePipeline"; // R3: 중복 방지 은퇴
     renderApp();
-    expect(screen.getByRole("heading", { level: 1, name: "중복 방지" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "업무 발굴/ROI" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "메뉴" }));
     const dialog = screen.getByRole("dialog", { name: "주 메뉴" });
 
-    expect(within(dialog).queryByRole("button", { name: "중복 방지" })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: "업무 발굴/ROI" })).toBeNull();
     expect(drawerNavItemCount(dialog)).toBe(OPERATOR_STANDARD_NAV_ITEM_COUNT);
     expect(within(dialog).getByRole("button", { name: "도입 증빙" })).toBeInTheDocument();
   });
