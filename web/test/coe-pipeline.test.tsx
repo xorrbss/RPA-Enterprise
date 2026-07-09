@@ -81,11 +81,22 @@ describe("coe pipeline view", () => {
     expect(screen.getByRole("button", { name: "다시 시도" })).toBeInTheDocument();
   });
 
+  // T8: 접수 폼 프리필 제거(예시는 placeholder로만) — 테스트가 직접 입력해 payload를 검증한다.
+  // 라벨이 다른 패널(IdeaBoard)과 겹치므로 접수 섹션으로 스코프.
+  function fillIntakeForm(): void {
+    const intake = screen.getByRole("region", { name: "자동화 후보 접수" });
+    fireEvent.change(within(intake).getByLabelText("업무명"), { target: { value: "거래처 포털 지급 상태 확인" } });
+    fireEvent.change(within(intake).getByLabelText("업무 담당자"), { target: { value: "재무운영팀" } });
+    fireEvent.change(within(intake).getByLabelText("부서"), { target: { value: "재무" } });
+    fireEvent.change(within(intake).getByLabelText("우선순위 점수"), { target: { value: "82" } });
+  }
+
   test("후보 등록 버튼이 createAutomationIdea를 호출한다", async () => {
     const createAutomationIdea = vi.fn(fakeClient().createAutomationIdea);
     renderApp(fakeClient({ createAutomationIdea }));
 
     await screen.findByRole("heading", { name: "자동화 후보 접수" });
+    fillIntakeForm();
     fireEvent.click(screen.getByRole("button", { name: "후보 등록" }));
 
     await waitFor(() => expect(createAutomationIdea).toHaveBeenCalledTimes(1));
@@ -108,7 +119,9 @@ describe("coe pipeline view", () => {
 
     await screen.findByRole("heading", { name: "자동화 후보 접수" });
     await screen.findByText("celonis-export");
+    fillIntakeForm();
     fireEvent.change(screen.getByLabelText("발굴 출처"), { target: { value: "process_mining" } });
+    fireEvent.change(screen.getByLabelText("원본 항목 참조"), { target: { value: "candidate:vendor-status" } });
     fireEvent.click(screen.getByRole("button", { name: "후보 등록" }));
 
     await waitFor(() => expect(createAutomationIdea).toHaveBeenCalledWith(

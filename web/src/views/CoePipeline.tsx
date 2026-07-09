@@ -220,7 +220,8 @@ export function CoePipelineView(): JSX.Element {
         <div className="metric" aria-label="예상 월 절감액">
           <span className="label">예상 월 절감액</span>
           <span className="value">{currency(preview.estimated_monthly_value)}</span>
-          <span className="metric-hint subtle">선택 후보 기준</span>
+          {/* T8: 후보 0건인데 절감액이 보이던 모순(감사 P2) — 이 값의 실제 출처(ROI 계산 양식 미리보기)를 명시. */}
+          <span className="metric-hint subtle">ROI 계산 양식 미리보기 기준</span>
         </div>
       </div>
 
