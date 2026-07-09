@@ -1,5 +1,7 @@
 import { ErrorState, desktopStateForError } from "../../components/states";
 import { navigate } from "../../router";
+import { formatDateTime } from "../../util/time";
+import { groupOpsAlerts } from "../../util/ops-alerts";
 import type { OpsAlertItem, OpsHealth } from "../../api/types";
 
 export function OpsSignalPanel({
@@ -15,14 +17,16 @@ export function OpsSignalPanel({
   isError: boolean;
   error?: unknown;
 }): JSX.Element {
-  const topAlerts = alerts.slice(0, 3);
+  // T2: 알림 센터·상단바 벨과 동일한 그룹핑 규칙(groupOpsAlerts) 소비 —
+  // 같은 계열 알림이 문구 그대로 반복 나열되던 것(감사 P0-3)을 "대표 1건 + 외 N건"으로 통일.
+  const topGroups = groupOpsAlerts(alerts).slice(0, 3);
   const errorState = isError ? desktopStateForError(error) : null;
   return (
     <section className="panel ops-signal-panel" aria-label="운영 헬스와 긴급 알림">
       <div className="panel-head">
         <div>
           <h2>운영 헬스와 긴급 알림</h2>
-          <p className="subtle">{health?.detected_at ?? (isLoading ? "동기화 중" : "스냅샷 없음")}</p>
+          <p className="subtle">{health?.detected_at !== undefined ? formatDateTime(health.detected_at) : isLoading ? "동기화 중" : "스냅샷 없음"}</p>
         </div>
         <span className={`badge ${opsHealthTone(health?.status, isError)}`}>{opsHealthLabel(health?.status, isLoading, isError)}</span>
       </div>
@@ -36,8 +40,10 @@ export function OpsSignalPanel({
         <div className="ops-signal-body">
           <div className="ops-signal-facts">
             <span>
-              <strong>{health === undefined ? "-" : health.queue.available ? String(health.queue.pending_jobs ?? 0) : "미연결"}</strong>
+              {/* 값 자리는 값만 — 수집 불가 상태는 배지로 분리한다(값-상태 혼용 금지, T2). */}
+              <strong>{health === undefined ? "-" : health.queue.available ? String(health.queue.pending_jobs ?? 0) : "—"}</strong>
               <small>큐 대기</small>
+              {health !== undefined && !health.queue.available && <span className="badge muted">수집 미연결</span>}
             </span>
             <span>
               <strong>{health === undefined ? "-" : String(health.stale_runs.nonterminal_over_15m)}</strong>
@@ -48,22 +54,27 @@ export function OpsSignalPanel({
               <small>만료 미회수 세션</small>
             </span>
           </div>
-          {topAlerts.length === 0 ? (
+          {topGroups.length === 0 ? (
             <p className="subtle ops-signal-empty">긴급 운영 알림이 없습니다.</p>
           ) : (
             <ul className="ops-signal-alerts">
-              {topAlerts.map((alert) => (
+              {topGroups.map(({ representative: alert, count }) => (
                 <li key={alert.alert_id}>
                   <span className={`badge ${opsAlertTone(alert.severity)}`}>{opsAlertSeverityLabel(alert.severity)}</span>
-                  <button className="linklike" type="button" onClick={() => navigateOpsAlert(alert.route)}>
-                    {alert.title}
-                  </button>
+                  <span className="ops-signal-alert-title">
+                    <button className="linklike" type="button" onClick={() => navigateOpsAlert(alert.route)}>
+                      {alert.title}
+                    </button>
+                    {count > 1 && <span className="badge muted">외 {count - 1}건</span>}
+                  </span>
                   <span className="subtle">{opsAlertSourceLabel(alert.source)} · {alert.recommended_action}</span>
                 </li>
               ))}
             </ul>
           )}
-          <button className="btn" type="button" onClick={() => navigate("automationOps")}>알림 센터 열기</button>
+          <button className="linklike ops-signal-more" type="button" onClick={() => navigate("automationOps", { section: "alerts" })}>
+            알림 센터에서 모두 보기 →
+          </button>
         </div>
       )}
     </section>

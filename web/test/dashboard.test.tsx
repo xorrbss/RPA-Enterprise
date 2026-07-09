@@ -347,12 +347,64 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     await waitFor(() => expect(location.hash).toBe("#runTrace?run=run-ops-1"));
   });
 
-  test("운영 알림 미니 패널의 센터 버튼은 automationOps로 이동한다", async () => {
+  test("운영 알림 미니 패널의 '모두 보기'는 알림 센터 섹션으로 딥링크한다", async () => {
     renderApp(dashboardClient({ listOpsAlerts: async () => ({ items: [], next_cursor: null }) }));
 
     expect(await screen.findByText("긴급 운영 알림이 없습니다.")).toBeInTheDocument();
-    screen.getByRole("button", { name: "알림 센터 열기" }).click();
-    await waitFor(() => expect(location.hash).toBe("#automationOps"));
+    screen.getByRole("button", { name: /알림 센터에서 모두 보기/ }).click();
+    await waitFor(() => expect(location.hash).toBe("#automationOps?section=alerts"));
+  });
+
+  test("같은 계열 알림은 대시보드에서도 알림 센터와 동일하게 '대표 1건 + 외 N건'으로 묶인다", async () => {
+    // T2(감사 P0-3): 동일 문구 3중 반복 나열 제거 — groupOpsAlerts 단일 규칙 소비.
+    const base = {
+      severity: "critical" as const,
+      source: "run_sla" as const,
+      title: "장시간 실행 위험",
+      detail: "실행이 목표 완료 시간을 초과했습니다.",
+      subject_type: "run" as const,
+      subject_id: null,
+      status: "open" as const,
+      delivery: { channel: "console" as const, status: "delivered" as const, delivered_at: "2026-06-23T09:01:00.000Z", external_delivery: false as const },
+      ack: null,
+      recommended_action: "실행 기록에서 단계 지연을 확인하세요.",
+      route: "#runTrace",
+      detected_at: "2026-06-23T09:01:00.000Z",
+      due_at: null,
+    };
+    renderApp(
+      dashboardClient({
+        listOpsAlerts: async () => ({
+          items: [
+            { ...base, alert_id: "dup-1" },
+            { ...base, alert_id: "dup-2" },
+            { ...base, alert_id: "dup-3" },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+
+    expect(await screen.findByText("장시간 실행 위험")).toBeInTheDocument();
+    expect(screen.getAllByText("장시간 실행 위험")).toHaveLength(1); // 반복 나열 없음
+    expect(screen.getByText("외 2건")).toBeInTheDocument();
+  });
+
+  test("운영 헬스 큐 타일은 미연결일 때 값 자리에 상태 문구를 넣지 않는다", async () => {
+    renderApp(
+      dashboardClient({
+        getOpsHealth: async () => ({
+          status: "warning",
+          detected_at: "2026-06-23T09:10:00.000Z",
+          queue: { available: false, pending_jobs: null },
+          browser_leases: { reserved: 0, active: 0, draining: 0, expired: 0, expired_open: 0, next_expiry_at: null },
+          stale_runs: { nonterminal_over_15m: 0, oldest_updated_at: null },
+        }),
+      }),
+    );
+
+    expect(await screen.findByText("수집 미연결")).toBeInTheDocument();
+    expect(screen.queryByText("미연결")).toBeNull(); // 값 자리("미연결" 단독)는 더 이상 없다
   });
 
   test("월간 자동화 성과 리포트가 ROI, 실패 Top N, CSV/XLSX export를 제공한다", async () => {

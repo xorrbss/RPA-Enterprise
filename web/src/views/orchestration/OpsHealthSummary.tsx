@@ -33,10 +33,12 @@ export function OpsHealthSummary({
         <span className={`badge ${opsHealthTone(health?.status)}`}>{opsHealthLabel(health?.status, isLoading)}</span>
       </div>
       <div className="ops-health-grid">
+        {/* T2: 값 자리는 값만 — 수집 불가 상태("미연결")는 상태 배지(detail)로만 표기(값-상태 혼용 금지). */}
         <HealthTile
           title="큐 대기"
-          value={health === undefined ? "-" : health.queue.available ? String(health.queue.pending_jobs ?? 0) : "미연결"}
+          value={health === undefined ? "-" : health.queue.available ? String(health.queue.pending_jobs ?? 0) : "—"}
           detail={health?.queue.available === true ? "대기 작업" : "작업 큐 미연결"}
+          tone={health === undefined || health.queue.available ? "blue" : "muted"}
         />
         <HealthTile
           title="브라우저 세션"
@@ -123,9 +125,10 @@ function opsHealthLabel(status: OpsHealth["status"] | undefined, isLoading: bool
   return isLoading ? "동기화 중" : "미확인";
 }
 
+// T2: 값 자리에 상태 문구("확인 필요")를 넣지 않는다 — 상태는 detail 배지("작업 큐 미연결")가 전달.
 function schedulerHealthValue(health: OpsHealth | undefined): string {
   if (health === undefined) return "-";
-  return health.queue.available ? "큐 연결" : "확인 필요";
+  return health.queue.available ? "연결됨" : "—";
 }
 
 function schedulerHealthDetail(health: OpsHealth | undefined): string {
