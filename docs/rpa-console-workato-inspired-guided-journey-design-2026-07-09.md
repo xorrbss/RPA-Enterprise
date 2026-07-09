@@ -151,7 +151,7 @@ Start cards:
 | 문서/IDP 자동화 | P1 enabled | Navigates to `documentIdp?mode=start` |
 | API/커넥터 자동화 | P1 enabled | Navigates to connector catalog filtered to integration/API candidates |
 | 처음부터 직접 설계 | P1 enabled but secondary | Opens current manual create details |
-| AI Agent/MCP 자동화 | P2 candidate | `TODO: [BLOCKED]` product/API contract decision required before enabling |
+| AI Agent/MCP 자동화 | P2 candidate | Deferred product/API contract decision before enabling; outside the current guided-journey release scope |
 
 Each card should show:
 
@@ -255,7 +255,7 @@ Step preview:
 
 - P0: show a human-readable expected pattern from existing template metadata.
 - P1: show exact generated steps only if the API exposes template IR or step metadata.
-- `TODO: [BLOCKED]` Exact template step preview requires a contract decision if current catalog data does not include ordered steps.
+- Deferred decision: exact template step preview requires a contract decision if current catalog data does not include ordered steps.
 
 ### 6.6 Test Run Status Panel
 
@@ -338,7 +338,7 @@ P1:
   - `workspace_display_name`
   - `controlled_prod_ready`
 
-`TODO: [BLOCKED]` Environment/workspace display requires a trusted read contract. Do not infer from token or browser storage.
+Deferred decision: environment/workspace display requires a trusted read contract. Do not infer from token or browser storage.
 
 ## 7. Data And API Mapping
 
