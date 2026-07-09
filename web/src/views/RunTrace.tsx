@@ -160,16 +160,17 @@ export function RunTraceView(): JSX.Element {
         emptyMessage="조건에 맞는 실행 기록이 없습니다."
         columns={[
           {
-            // 식별은 업무 언어(자동화 이름)로 — 원시 추적 번호는 운영자 표면에 노출하지 않는 기존 정책 유지
-            // (툴팁·상세 분석에서만). 같은 자동화의 실행끼리는 기준 시각 열로 구분한다.
+            // 식별은 업무 언어(자동화 이름) 우선 + 실행 번호 축약 병기(T6, 감사 P1-9) — 같은 자동화의 실행
+            // 여러 건이 기준 시각까지 같으면 행 구분이 불가능했다. 원시 전체 번호는 여전히 툴팁·상세에만.
             header: "자동화",
             render: (r) => (
-              <span title={`실행 추적 번호: ${r.run_id}`}>
+              <span title={`실행 추적 번호: ${r.run_id}`} style={{ display: "inline-grid", gap: 2 }}>
                 {r.scenario_name !== undefined ? (
                   <strong>{r.scenario_name}</strong>
                 ) : (
                   <span className="subtle">자동화 확인 필요</span>
                 )}
+                <code className="subtle run-short-id">#{r.run_id.slice(0, 8)}</code>
               </span>
             ),
           },
@@ -198,7 +199,15 @@ export function RunTraceView(): JSX.Element {
             header: "구분",
             render: (r) => <RunModeBadge runMode={r.run_mode} />,
           },
-          { header: "기준 시각", render: (r) => formatDateTime(r.as_of) },
+          {
+            header: "기준 시각",
+            // T6: 동일 기준 시각 행의 최신성 구분 — 마지막 갱신 시각은 툴팁으로 병기(있을 때만, 날조 금지).
+            render: (r) => (
+              <span title={r.updated_at !== null && r.updated_at !== undefined ? `마지막 갱신 ${formatDateTime(r.updated_at)}` : undefined}>
+                {formatDateTime(r.as_of)}
+              </span>
+            ),
+          },
           { header: "우선순위", render: (r) => <RunPriorityControl run={r} /> },
           {
             header: "작업",
@@ -306,12 +315,17 @@ function RunPriorityControl(props: { readonly run: RunItem }): JSX.Element {
     setPriority(current);
   }, [current, props.run.run_id]);
 
+  // T6: 행마다 컨트롤 형태가 달라(칩 vs 셀렉트+버튼) 열 정렬이 흔들리던 것 — 동일 고정폭 셀로 통일.
   if (props.run.status !== "queued") {
-    return <span className="badge blue">{priorityLabel(current)}</span>;
+    return (
+      <span className="run-priority-cell">
+        <span className="badge blue">{priorityLabel(current)}</span>
+      </span>
+    );
   }
 
   return (
-    <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+    <span className="run-priority-cell">
       <select
         aria-label="실행 우선순위"
         value={priority}

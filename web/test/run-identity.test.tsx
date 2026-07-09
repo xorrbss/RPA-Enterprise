@@ -69,8 +69,37 @@ describe("run identity (S1)", () => {
     await waitFor(() => {
       expect(listCalls.some((p) => p.scenario_id === SCEN)).toBe(true);
     });
-    // 원시 추적 번호 미노출 정책 유지 — 셀 텍스트에 id 조각이 없다(툴팁 전용).
-    expect(document.body.textContent ?? "").not.toContain(RUN.slice(0, 8));
+    // T6(감사 P1-9)로 정책 개정: 축약 실행 번호(#8자)를 이름 아래 병기 — 같은 자동화의 실행 여러 건이
+    // 기준 시각까지 같으면 구분 불가했다. 전체 원시 번호는 여전히 셀 텍스트에 없다(툴팁·상세 전용).
+    expect(screen.getByText(`#${RUN.slice(0, 8)}`)).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toContain(RUN.slice(0, 12));
+  });
+
+  test("같은 자동화·같은 기준 시각의 실행 두 건이 실행 번호로 구분된다 (T6)", async () => {
+    location.hash = "#runTrace";
+    const runBase = {
+      status: "running",
+      scenario_id: SCEN,
+      scenario_name: "주문 수집 자동화",
+      current_node: null,
+      as_of: "2026-06-25T00:00:00.000Z",
+      failure_reason: null,
+    };
+    renderApp(
+      fakeClient({
+        listRuns: async () => ({
+          items: [
+            { ...runBase, run_id: "aaaa1111-0000-4000-8000-000000000001" },
+            { ...runBase, run_id: "bbbb2222-0000-4000-8000-000000000002" },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+
+    expect(await screen.findAllByText("주문 수집 자동화")).toHaveLength(2);
+    expect(screen.getByText("#aaaa1111")).toBeInTheDocument();
+    expect(screen.getByText("#bbbb2222")).toBeInTheDocument();
   });
 
   test("내 할 일: '실행 기록 보기'가 그 자동화 필터를 실은 딥링크로 이동한다", async () => {

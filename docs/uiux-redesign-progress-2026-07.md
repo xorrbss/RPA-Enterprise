@@ -32,8 +32,8 @@ PR → CI green → 머지 → main green 확인 후 다음. 문서 file:line은
 | T2 알림 그룹핑 일원화 | ✅머지 | #423 | web 990·CI 11/11 | OpsSignalPanel groupOpsAlerts 소비(limit 50)·모두 보기 링크·값-상태 분리(대시보드+automationOps 스케줄러) |
 | T3 표기 규칙 | ✅머지 | #424 | web 990·CI 11/11 | Workitems raw ISO→formatDateTime·N건 통일·Gateway 폼 단위(토큰·USD/실행)·저장/편집 구분 캡션. PolicyReadout 단위는 기구현 확인 |
 | T4 용어 교정+copy-gate | ✅머지 | #425 | web 991·lint:copy·CI 11/11+게이트 | statusLabel 소문자 정규화·문구 교정 12곳·tools/copy-gate.mjs+allowlist(OpenGate·ENV키 2종)+CI 스텝 |
-| T5 사람 확인 결정 우선 | 진행 | — | — | [승인][반려] 단축(approval·비구조화·체인 단건 재사용)·0-타일 조건 렌더·필터/일괄 2줄 분리·principalLabel 식별자+이름 미등록 |
-| T6 실행 기록 식별성 | 대기 | — | — | 소요 열 보류(§8-②), 실행 번호+updated_at 상대 표기 |
+| T5 사람 확인 결정 우선 | ✅머지 | #426 | web 996·CI 12/12 | [승인][반려] 단축(approval·비구조화·체인 단건 재사용)·0-타일 조건 렌더·필터/일괄 2줄 분리·principalLabel 식별자+이름 미등록 |
+| T6 실행 기록 식별성 | 진행 | — | — | 실행 번호 #8자 병기(미노출 정책 감사 근거로 개정, 전체 번호는 툴팁 유지)·updated_at 툴팁·우선순위 셀 고정폭. 소요 열 보류(§8-②) |
 | T8 표면 하드닝 | 대기 | — | — | SectionTabs는 R6 후 |
 | R2 irValidation 은퇴 | 대기 | — | — | — |
 | R3 idempotency 은퇴 | 대기 | — | — | — |
