@@ -41,7 +41,7 @@ export function StructuredPolicyFields(props: {
   return (
     <div className="policy-fields">
       <label>
-        <span className="label">컨텍스트 한도</span>
+        <span className="label">컨텍스트 한도 (토큰)</span>
         <input
           value={props.maxContextTokens}
           onChange={(e) => props.setMaxContextTokens(e.target.value)}
@@ -65,7 +65,8 @@ export function StructuredPolicyFields(props: {
         />
       </label>
       <label>
-        <span className="label">비용 한도</span>
+        {/* 단위 명시(T3) — 계약 어휘: budget.maxCost = USD, run 단위 누계 상한(ops-defaults llm.budget.max_cost_per_run). */}
+        <span className="label">비용 한도 (USD/실행)</span>
         <input
           value={props.maxCost}
           onChange={(e) => props.setMaxCost(e.target.value)}

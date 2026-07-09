@@ -259,7 +259,8 @@ function WorkitemDetailPanel({
           <dt className="subtle">처리 담당</dt>
           <dd style={{ margin: 0 }}>{detail.data.checked_out_by ?? "— (미점유)"}</dd>
           <dt className="subtle">처리 시작 시각</dt>
-          <dd style={{ margin: 0 }}>{detail.data.checked_out_at ?? "—"}</dd>
+          {/* T3: raw ISO 원문 노출 금지 — formatDateTime(ko-KR) 통일. */}
+          <dd style={{ margin: 0 }}>{detail.data.checked_out_at !== null ? formatDateTime(detail.data.checked_out_at) : "—"}</dd>
           <dt className="subtle">참조</dt>
           <dd style={{ margin: 0 }}>{detail.data.unique_reference}</dd>
           {detail.data.run_id !== null && (

@@ -54,7 +54,7 @@ describe("HumanTasks 일괄 동작 안전성", () => {
     location.hash = "#humanTasks";
 
     const controls = await screen.findByRole("region", { name: "검토 업무 목록 제어" });
-    fireEvent.click(within(controls).getByRole("button", { name: "마감 임박 0" }));
+    fireEvent.click(within(controls).getByRole("button", { name: "마감 임박 0건" }));
 
     const summary = await screen.findByRole("region", { name: "사람 확인 현재 보기 요약" });
     expect(within(summary).getByRole("heading", { name: "현재 보기 0건 · 처리 대기 0건" })).toBeInTheDocument();

@@ -232,10 +232,10 @@ function HumanTaskStreamView(): JSX.Element {
             미배정 {unassignedCountLabel}건
           </button>
           <button className="btn" type="button" aria-pressed={dueOnly} title="마감 시각이 있는 현재 보기 업무만 봅니다." onClick={() => setDueOnly((v) => !v)}>
-            마감 임박 {dueItems.length}
+            마감 임박 {dueItems.length}건
           </button>
           <button className="btn" type="button" aria-pressed={documentOnly} title="증빙 또는 입력 항목이 있는 검증 업무만 봅니다." onClick={() => setDocumentOnly((v) => !v)}>
-            문서 검증 업무 {documentItems.length}
+            문서 검증 업무 {documentItems.length}건
           </button>
           <button className="btn" type="button" disabled={nextTask === undefined} onClick={() => { if (nextTask !== undefined) mergeParams({ ht: nextTask.human_task_id }); }}>
             다음 업무 열기
