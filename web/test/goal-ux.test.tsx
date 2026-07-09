@@ -368,24 +368,6 @@ describe("goal UX improvements", () => {
     expect(screen.queryByRole("button", { name: /일괄/ })).toBeNull();
   });
 
-  test("validation issues show prescriptive fixes and a scenario-edit CTA", async () => {
-    renderApp(
-      fakeClient({
-        validateScenario: async () => ({
-          valid: false,
-          report: { errors: [{ rule: "V3", message: "target node missing", node_id: "check" }], warnings: [] },
-        }),
-      }),
-    );
-    location.hash = "#irValidation";
-
-    fireEvent.change(await screen.findByLabelText("검사할 자동화"), { target: { value: "sc-prescription" } });
-    fireEvent.click(screen.getByRole("button", { name: "검증 실행" }));
-    expect(await screen.findByText(/조건 분기 대상과 다음 단계 ID/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /자동화 편집으로 이동/ }));
-    await waitFor(() => expect(location.hash).toBe("#scenarioStudio"));
-  });
-
   test("gateway policy defaults to structured fields and keeps JSON in the advanced section", async () => {
     const calls: Array<GatewayPolicyUpdate> = [];
     renderApp(

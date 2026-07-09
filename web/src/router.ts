@@ -18,7 +18,6 @@ export const VIEW_KEYS = [
   "humanTasks",
   "runTrace",
   "auditExplorer",
-  "irValidation",
   "llmGateway",
   "security",
   "idempotency",
@@ -29,7 +28,7 @@ export type ViewKey = (typeof VIEW_KEYS)[number];
 // 사이드바 3그룹(제작/운영/고급 설정) — 뷰를 업무 흐름으로 묶어 탐색 부담을 낮춘다.
 // 모든 VIEW_KEYS가 정확히 한 그룹에 속해야 한다(router.test가 강제). nav 순서는 그룹 순서를 따른다.
 export const NAV_GROUPS: readonly { readonly label: string; readonly keys: readonly ViewKey[] }[] = [
-  { label: "제작", keys: ["create", "coePipeline", "connectorCatalog", "objectRepository", "scenarioStudio", "playground", "irValidation"] },
+  { label: "제작", keys: ["create", "coePipeline", "connectorCatalog", "objectRepository", "scenarioStudio", "playground"] },
   { label: "운영", keys: ["myWork", "dashboard", "adoptionEvidence", "automationOps", "documentIdp", "runTrace", "workitems", "humanTasks", "auditExplorer"] },
   { label: "고급 설정", keys: ["llmGateway", "security", "idempotency", "openGate"] },
 ];
@@ -63,7 +62,11 @@ export function mergeParams(updates: Record<string, string | null>): void {
 
 /** 현재 라우트(해시) 구독. 잘못된 해시는 dashboard로 폴백(조용한 빈화면 금지). */
 // 은퇴한 뷰 키의 레거시 해시 → 새 목적지(북마크 보존). approvalInbox(결재 인박스)는 '사람 확인'의 결재 목록 탭으로 흡수됨.
-const LEGACY_HASH_REDIRECTS: Record<string, string> = { approvalInbox: "humanTasks?source=approvals" };
+const LEGACY_HASH_REDIRECTS: Record<string, string> = {
+  approvalInbox: "humanTasks?source=approvals",
+  // R2: 자동화 검사 뷰 은퇴 — 검증은 저장·실행 시 자동 수행(수동 IR 붙여넣기는 콘솔 화면일 이유 없음). 북마크 보존.
+  irValidation: "scenarioStudio",
+};
 
 function legacyPlaygroundTarget(queryPart: string | undefined): string {
   const params = new URLSearchParams(queryPart ?? "");

@@ -76,7 +76,6 @@ describe("Phase 15 nav policy", () => {
       "coePipeline",
       "connectorCatalog",
       "objectRepository",
-      "irValidation",
       "auditExplorer",
       "llmGateway",
       "security",
@@ -95,7 +94,6 @@ describe("Phase 15 nav policy", () => {
       "coePipeline",
       "connectorCatalog",
       "objectRepository",
-      "irValidation",
       "security",
       "llmGateway",
       "idempotency",
@@ -123,7 +121,6 @@ describe("Phase 15 nav policy", () => {
       "coePipeline",
       "connectorCatalog",
       "objectRepository",
-      "irValidation",
       "auditExplorer",
       "idempotency",
     ]);

@@ -51,7 +51,6 @@ const VIEW_VISIBILITY: Record<ViewKey, ViewVisibilityPolicy> = {
   coePipeline: { standardRoles: ["admin"], advancedRoles: ADVANCED_NON_VIEWER_ROLES },
   connectorCatalog: { standardRoles: ["admin"], advancedRoles: ADVANCED_NON_VIEWER_ROLES },
   objectRepository: { standardRoles: ["admin"], advancedRoles: ADVANCED_NON_VIEWER_ROLES },
-  irValidation: { standardRoles: ["admin"], advancedRoles: ADVANCED_NON_VIEWER_ROLES },
 
   llmGateway: { standardRoles: ["admin"] },
   security: { standardRoles: ["admin"] },
@@ -65,7 +64,7 @@ const NAV_POLICY_GROUPS: readonly VisibleNavGroup[] = [
   { label: "내 업무", keys: ["myWork", "humanTasks", "workitems"] },
   { label: "자동화", keys: ["create", "scenarioStudio", "runTrace", "automationOps", "documentIdp"] },
   { label: "현황", keys: ["dashboard", "adoptionEvidence"] },
-  { label: "설정·점검", keys: ["coePipeline", "connectorCatalog", "objectRepository", "irValidation", "auditExplorer", "llmGateway", "security", "idempotency", "openGate"] },
+  { label: "설정·점검", keys: ["coePipeline", "connectorCatalog", "objectRepository", "auditExplorer", "llmGateway", "security", "idempotency", "openGate"] },
 ];
 
 function isConsoleRole(role: string): role is ConsoleRole {

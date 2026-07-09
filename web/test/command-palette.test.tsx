@@ -131,7 +131,7 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
       ["Product-open", "Product-open 점검"],
       ["보안", "보안/개인정보"],
       ["AI 모델", "AI 모델 설정"],
-      ["자동화 검사", "자동화 검사"],
+      ["커넥터", "커넥터/템플릿"],
     ] as const) {
       fireEvent.change(input, { target: { value: query } });
       expect(within(dialog).queryByText(label)).toBeNull();
@@ -164,7 +164,7 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
     const dialog = await screen.findByRole("dialog", { name: "전역 검색 및 화면 이동" });
     const input = within(dialog).getByRole("combobox");
 
-    fireEvent.change(input, { target: { value: "자동화 검사" } });
+    fireEvent.change(input, { target: { value: "커넥터/템플릿" } }); // R2: 자동화 검사 은퇴 → 남는 advanced 화면으로 검증
     expect(await within(dialog).findByText(POLICY_FILTERED_MESSAGE)).toBeInTheDocument();
     expect(within(dialog).getByText(POLICY_FILTERED_ADVANCED_ACTION)).toBeInTheDocument();
 
