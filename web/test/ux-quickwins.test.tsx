@@ -366,9 +366,10 @@ describe("UX quick-wins (A)", () => {
     expect(details?.open).toBe(false);
   });
 
-  // A6 — 셸 신뢰감: 역할 칩 + 정책 기반 사이드바.
-  test("A6: 탑바 역할 칩 표시(한국어 라벨)", async () => {
+  // A6 — 셸 신뢰감: 역할 칩 + 정책 기반 사이드바. (T1: 역할 칩은 계정 팝오버 안으로 이동)
+  test("A6: 계정 팝오버 역할 칩 표시(한국어 라벨)", async () => {
     renderApp();
+    fireEvent.click(screen.getByRole("button", { name: "계정 메뉴" }));
     expect(await screen.findByText("관리자")).toBeInTheDocument(); // admin ∈ ALL_ROLES
     expect(screen.getByText("운영자")).toBeInTheDocument(); // operator
   });
@@ -395,6 +396,8 @@ describe("UX quick-wins (A)", () => {
   test("A6: roles 없는 토큰 → '권한 미확인'(빈 폴백)", async () => {
     localStorage.setItem("rpa.token", "no-dot-token"); // decodeRoles → []
     renderApp();
+    // T1: 역할 칩은 상단바 직접 노출에서 계정 팝오버로 이동 — 팝오버를 열어 확인한다.
+    fireEvent.click(screen.getByRole("button", { name: "계정 메뉴" }));
     expect(
       await screen.findByText("권한 미확인 · 읽기 전용"),
     ).toBeInTheDocument();

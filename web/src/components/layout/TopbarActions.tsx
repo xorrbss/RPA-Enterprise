@@ -4,7 +4,6 @@ import {
   Building2,
   CalendarClock,
   ChevronDown,
-  ClipboardCheck,
   LayoutTemplate,
   LogOut,
   PlaySquare,
@@ -66,7 +65,8 @@ export function SubjectChip(): JSX.Element {
   );
 }
 
-type ContextTone = "green" | "amber" | "red";
+// neutral = 컨텍스트 정상 확인(readiness 판정은 알림 벨·클릭 목적지에서) — 상시 색 경고를 topbar에 두지 않는다(T1).
+type ContextTone = "neutral" | "amber" | "red";
 
 interface TopbarContextState {
   readonly tone: ContextTone;
@@ -88,7 +88,7 @@ export function TopbarContextBadge(): JSX.Element {
   return (
     <button
       type="button"
-      className={`topbar-context-badge ${context.tone}`}
+      className={`topbar-context-badge${context.tone === "neutral" ? "" : ` ${context.tone}`}`}
       aria-label={context.ariaLabel}
       title={context.title}
       onClick={() => navigate("automationOps", { section: "readiness" })}
@@ -105,7 +105,7 @@ export function TopbarContextBadge(): JSX.Element {
           <strong>{context.environmentLabel}</strong>
         </span>
       </span>
-      <span className={`badge ${context.tone}`}>{context.statusLabel}</span>
+      {context.statusLabel !== "" && <span className={`badge ${context.tone}`}>{context.statusLabel}</span>}
     </button>
   );
 }
@@ -122,16 +122,16 @@ function topbarContextState(readiness: ProductionReadiness | undefined, isLoadin
   if (tenant.length === 0 || environment.length === 0) {
     return unknownTopbarContext("컨텍스트 불완전", "red");
   }
-  const tone = productionContextTone(readiness);
-  const status = productionContextStatusLabel(readiness, tone);
+  // 컨텍스트가 확인되면 중립 표시만 한다 — readiness 차단/경고 신호는 상단바 알림 벨(TopbarAlertBell)이 담당(T1).
+  // "차단" 칩이 env 옆에 상시 노출되면 환경 전체가 차단된 것으로 오독된다(감사 P0-2).
   const environmentLabel = environmentDisplayLabel(environment);
   return {
-    tone,
+    tone: "neutral",
     tenantLabel: tenant,
     environmentLabel,
-    statusLabel: status,
-    title: `tenant=${tenant}, environment=${environment}. 운영 전환 readiness에서 확인한 metadata입니다.`,
-    ariaLabel: `tenant/environment 컨텍스트: tenant ${tenant}, environment ${environmentLabel}, readiness ${status}. 운영 전환 준비 상태 열기`,
+    statusLabel: "",
+    title: `tenant=${tenant}, environment=${environment}. 운영 전환 준비 상태는 클릭해 확인합니다.`,
+    ariaLabel: `tenant/environment 컨텍스트: tenant ${tenant}, environment ${environmentLabel}. 운영 전환 준비 상태 열기`,
   };
 }
 
@@ -144,19 +144,6 @@ function unknownTopbarContext(statusLabel: string, tone: ContextTone): TopbarCon
     title: "tenant/environment 컨텍스트를 확인할 수 없습니다. 준비 완료로 표시하지 않습니다.",
     ariaLabel: `tenant/environment 컨텍스트 ${statusLabel}. 운영 전환 준비 상태 열기`,
   };
-}
-
-function productionContextTone(readiness: ProductionReadiness): ContextTone {
-  if (readiness.status === "ready" && readiness.summary.controlled_prod_ready === true) return "green";
-  if (readiness.status === "blocked" || readiness.summary.blocker_count > 0) return "red";
-  return "amber";
-}
-
-function productionContextStatusLabel(readiness: ProductionReadiness, tone: ContextTone): string {
-  if (tone === "green") return "준비 완료";
-  if (tone === "red") return "차단";
-  if (readiness.summary.deferred_count > 0) return "증빙 필요";
-  return "확인 필요";
 }
 
 function environmentDisplayLabel(environment: string): string {
@@ -239,15 +226,8 @@ function createMenuItems(roles: readonly string[]): readonly GlobalCreateItem[] 
       params: { section: "sites" },
     });
   }
-  if (can("run.read") && can("artifact.read")) {
-    items.push({
-      key: "evidence",
-      label: "증빙 확인",
-      description: "파일럿 준비도와 실행·감사 증빙 패킷 확인",
-      icon: ClipboardCheck,
-      view: "adoptionEvidence",
-    });
-  }
+  // "증빙 확인"(조회 액션)은 생성 메뉴에서 제외 — 커맨드 팔레트 quick action("도입 증빙 열기")이 담당한다(T1).
+  // 조회 전용 항목이 있으면 viewer(run.read+artifact.read 보유)에게도 "+ 새로 만들기"가 노출되는 게이팅 불일치가 생긴다.
   return items;
 }
 

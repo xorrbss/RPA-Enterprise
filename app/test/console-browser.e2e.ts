@@ -525,7 +525,28 @@ async function main(): Promise<void> {
     check("라우팅 후 탑바 제목 = 작업 목록", h1 === "작업 목록", h1);
     check("시드 작업항목(wi-e2e) 렌더", (await page.evaluate(() => document.body.innerText)).includes(SEEDED_WORKITEM_REF));
 
-    // 3) 런타임 에러 없음(번들 무결성)
+    // 3) T1 상단바 회귀 가드 — 지원 폭(1280·1440)에서 topbar-actions가 한 줄(랩 없음)이고 버튼이 세로로 꺾이지 않는다.
+    //    (감사 P0-1: 1440×900에서 검색 "검/색" 세로 랩·로그아웃 잘림 — DOM 치수 기반으로 고정)
+    for (const width of [1280, 1440]) {
+      await page.setViewport({ width, height: 900 });
+      await page.goto(`${base}/#dashboard`, { waitUntil: "networkidle0", timeout: 30_000 });
+      await page.waitForSelector(".topbar-actions", { timeout: 15_000 });
+      const bar = await page.evaluate(() => {
+        const actions = document.querySelector(".topbar-actions");
+        if (actions === null) return null;
+        const rect = actions.getBoundingClientRect();
+        const buttons = Array.from(actions.querySelectorAll("button"));
+        const maxButtonHeight = Math.max(...buttons.map((b) => b.getBoundingClientRect().height), 0);
+        return { rowHeight: rect.height, maxButtonHeight, overflowX: actions.scrollWidth > actions.clientWidth + 1 };
+      });
+      check(
+        `topbar 한 줄 유지 @${width}px`,
+        bar !== null && bar.rowHeight <= 48 && bar.maxButtonHeight <= 44 && !bar.overflowX,
+        JSON.stringify(bar),
+      );
+    }
+
+    // 4) 런타임 에러 없음(번들 무결성)
     check("브라우저 페이지 에러 없음", pageErrors.length === 0 && consoleErrors.length === 0, [...pageErrors, ...consoleErrors].join("; "));
   } finally {
     await browser.close();

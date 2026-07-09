@@ -53,7 +53,9 @@ body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
 .help-button:hover, .help-button[aria-expanded="true"] { color: var(--blue); }
 .help-text { margin-top: 6px; max-width: 640px; padding: 8px 10px; border: 1px solid var(--blue-soft); border-radius: var(--radius); background: var(--blue-soft); color: var(--text); font-size: 12px; line-height: 1.5; }
 .topbar .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
-.topbar-actions { display: inline-flex; gap: 12px; align-items: center; min-width: 0; }
+/* T1: 상단바는 어떤 지원 폭(≥1280px)에서도 줄바꿈 없이 한 줄 — 버튼 텍스트 세로 랩 금지. */
+.topbar-actions { display: inline-flex; gap: 12px; align-items: center; min-width: 0; flex-wrap: nowrap; }
+.topbar-actions .btn { white-space: nowrap; flex: 0 0 auto; }
 .topbar-context-badge {
   min-width: 0;
   max-width: min(360px, 34vw);
@@ -70,7 +72,6 @@ body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
   text-align: left;
 }
 .topbar-context-badge:hover { background: var(--soft); }
-.topbar-context-badge.green { border-color: rgba(15, 159, 110, .4); }
 .topbar-context-badge.amber { border-color: rgba(183, 121, 31, .45); }
 .topbar-context-badge.red { border-color: rgba(194, 65, 65, .45); }
 .topbar-context-badge > svg { flex: 0 0 auto; color: var(--muted); }
@@ -119,6 +120,25 @@ body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* T1: 알림 벨 — 운영 알림·준비 차단을 모으는 단일 진입점. 배지 색이 곧 최고 심각도. */
+.topbar-alert-bell { position: relative; }
+.alert-bell-count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  background: var(--muted);
+  color: #fff;
+}
+.alert-bell-count.red { background: var(--red); }
+.alert-bell-count.amber { background: var(--amber); }
 .account-menu { position: relative; display: inline-flex; flex: 0 0 auto; }
 .account-menu-popover {
   position: absolute;

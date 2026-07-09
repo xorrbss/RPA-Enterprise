@@ -267,8 +267,9 @@ async function main(): Promise<void> {
     const opts = ["all", "viewer", "operator", "reviewer", "approver", "admin"]
       .map((r) => `<option value="${r}"${r === roleName ? " selected" : ""}>${r}</option>`)
       .join("");
+    // 우하단 고정 — 상단바(계정 메뉴·로그아웃)와 겹치지 않게 한다(dev 전용 위젯).
     const widget =
-      `<div style="position:fixed;top:8px;right:8px;z-index:99999;background:#fff;border:1px solid #ccc;border-radius:6px;padding:4px 8px;font:12px sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.15)">` +
+      `<div style="position:fixed;bottom:16px;right:16px;z-index:99999;background:#fff;border:1px solid #ccc;border-radius:6px;padding:4px 8px;font:12px sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.15)">` +
       `dev 역할 <select onchange="location.href='/?role='+this.value" style="font:12px sans-serif">${opts}</select></div>`;
     let html = indexRaw.includes("</head>") ? indexRaw.replace("</head>", `${bootstrap}</head>`) : bootstrap + indexRaw;
     html = html.includes("</body>") ? html.replace("</body>", `${widget}</body>`) : html + widget;
