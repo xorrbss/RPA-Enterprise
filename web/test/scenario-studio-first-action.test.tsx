@@ -55,13 +55,23 @@ describe("scenario-studio-first-action", () => {
     expect(request).toHaveFocus();
   });
 
-  test("routes reusable-template starts to the connector catalog", async () => {
-    renderApp();
+  test("템플릿 시작은 홈 갤러리에서 프리필 딥링크로 이어진다 (E6)", async () => {
+    renderApp(
+      fakeClient({
+        listTemplates: async () => ({
+          items: [
+            { catalog_id: "cat-1", template_id: "tpl-1", connector_id: "con-1", name: "결재 알림", summary: "새 결재를 확인해 알립니다", kind: "notification_workflow" as const, status: "candidate" as const, priority: "P2" as const, best_for: [], required_params: [], required_secret_refs: [], produced_ir_pattern: "", success_criteria: "", created_at: "2026-07-01T00:00:00.000Z", updated_at: "2026-07-01T00:00:00.000Z" },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
 
-    const chooser = await screen.findByRole("region", { name: "자동화 시작 방식" });
-    fireEvent.click(within(chooser).getByRole("button", { name: "템플릿에서 시작" }));
+    const gallery = await screen.findByRole("region", { name: "템플릿에서 시작" });
+    fireEvent.click(within(gallery).getByRole("button", { name: "이대로 만들기" }));
 
-    await waitFor(() => expect(location.hash).toBe("#connectorCatalog?focus=templates"));
+    await waitFor(() => expect(location.hash).toContain("template_id=tpl-1"));
+    expect(location.hash).toContain("#create");
   });
 
   test("creator ai deep link focuses the natural-language request", async () => {
