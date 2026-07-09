@@ -30,8 +30,8 @@ PR → CI green → 머지 → main green 확인 후 다음. 문서 file:line은
 |---|---|---|---|---|
 | T1 상단바 재설계 | ✅머지 | #422 | web 988·e2e 10/10·CI 11/11 | 계정 팝오버 통합·컨텍스트 배지 중립화·알림 벨 신설·create 메뉴 생성 전용·e2e 1280/1440 가드 |
 | T2 알림 그룹핑 일원화 | ✅머지 | #423 | web 990·CI 11/11 | OpsSignalPanel groupOpsAlerts 소비(limit 50)·모두 보기 링크·값-상태 분리(대시보드+automationOps 스케줄러) |
-| T3 표기 규칙 | 진행 | — | — | Workitems raw ISO→formatDateTime·N건 통일·Gateway 폼 단위(토큰·USD/실행)·저장/편집 구분 캡션. PolicyReadout 단위는 기구현 확인 |
-| T4 용어 교정+copy-gate | 대기 | — | — | DEAD_LETTER=소문자 정규화 |
+| T3 표기 규칙 | ✅머지 | #424 | web 990·CI 11/11 | Workitems raw ISO→formatDateTime·N건 통일·Gateway 폼 단위(토큰·USD/실행)·저장/편집 구분 캡션. PolicyReadout 단위는 기구현 확인 |
+| T4 용어 교정+copy-gate | 진행 | — | — | statusLabel 소문자 정규화·문구 교정 12곳(redacted/metadata-only/handoff/fallback/S11)·tools/copy-gate.mjs+allowlist(OpenGate·ENV키 2종)+CI 스텝 |
 | T5 사람 확인 결정 우선 | 대기 | — | — | — |
 | T6 실행 기록 식별성 | 대기 | — | — | 소요 열 보류(§8-②), 실행 번호+updated_at 상대 표기 |
 | T8 표면 하드닝 | 대기 | — | — | SectionTabs는 R6 후 |

@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "test": "vitest run",
+    "lint:copy": "node tools/copy-gate.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

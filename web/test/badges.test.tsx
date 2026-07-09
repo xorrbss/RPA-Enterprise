@@ -89,6 +89,13 @@ describe("statusLabel / kindLabel — 필터 드롭다운 한국어 라벨", () 
     expect(statusLabel("totally_unknown")).toBe("totally_unknown");
   });
 
+  // T4(감사 P2): DLQ가 대문자 "DEAD_LETTER"를 반환해 라벨 지도(소문자 키)를 비껴가 raw가 화면에 노출됐다 —
+  // 소문자 정규화 폴백으로 한국어 라벨을 찾는다. tone은 기존에도 양쪽 케이스를 알았다(red 유지).
+  test("statusLabel 대문자 변형은 소문자 정규화로 라벨을 찾는다(DEAD_LETTER)", () => {
+    expect(statusLabel("DEAD_LETTER")).toBe("실패 보관");
+    expect(statusLabel("dead_letter")).toBe("실패 보관");
+  });
+
   test.each([
     ["approval", "승인 요청"],
     ["validation", "문서 검증"],

@@ -62,7 +62,7 @@ describe("adoption evidence route", () => {
     expect(within(readiness).getByText("SSO")).toBeInTheDocument();
     expect(within(readiness).queryByRole("button", { name: "접속 설정 확인" })).toBeNull();
     expect(within(readiness).getAllByText("권한 있는 담당자에게 요청").length).toBeGreaterThanOrEqual(2);
-    expect(within(packet).getByText(/metadata-only 증빙/)).toBeInTheDocument();
+    expect(within(packet).getByText(/메타데이터 전용 증빙/)).toBeInTheDocument();
     expect(within(packet).getByText(/Negative proof/)).toBeInTheDocument();
     expect(document.body.textContent ?? "").not.toContain("must-not-leak");
     expect(document.body.textContent ?? "").not.toContain("raw_prompt");

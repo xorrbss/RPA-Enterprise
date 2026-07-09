@@ -215,7 +215,7 @@ function runStatusSummary(
       tone: "green",
       kicker: `${testLabel} 완료`,
       title: runMode === "test" ? "테스트 성공" : "실행 성공",
-      detail: `실행이 종료되었습니다${terminalAttemptText(attempts)}. 산출물과 metadata-only 증빙을 먼저 확인하세요.`,
+      detail: `실행이 종료되었습니다${terminalAttemptText(attempts)}. 산출물과 메타데이터 전용 증빙을 먼저 확인하세요.`,
       actionTitle: "증빙 확인",
       actionDetail: "검증된 실행 결과를 확인한 뒤 운영 예약이나 봇 승격으로 이어갈 수 있습니다.",
     };

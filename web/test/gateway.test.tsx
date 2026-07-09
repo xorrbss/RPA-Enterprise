@@ -159,7 +159,7 @@ describe("LLM 게이트웨이 정책 — 목록·기본·CRUD", () => {
     expect(span("출력 400 토큰")).toBeInTheDocument();
     expect(screen.getByText("데이터 반출 경계")).toBeInTheDocument();
     expect(screen.getByText(/Gateway 전송 전 마스킹 경계/)).toBeInTheDocument();
-    expect(screen.getByText(/실행별 redaction proof는 S11/)).toBeInTheDocument();
+    expect(screen.getByText(/실행별 마스킹 증빙은 실행 기록의 증빙 목록에서 확인합니다/)).toBeInTheDocument(); // T4: 내부 스트림 참조(S11) 제거
   });
 
   test("정책 요약: 미설정 한도엔 단위를 붙이지 않는다(조용한 false 금지)", async () => {

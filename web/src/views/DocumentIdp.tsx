@@ -170,7 +170,7 @@ export function DocumentIdpView(): JSX.Element {
       : sourceArtifactId.trim().length > 0
         ? "선택한 실행 산출물과 현재 필드 요약으로 작업을 만들 수 있습니다."
         : sourceRunId.trim().length > 0
-          ? "redacted 처리된 JSON, CSV, 텍스트 산출물을 선택하세요."
+          ? "마스킹 처리된 JSON, CSV, 텍스트 산출물을 선택하세요."
           : "문서가 내려받힌 실행 기록을 먼저 선택하세요.";
 
   const extractJob = useMutation({
@@ -195,7 +195,7 @@ export function DocumentIdpView(): JSX.Element {
     mutationFn: (request: { readonly jobId: string; readonly body: ExternalDocumentExtractionBody }) =>
       api.recordExternalDocumentExtraction(request.jobId, request.body, crypto.randomUUID()),
     onSuccess: (result) => {
-      setMessage("외부 IDP normalized 결과를 metadata-only로 등록했습니다.");
+      setMessage("외부 IDP 정규화 결과를 메타데이터 전용으로 등록했습니다.");
       mergeParams({ doc: result.document_job_id });
       queryClient.setQueryData(["document-extraction", result.document_job_id], result);
       void queryClient.invalidateQueries({ queryKey: ["document-jobs"] });

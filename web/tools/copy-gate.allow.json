@@ -1,0 +1,12 @@
+{
+  "_comment": "copy-gate 정당 예외. files=파일 전체 허용(src 기준 상대경로), terms=용어 허용(단어 경계 매칭). 항목 추가 시 근거를 함께 남긴다.",
+  "files": [
+    "views/OpenGate.tsx"
+  ],
+  "_files_rationale": "OpenGate는 계약 기준 출시 점검 문서 화면(internal 플래그, 고객 비노출) — 에러 코드 원문 인용이 화면의 목적.",
+  "terms": [
+    "RPA_OPERATOR_TOKEN",
+    "MAINTENANCE_TENANT_IDS"
+  ],
+  "_terms_rationale": "운영자·관리자 안내의 환경변수/배포 설정 키(세션 캡처·오프보딩 CLI, 스케줄러 배포 연결) — 복사·설정하는 값이라 원문이 정확해야 한다."
+}

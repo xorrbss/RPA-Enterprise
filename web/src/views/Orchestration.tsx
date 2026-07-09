@@ -42,7 +42,7 @@ const OPS_SECTIONS: readonly { readonly key: OpsSectionKey; readonly label: stri
   { key: "queue", label: "큐", purpose: "대기, 사람 개입, 브라우저 실행" },
   { key: "alerts", label: "알림", purpose: "라우팅, 발송, 확인" },
   { key: "readiness", label: "운영 전환 증빙", purpose: "전환 증빙·리허설" },
-  { key: "external", label: "외부 전달", purpose: "외부 RPA/IDP handoff" },
+  { key: "external", label: "외부 전달", purpose: "외부 시스템 이관(RPA/IDP)" },
 ];
 
 function isOpsSection(value: string | null): value is OpsSectionKey {

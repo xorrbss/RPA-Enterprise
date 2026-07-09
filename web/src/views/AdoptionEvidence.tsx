@@ -71,7 +71,7 @@ export function AdoptionEvidenceView(): JSX.Element {
             <h2>도입 증빙 작업대</h2>
             <p className="subtle">준비도, 운영 전환 증빙, 감사·보안 metadata를 한 화면에서 확인합니다.</p>
           </div>
-          <span className="badge blue">metadata-only</span>
+          <span className="badge blue">메타데이터 전용</span>
         </div>
         <div className="adoption-evidence-actions">
           <button className="btn primary" type="button" onClick={() => navigate("automationOps", { section: "readiness" })}>
