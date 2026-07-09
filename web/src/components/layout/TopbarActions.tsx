@@ -1,8 +1,24 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { CalendarClock, ChevronDown, ClipboardCheck, LayoutTemplate, LogOut, PlaySquare, Plus, Search, ShieldCheck, Video, type LucideIcon } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import {
+  Building2,
+  CalendarClock,
+  ChevronDown,
+  ClipboardCheck,
+  LayoutTemplate,
+  LogOut,
+  PlaySquare,
+  Plus,
+  Search,
+  ShieldCheck,
+  Video,
+  type LucideIcon,
+} from "lucide-react";
 
 import { navigate, type ViewKey } from "../../router";
+import { useApiClient } from "../../api/context";
 import { decodeSubject, ROLE_LABELS, rolesCan } from "../../api/permissions";
+import type { ProductionReadiness } from "../../api/types";
 import { clearToken } from "../TokenGate";
 
 export function RolesChip({ roles }: { roles: readonly string[] }): JSX.Element {
@@ -48,6 +64,104 @@ export function SubjectChip(): JSX.Element {
       <code>{displaySubject}</code>
     </span>
   );
+}
+
+type ContextTone = "green" | "amber" | "red";
+
+interface TopbarContextState {
+  readonly tone: ContextTone;
+  readonly tenantLabel: string;
+  readonly environmentLabel: string;
+  readonly statusLabel: string;
+  readonly title: string;
+  readonly ariaLabel: string;
+}
+
+export function TopbarContextBadge(): JSX.Element {
+  const api = useApiClient();
+  const query = useQuery({
+    queryKey: ["production-readiness"],
+    queryFn: () => api.getProductionReadiness(),
+    refetchInterval: 15_000,
+  });
+  const context = topbarContextState(query.data, query.data === undefined && query.isFetching, query.isError);
+  return (
+    <button
+      type="button"
+      className={`topbar-context-badge ${context.tone}`}
+      aria-label={context.ariaLabel}
+      title={context.title}
+      onClick={() => navigate("automationOps", { section: "readiness" })}
+    >
+      <Building2 size={14} aria-hidden="true" />
+      <span className="topbar-context-copy">
+        <span className="topbar-context-part">
+          <span className="subtle">tenant</span>
+          <strong>{context.tenantLabel}</strong>
+        </span>
+        <span className="topbar-context-separator" aria-hidden="true">/</span>
+        <span className="topbar-context-part">
+          <span className="subtle">env</span>
+          <strong>{context.environmentLabel}</strong>
+        </span>
+      </span>
+      <span className={`badge ${context.tone}`}>{context.statusLabel}</span>
+    </button>
+  );
+}
+
+function topbarContextState(readiness: ProductionReadiness | undefined, isLoading: boolean, isError: boolean): TopbarContextState {
+  if (isError) {
+    return unknownTopbarContext("컨텍스트 미확인", "red");
+  }
+  if (readiness === undefined) {
+    return unknownTopbarContext(isLoading ? "확인 중" : "컨텍스트 미확인", isLoading ? "amber" : "red");
+  }
+  const tenant = readiness.environment.tenant_id.trim();
+  const environment = readiness.environment.target.trim();
+  if (tenant.length === 0 || environment.length === 0) {
+    return unknownTopbarContext("컨텍스트 불완전", "red");
+  }
+  const tone = productionContextTone(readiness);
+  const status = productionContextStatusLabel(readiness, tone);
+  const environmentLabel = environmentDisplayLabel(environment);
+  return {
+    tone,
+    tenantLabel: tenant,
+    environmentLabel,
+    statusLabel: status,
+    title: `tenant=${tenant}, environment=${environment}. 운영 전환 readiness에서 확인한 metadata입니다.`,
+    ariaLabel: `tenant/environment 컨텍스트: tenant ${tenant}, environment ${environmentLabel}, readiness ${status}. 운영 전환 준비 상태 열기`,
+  };
+}
+
+function unknownTopbarContext(statusLabel: string, tone: ContextTone): TopbarContextState {
+  return {
+    tone,
+    tenantLabel: "미확인",
+    environmentLabel: "미확인",
+    statusLabel,
+    title: "tenant/environment 컨텍스트를 확인할 수 없습니다. 준비 완료로 표시하지 않습니다.",
+    ariaLabel: `tenant/environment 컨텍스트 ${statusLabel}. 운영 전환 준비 상태 열기`,
+  };
+}
+
+function productionContextTone(readiness: ProductionReadiness): ContextTone {
+  if (readiness.status === "ready" && readiness.summary.controlled_prod_ready === true) return "green";
+  if (readiness.status === "blocked" || readiness.summary.blocker_count > 0) return "red";
+  return "amber";
+}
+
+function productionContextStatusLabel(readiness: ProductionReadiness, tone: ContextTone): string {
+  if (tone === "green") return "준비 완료";
+  if (tone === "red") return "차단";
+  if (readiness.summary.deferred_count > 0) return "증빙 필요";
+  return "확인 필요";
+}
+
+function environmentDisplayLabel(environment: string): string {
+  if (environment === "controlled_prod") return "통제 운영";
+  return environment;
 }
 
 export function SearchButton({ onClick }: { onClick: () => void }): JSX.Element {

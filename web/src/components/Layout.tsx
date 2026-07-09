@@ -23,7 +23,7 @@ import { VIEW_META } from "../views/meta";
 import { CommandPalette } from "./CommandPalette";
 import { Freshness } from "./Freshness";
 import { OffboardingBanner } from "./OffboardingBanner";
-import { GlobalCreateMenu, LogoutButton, RolesChip, SearchButton, SubjectChip } from "./layout/TopbarActions";
+import { GlobalCreateMenu, LogoutButton, RolesChip, SearchButton, SubjectChip, TopbarContextBadge } from "./layout/TopbarActions";
 
 const ICONS: Record<string, LucideIcon> = {
   Video, PlaySquare, LayoutDashboard, ClipboardCheck, ListChecks,
@@ -285,6 +285,7 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
           <span className="topbar-actions">
             {isMobileNav ? (
               <>
+                <TopbarContextBadge />
                 <Freshness />
                 <GlobalCreateMenu roles={roles} />
                 <SearchButton onClick={() => setPaletteOpen(true)} />
@@ -310,6 +311,7 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
               </>
             ) : (
               <>
+                <TopbarContextBadge />
                 <SubjectChip />
                 <RolesChip roles={roles} />
                 <Freshness />
