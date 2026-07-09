@@ -36,9 +36,9 @@ PR → CI green → 머지 → main green 확인 후 다음. 문서 file:line은
 | T6 실행 기록 식별성 | ✅머지 | #427 | web 997·CI 12/12 | 실행 번호 #8자 병기(미노출 정책 감사 근거로 개정, 전체 번호는 툴팁 유지)·updated_at 툴팁·우선순위 셀 고정폭. 소요 열 보류(§8-②) |
 | T8 표면 하드닝 | 대기 | — | — | SectionTabs는 R6 후 |
 | R2 irValidation 은퇴 | ✅머지 | #428 | web 995·CI 12/12 | 뷰 삭제·5곳 등록 해제·#irValidation→#scenarioStudio·ReadinessCard 검사 화면 링크 제거·은퇴 테스트 3건 삭제 |
-| R3 idempotency 은퇴 | 진행 | — | — | 뷰 삭제·5곳 등록 해제(리다이렉트 불요=기본 뷰 폴백)·hidden-view 테스트 표본을 coePipeline로 교체 |
-| R5 Dashboard adoption 탭 | 대기 | — | — | — |
-| R6 automationOps today 삭제 | 대기 | — | — | — |
+| R3 idempotency 은퇴 | ✅머지 | #429 | web 994·CI 12/12 | 뷰 삭제·5곳 등록 해제(리다이렉트 불요=기본 뷰 폴백)·hidden-view 테스트 표본을 coePipeline로 교체 |
+| R5 Dashboard adoption 탭 | ✅STALE(선반영) | — | 실측 확인 | 도입 패널 3종은 이미 별도 뷰(adoptionEvidence)로 분리·Dashboard 미렌더(Phase 7에서 이동됨). 목표 동등 달성 — 작업 불요 |
+| R6 automationOps today 삭제 | 진행 | — | — | today 탭·렌더 삭제, 기본=schedule, 정적 저장가능/준비중 컬럼 삭제, 운영 헬스 상세는 큐 섹션으로 이동 |
 | E0 siteReadiness 추출 | 대기 | — | — | — |
 | E1 create 홈+라우트 | 대기 | — | — | — |
 | R4 myWork 은퇴 | 대기 | — | — | E1 후 |

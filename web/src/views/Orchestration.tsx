@@ -13,7 +13,6 @@ import type {
 } from "../api/types";
 import { OpsHealthSummary } from "./orchestration/OpsHealthSummary";
 import { TriggerScheduler } from "./orchestration/TriggerScheduler";
-import { StatusColumn } from "./orchestration/StatusColumn";
 import { NotificationRoutingReadiness } from "./orchestration/NotificationRoutingReadiness";
 import { BotPoolCapacityPanel } from "./orchestration/BotPoolCapacityPanel";
 import {
@@ -34,10 +33,10 @@ import {
   webAttendedRequestBody,
 } from "./orchestration/ops-request-helpers";
 
-type OpsSectionKey = "today" | "schedule" | "queue" | "alerts" | "readiness" | "external";
+// R6: today 섹션 은퇴 — Dashboard(OpsSignalPanel·ActionQueue)와 동일 신호 재노출이었다. 기본 탭=schedule.
+type OpsSectionKey = "schedule" | "queue" | "alerts" | "readiness" | "external";
 
 const OPS_SECTIONS: readonly { readonly key: OpsSectionKey; readonly label: string; readonly purpose: string }[] = [
-  { key: "today", label: "오늘 필요한 조치", purpose: "헬스, 대기열, 긴급 알림" },
   { key: "schedule", label: "예약", purpose: "시간·이벤트 트리거" },
   { key: "queue", label: "큐", purpose: "대기, 사람 개입, 브라우저 실행" },
   { key: "alerts", label: "알림", purpose: "라우팅, 발송, 확인" },
@@ -46,13 +45,13 @@ const OPS_SECTIONS: readonly { readonly key: OpsSectionKey; readonly label: stri
 ];
 
 function isOpsSection(value: string | null): value is OpsSectionKey {
-  return value === "today" || value === "schedule" || value === "queue" || value === "alerts" || value === "readiness" || value === "external";
+  return value === "schedule" || value === "queue" || value === "alerts" || value === "readiness" || value === "external";
 }
 
-function resolveOpsSection(section: string | null, scenario: string | null, trigger: string | null): OpsSectionKey {
+function resolveOpsSection(section: string | null): OpsSectionKey {
   if (isOpsSection(section)) return section;
-  if (scenario !== null || trigger !== null) return "schedule";
-  return "today";
+  // 레거시 딥링크(#automationOps?section=today)는 기본 탭으로 폴백(조용한 빈화면 금지).
+  return "schedule";
 }
 
 type QueryValueState<T> = {
@@ -94,9 +93,7 @@ export function OrchestrationView(): JSX.Element {
   const queryClient = useQueryClient();
   const can = useCan();
   const sectionParam = useHashParam("section");
-  const scenarioParam = useHashParam("scenario");
-  const triggerParam = useHashParam("trigger");
-  const activeSection = resolveOpsSection(sectionParam, scenarioParam, triggerParam);
+  const activeSection = resolveOpsSection(sectionParam);
   const summary = useQuery({ queryKey: ["runs", "summary"], queryFn: () => api.getRunSummary(), refetchInterval: 5_000 });
   const human = useQuery({ queryKey: ["human-tasks"], queryFn: () => api.listHumanTasks({ limit: 50 }), refetchInterval: 5_000 });
   const workDlq = useQuery({ queryKey: ["dlq", "workitem"], queryFn: () => api.listDlq("workitem", { limit: 50 }), refetchInterval: 10_000 });
@@ -217,7 +214,7 @@ export function OrchestrationView(): JSX.Element {
   ];
 
   const opsPageErrors: DashboardEnvironmentError[] = [];
-  if (activeSection === "today" || activeSection === "queue") {
+  if (activeSection === "queue") {
     if (summary.isError) opsPageErrors.push({ label: "실행 요약", error: summary.error, onRetry: () => void summary.refetch() });
     if (human.isError) opsPageErrors.push({ label: "사람 확인 대기", error: human.error, onRetry: () => void human.refetch() });
     if (workDlq.isError) opsPageErrors.push({ label: "작업 항목 재처리", error: workDlq.error, onRetry: () => void workDlq.refetch() });
@@ -348,14 +345,6 @@ export function OrchestrationView(): JSX.Element {
       <OpsSectionSelector active={activeSection} />
       <DashboardEnvironmentState errors={opsPageErrors} />
 
-      {activeSection === "today" && (
-        <>
-          {opsHealthSummary}
-          {queuePanel}
-          {opsAlertCenter}
-        </>
-      )}
-
       {activeSection === "schedule" && triggerScheduler}
 
       {activeSection === "queue" && (
@@ -363,6 +352,9 @@ export function OrchestrationView(): JSX.Element {
           <div className="panel-head">
             <h2>큐</h2>
           </div>
+          {/* R6: today 은퇴에 따라 운영 헬스 상세(다음 만료·스케줄러 타일)는 큐 섹션이 보유 —
+              Dashboard 요약(OpsSignalPanel)과 달리 automationOps 고유 상세라 유지한다. */}
+          {opsHealthSummary}
           <div className="orchestration-grid">
             {queuePanel}
             {webAttendedPanel}
@@ -376,17 +368,8 @@ export function OrchestrationView(): JSX.Element {
           <div className="panel-head">
             <h2>알림</h2>
           </div>
+          {/* R6: 정적 '저장 가능/준비 중' 안내 컬럼 삭제 — 실시간 상태가 아닌 조용한 안내 위장 제거. */}
           <div className="orchestration-grid">
-            <StatusColumn
-              title="트리거"
-              caption="현재 지원 범위 안내 — 실시간 상태가 아닙니다."
-              rows={[
-                { name: "시간 예약", status: "저장 가능", tone: "green", action: "cron 기반" },
-                { name: "외부 이벤트", status: "저장 가능", tone: "green", action: "서명 검증 + 이벤트 중복 방지" },
-                { name: "파일 도착", status: "준비 중", tone: "amber", action: "후속 설계" },
-                { name: "큐 적재", status: "준비 중", tone: "amber", action: "후속 설계" },
-              ]}
-            />
             {notificationRouting}
             {opsAlertRoutePanel}
             {opsAlertCenter}
