@@ -6,10 +6,9 @@ import { useCan } from "../api/permissions";
 import { useListView } from "../api/useListView";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { RunScenarioButton } from "../components/RunScenarioButton";
-import { actionLabel, terminalLabel } from "../components/badges";
 import { mergeParams, navigate, useHashIdParam } from "../router";
 import type { ScenarioItem } from "../api/types";
-import { urlRefLabel } from "../api/scenario-params";
+import { StepCards } from "../components/easy-create/StepCards";
 
 // 테스트 실행(playground) — 저장된 자동화의 실행 계획(IR → 단계·흐름)을 정적으로 미리본 뒤, 그대로 실제 실행을
 // 시작할 수 있다(RunScenarioButton = createRun, run.create 게이팅). 실제 브라우저 작업은 worker/Chrome가
@@ -19,80 +18,8 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-// IR action verb 라벨은 badges.actionLabel(계약 IRActionType 미러) 단일 출처를 쓴다 — '테스트 실행'(Plan)과
-// '실행 기록'(StepTrace)에서 같은 단계가 다른 이름으로 보이던 어휘 드리프트 제거(미매핑은 raw 폴백 동일).
-// terminal 라벨도 동일하게 badges.terminalLabel(계약 terminal.enum 미러) 단일 출처를 쓴다(지역 맵 드리프트 제거).
-
-function actionText(a: unknown): string {
-  if (!isRecord(a)) return "?";
-  const name = typeof a.action === "string" ? a.action : "?";
-  const label = actionLabel(name);
-  if (typeof a.url_ref === "string") return `${label} · ${urlRefLabel(a.url_ref)}`;
-  if (typeof a.schema_ref === "string") return `${label} · 출력 형식 ${a.schema_ref}`;
-  if (typeof a.cmd_ref === "string") return `${label} · 관리 명령 ${a.cmd_ref}`;
-  return label;
-}
-
-function flowText(node: Record<string, unknown>): string {
-  if (typeof node.terminal === "string") return `종료: ${terminalLabel(node.terminal)}`;
-  if (typeof node.next === "string") return `다음 → ${node.next}`;
-  if (Array.isArray(node.on)) {
-    const rules = node.on.map((r) => (isRecord(r) ? `${String(r.when)} → ${String(r.target)}` : "?")).join(" · ");
-    return `조건 분기: ${rules}`;
-  }
-  if (isRecord(node.loop)) return `반복: 본문 ${String(node.loop.body_target)} · 탈출 ${String(node.loop.exit_target)}`;
-  if (node.fallback_chain !== undefined) return "폴백 체인";
-  return "—";
-}
-
-// start부터 도달 순서로, 미도달 노드는 뒤에 붙인다.
-function orderedNodeIds(start: string, nodes: Record<string, unknown>): string[] {
-  const order: string[] = [];
-  const seen = new Set<string>();
-  const visit = (id: string): void => {
-    if (seen.has(id) || !isRecord(nodes[id])) return;
-    seen.add(id);
-    order.push(id);
-    const n = nodes[id] as Record<string, unknown>;
-    if (typeof n.next === "string") visit(n.next);
-    if (Array.isArray(n.on)) for (const r of n.on) if (isRecord(r) && typeof r.target === "string") visit(r.target);
-    if (isRecord(n.loop)) {
-      if (typeof n.loop.body_target === "string") visit(n.loop.body_target);
-      if (typeof n.loop.exit_target === "string") visit(n.loop.exit_target);
-    }
-  };
-  visit(start);
-  for (const id of Object.keys(nodes)) if (!seen.has(id)) order.push(id);
-  return order;
-}
-
-function Plan({ ir }: { ir: unknown }): JSX.Element {
-  if (!isRecord(ir) || !isRecord(ir.nodes) || typeof ir.start !== "string") {
-    return <EmptyState message="실행 계획을 표시할 자동화 정의가 없습니다." />;
-  }
-  const nodes = ir.nodes;
-  const order = orderedNodeIds(ir.start, nodes);
-  return (
-    <ol style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-      {order.map((id, i) => {
-        const node = isRecord(nodes[id]) ? (nodes[id] as Record<string, unknown>) : {};
-        const what = Array.isArray(node.what) ? node.what : [];
-        return (
-          <li key={id} className="panel" style={{ padding: 10, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-            <strong style={{ minWidth: 64 }}>
-              {i + 1}. {id === ir.start ? `${id}★` : id}
-            </strong>
-            <span>{what.length > 0 ? what.map(actionText).join(", ") : <span className="subtle">동작 없음(흐름만)</span>}</span>
-            <span className="badge" style={{ marginLeft: "auto" }}>
-              {flowText(node)}
-            </span>
-          </li>
-        );
-      })}
-    </ol>
-  );
-}
-
+// E2: 계획 미리보기는 공용 번역기(step-sentences→StepCards)를 소비 — 만들기 초안 확인과 동일 문장
+// (원시 노드 id·IREL 원문 기본 노출 제거, 감사 P1-7 관리 콘솔 잔존 표면 해소).
 function hasRunnablePlan(ir: unknown): boolean {
   return isRecord(ir) && isRecord(ir.nodes) && typeof ir.start === "string";
 }
@@ -309,7 +236,7 @@ export function ScenarioTestWorkbench({
               ) : detail.isError ? (
                 <ErrorState message="선택한 자동화 정보를 불러오지 못했습니다. 목록을 새로고침하거나 다른 자동화를 선택하세요." onRetry={() => void detail.refetch()} />
               ) : (
-                <Plan ir={detail.data?.ir} />
+                <StepCards ir={detail.data?.ir} emptyMessage="실행 계획을 표시할 자동화 정의가 없습니다." />
               )}
             </>
           )}
