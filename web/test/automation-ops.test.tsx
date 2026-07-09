@@ -439,17 +439,16 @@ describe("automation ops view", () => {
       if (!(button instanceof HTMLButtonElement)) throw new Error(`section tab not found: ${label}`);
       return button;
     };
-    expect(sectionTab("오늘 필요한 조치")).toHaveAttribute("aria-pressed", "true");
-    expect(await screen.findByRole("heading", { name: "운영 헬스" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "실행 예약" })).toBeNull();
-
-    fireEvent.click(sectionTab("예약"));
-    await waitFor(() => expect(location.hash).toBe("#automationOps?section=schedule"));
+    // R6: today 섹션 은퇴 — 기본 탭은 예약(schedule), today 탭은 존재하지 않는다.
+    expect(within(sections).queryByText("오늘 필요한 조치")).toBeNull();
+    expect(sectionTab("예약")).toHaveAttribute("aria-pressed", "true");
     expect(await screen.findByRole("heading", { name: "실행 예약" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "운영 헬스" })).toBeNull();
 
     fireEvent.click(sectionTab("큐"));
     expect(await screen.findByRole("heading", { name: "용량" })).toBeInTheDocument();
+    // 운영 헬스 상세(다음 만료·스케줄러 타일)는 R6 이후 큐 섹션 소유.
+    expect(await screen.findByRole("heading", { name: "운영 헬스" })).toBeInTheDocument();
 
     fireEvent.click(sectionTab("알림"));
     expect(await screen.findByRole("heading", { name: "알림 라우팅" })).toBeInTheDocument();
@@ -478,6 +477,7 @@ describe("automation ops view", () => {
   });
 
   test("오늘 운영 화면은 데이터 확인 실패를 0건이나 미확인 값처럼 숨기지 않는다", async () => {
+    location.hash = "#automationOps?section=queue"; // R6: today 은퇴 — 해당 섹션 직행
     renderApp(clientWithOpsData({
       listHumanTasks: async () => {
         throw new ApiError(503, "CONTROL_PLANE_INTERNAL_ERROR", { code: "CONTROL_PLANE_INTERNAL_ERROR", message: "human tasks unavailable" });
@@ -508,6 +508,7 @@ describe("automation ops view", () => {
   });
 
   test("알림 센터는 열린 알림 2건과 권장 조치를 표시한다", async () => {
+    location.hash = "#automationOps?section=alerts"; // R6: today 은퇴 — 해당 섹션 직행
     renderApp(clientWithOpsData());
 
     expect(await screen.findByRole("heading", { name: "알림 센터" })).toBeInTheDocument();
@@ -735,6 +736,7 @@ describe("automation ops view", () => {
   });
 
   test("세션 만료 알림은 알림 센터에서 한국어 라벨과 세션 등록 이동 버튼으로 노출된다", async () => {
+    location.hash = "#automationOps?section=alerts"; // R6: today 은퇴 — 해당 섹션 직행
     renderApp(clientWithOpsData({
       listOpsAlerts: async () => ({
         items: [{
@@ -767,6 +769,7 @@ describe("automation ops view", () => {
   });
 
   test("알림 route 버튼은 백엔드 hash route로 이동한다", async () => {
+    location.hash = "#automationOps?section=alerts"; // R6: today 은퇴 — 해당 섹션 직행
     renderApp(clientWithOpsData());
 
     const alertRow = (await screen.findByText("월말 정산 실행 SLA 초과")).closest("li") as HTMLLIElement;
@@ -1092,6 +1095,7 @@ describe("automation ops view", () => {
   });
 
   test("console alert ack button calls the ack API and marks the alert acknowledged", async () => {
+    location.hash = "#automationOps?section=alerts"; // R6: today 은퇴 — 해당 섹션 직행
     const ackOpsAlert = vi.fn(async (alertId: string) => ({
       alert_id: alertId,
       severity: "critical" as const,
@@ -1118,6 +1122,7 @@ describe("automation ops view", () => {
   });
 
   test("admin queues a SecretRef-backed webhook delivery attempt from the alert center", async () => {
+    location.hash = "#automationOps?section=alerts"; // R6: today 은퇴 — 해당 섹션 직행
     localStorage.setItem("rpa.token", jwt(["admin"]));
     const sendOpsAlertWebhookDelivery = vi.fn(async (
       alertId: string,
@@ -1193,6 +1198,7 @@ describe("automation ops view", () => {
   });
 
   test("알림 필터는 심각도와 유형을 API query로 반영한다", async () => {
+    location.hash = "#automationOps?section=alerts"; // R6: today 은퇴 — 해당 섹션 직행
     const listOpsAlerts = vi.fn(async () => ({ items: [], next_cursor: null }));
     renderApp(clientWithOpsData({ listOpsAlerts }));
 
@@ -1221,10 +1227,11 @@ describe("automation ops view", () => {
   });
 
   test("운영 헬스 요약은 큐/브라우저 세션/지연 실행과 딥링크를 보여준다", async () => {
+    location.hash = "#automationOps?section=queue"; // R6: today 은퇴 — 해당 섹션 직행
     renderApp(clientWithOpsData());
 
     expect(await screen.findByRole("heading", { name: "운영 헬스" })).toBeInTheDocument();
-    expect(await screen.findByText("위험")).toBeInTheDocument();
+    expect((await screen.findAllByText("위험")).length).toBeGreaterThan(0); // 큐 섹션엔 헬스 외 배지도 있어 다중 매치 허용
     // T2: 값 자리는 값만("—") — 미연결 상태는 detail 배지("작업 큐 미연결")가 전달한다.
     const queueTile = (await screen.findByText("큐 대기")).closest(".ops-health-tile") as HTMLElement;
     expect(queueTile).toHaveTextContent("—");
@@ -1244,6 +1251,7 @@ describe("automation ops view", () => {
   });
 
   test("운영 헬스: 만료 시각/지연 실행이 없으면 시각을 지어내지 않는다(조용한 false 금지)", async () => {
+    location.hash = "#automationOps?section=queue"; // R6: today 은퇴 — 해당 섹션 직행
     renderApp(
       clientWithOpsData({
         getOpsHealth: async () => ({
@@ -1746,6 +1754,7 @@ describe("automation ops view", () => {
   });
 
   test("알림 센터는 열린 알림이 없을 때 기업용 빈 상태를 표시한다", async () => {
+    location.hash = "#automationOps?section=alerts"; // R6: today 은퇴 — 해당 섹션 직행
     renderApp(clientWithOpsData({ listOpsAlerts: async () => ({ items: [], next_cursor: null }) }));
 
     expect(await screen.findByText("열린 운영 알림이 없습니다.")).toBeInTheDocument();
@@ -1753,6 +1762,7 @@ describe("automation ops view", () => {
   });
 
   test("알림 센터는 동일 subject type/source 알림을 대표 행으로 묶고 상태 enum을 운영자 라벨로 표시한다", async () => {
+    location.hash = "#automationOps?section=alerts"; // R6: today 은퇴 — 해당 섹션 직행
     const ackOpsAlert = vi.fn(async (alertId: string) => ({
       alert_id: alertId,
       severity: "critical" as const,
@@ -2396,6 +2406,7 @@ describe("automation ops view", () => {
   });
 
   test("ops alert center shows metadata-only provider delivery receipts", async () => {
+    location.hash = "#automationOps?section=alerts"; // R6: today 은퇴 — 해당 섹션 직행
     const listOpsAlertDeliveries = vi.fn(async () => ({
       items: [
         {
