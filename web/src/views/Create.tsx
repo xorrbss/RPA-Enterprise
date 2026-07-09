@@ -10,6 +10,7 @@ import { BrowserRecorderPanel } from "../components/BrowserRecorderPanel";
 import { PromptScenarioGenerator } from "../components/PromptScenarioGenerator";
 import { navigate, useHashParam } from "../router";
 import { ScenarioTestWorkbench } from "./Playground";
+import { ReviewStrip } from "./create/ReviewStrip";
 import { AutomationStartChooser } from "./scenarios/AutomationStartChooser";
 import { ScenarioSetupCorridor, queryState } from "./scenarios/ScenarioSetupCorridor";
 
@@ -93,6 +94,8 @@ export function CreateView(): JSX.Element {
 
   return (
     <div className="create-console">
+      {/* E1: 확인 필요 스트립 — 내게 확인할 일이 있을 때만 홈 최상단에(만들기 홈이 기본 랜딩이 되면서 myWork 진입점 흡수). */}
+      <ReviewStrip />
       <CreateJourneyHeader />
       {can("scenario.create") ? (
         <>

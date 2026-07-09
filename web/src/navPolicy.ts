@@ -32,21 +32,22 @@ const ALL_ROLES: readonly ConsoleRole[] = KNOWN_ROLES;
 const CREATOR_ROLES: readonly ConsoleRole[] = ["operator", "reviewer", "approver", "admin"];
 const ADVANCED_NON_VIEWER_ROLES: readonly ConsoleRole[] = ["operator", "reviewer", "approver", "admin"];
 
+// E1(§2.3 확정): 기본(standard) 모드 = 만들기 콘솔 — 전 역할 create/humanTasks/runTrace/dashboard,
+// operator+ workitems·automationOps·documentIdp. 나머지는 고급(advanced) = 관리 콘솔로 강등(차단 아님 — 모드 전환으로 접근).
 const VIEW_VISIBILITY: Record<ViewKey, ViewVisibilityPolicy> = {
-  myWork: { standardRoles: ALL_ROLES },
-  create: { standardRoles: CREATOR_ROLES },
+  myWork: { standardRoles: ALL_ROLES }, // R4 은퇴 예정(E1 머지 후)
+  create: { standardRoles: ALL_ROLES }, // 홈은 전 역할 — viewer는 읽기 전용 홈, 쓰기 CTA는 useCan 게이팅
   dashboard: { standardRoles: ALL_ROLES },
-  adoptionEvidence: { standardRoles: ALL_ROLES },
   runTrace: { standardRoles: ALL_ROLES },
-  workitems: { standardRoles: ALL_ROLES },
   humanTasks: { standardRoles: ALL_ROLES },
-
-  scenarioStudio: { standardRoles: CREATOR_ROLES },
-  playground: { standardRoles: [], advancedRoles: [] },
+  workitems: { standardRoles: ["operator", "admin"], advancedRoles: ADVANCED_NON_VIEWER_ROLES },
   automationOps: { standardRoles: ["operator", "admin"] },
   documentIdp: { standardRoles: ["operator", "admin"] },
 
-  auditExplorer: { standardRoles: ALL_ROLES, advancedRoles: ALL_ROLES },
+  scenarioStudio: { standardRoles: [], advancedRoles: CREATOR_ROLES }, // 전문가 경로 — 관리 콘솔 소속
+  playground: { standardRoles: [], advancedRoles: [] },
+  adoptionEvidence: { standardRoles: [], advancedRoles: ALL_ROLES },
+  auditExplorer: { standardRoles: [], advancedRoles: ALL_ROLES },
 
   coePipeline: { standardRoles: ["admin"], advancedRoles: ADVANCED_NON_VIEWER_ROLES },
   connectorCatalog: { standardRoles: ["admin"], advancedRoles: ADVANCED_NON_VIEWER_ROLES },

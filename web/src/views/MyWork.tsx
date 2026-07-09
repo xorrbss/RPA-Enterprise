@@ -1,65 +1,27 @@
-import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
-import { useCan, useSubject } from "../api/permissions";
+import { useCan } from "../api/permissions";
 import { navigate, mergeParams } from "../router";
 import { StatusBadge, kindLabel } from "../components/badges";
 import { Loading, ErrorState, EmptyState } from "../components/states";
 import { RunScenarioButton } from "../components/RunScenarioButton";
-import type { HumanTaskItem, ScenarioItem } from "../api/types";
-import { isActiveHumanTask } from "./humanTaskFilters";
-
-const POLL_MS = 5_000;
-
-// 사람 개입 큐 카드의 제목 — payload 의 제목/title 이 있으면 그걸, 없으면 업무 종류로(날조 없이 실 데이터만).
-function taskTitle(t: HumanTaskItem): string {
-  const p = t.payload;
-  if (p !== null && typeof p === "object" && !Array.isArray(p)) {
-    const rec = p as Record<string, unknown>;
-    for (const k of ["제목", "title", "subject"]) {
-      if (typeof rec[k] === "string" && (rec[k] as string).length > 0) return rec[k] as string;
-    }
-  }
-  return kindLabel(t.kind);
-}
-
-// 인터프리터가 이미 순수 continue 신호(보안문자/추가 인증)와 구조화 검토를 가른다 — 여기선 목록 라벨만 구분.
-function isSimpleGate(kind: string): boolean {
-  return kind === "captcha" || kind === "mfa";
-}
+import type { ScenarioItem } from "../api/types";
+// E1: 확인 큐 로직은 create/review-queue 공용 훅으로 이관(만들기 홈 스트립과 공유) — R4 은퇴 전까지 이 뷰도 소비.
+import { isSimpleGate, taskTitle, useMyReviewQueue } from "./create/review-queue";
 
 export function MyWorkView(): JSX.Element {
   const api = useApiClient();
-  const subject = useSubject();
   const can = useCan();
 
-  // 개입 큐 = 내게 배정된 미종결 사람-확인 업무(내 업무 먼저). sub 부재(미로그인)면 필터 없음.
-  const assignedTasksQuery = useQuery({
-    queryKey: ["my-work", "human-tasks", subject],
-    queryFn: () => subject !== null && subject.length > 0 ? api.listHumanTasks({ assignee: subject, terminal: "false" }) : Promise.resolve({ items: [], next_cursor: null }),
-    refetchInterval: POLL_MS,
-  });
-  const unassignedTasksQuery = useQuery({
-    queryKey: ["my-work", "human-tasks", "unassigned"],
-    queryFn: () => api.listHumanTasks({ unassigned: true, terminal: "false" }),
-    refetchInterval: POLL_MS,
-  });
+  const queue = useMyReviewQueue();
+  const assignedTasksQuery = queue.assigned;
+  const unassignedTasksQuery = queue.unassigned;
+  const myTasks = queue.tasks;
   const scenariosQuery = useQuery({
     queryKey: ["my-work", "scenarios"],
     queryFn: () => api.listScenarios({ limit: 8 }),
   });
-
-  const myTasks = useMemo(
-    () => {
-      const byId = new Map<string, HumanTaskItem>();
-      for (const task of [...(assignedTasksQuery.data?.items ?? []), ...(unassignedTasksQuery.data?.items ?? [])]) {
-        if (isActiveHumanTask(task)) byId.set(task.human_task_id, task);
-      }
-      return [...byId.values()];
-    },
-    [assignedTasksQuery.data, unassignedTasksQuery.data],
-  );
   const scenarios = scenariosQuery.data?.items ?? [];
 
   return (

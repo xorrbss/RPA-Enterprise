@@ -358,6 +358,8 @@ describe("D7 운영 콘솔 shell", () => {
 
   beforeEach(() => {
     location.hash = "";
+    // E1: 기본 랜딩=create — 생성기가 매 테스트 마운트되며 localStorage(초안·기억값)가 교차 오염되므로 격리 초기화.
+    localStorage.clear();
     localStorage.setItem("rpa.token", jwt(ALL_ROLES)); // 전 역할 — 명령 버튼 표시 + TokenGate 통과
   });
 
@@ -373,20 +375,17 @@ describe("D7 운영 콘솔 shell", () => {
   test("사이드바는 역할 정책으로 필터된 nav item을 렌더", () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
-    expect(nav.querySelectorAll(".nav-item")).toHaveLength(16); // R2·R3: irValidation·idempotency 은퇴
-    expect(within(nav).getByRole("button", { name: "도입 증빙" })).toBeInTheDocument();
+    expect(nav.querySelectorAll(".nav-item")).toHaveLength(13); // E1: 스튜디오·도입 증빙·감사 이력은 고급으로 강등(전 역할 standard 13)
+    expect(within(nav).queryByRole("button", { name: "도입 증빙" })).toBeNull(); // E1: 고급 모드 소속
     expect(within(nav).getByRole("button", { name: "보안/개인정보" })).toBeInTheDocument();
     expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
   });
 
-  test("기본 라우트 = myWork (내 할 일 랜딩)", async () => {
+  test("기본 라우트 = create (만들기 콘솔 랜딩)", async () => { // E1: 첫 화면=무엇을 시킬까
     renderApp();
     expect(
-      screen.getByRole("heading", { level: 1, name: "내 할 일" }),
+      screen.getByRole("heading", { level: 1, name: "만들기 콘솔" }),
     ).toBeInTheDocument();
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "자동화 만들기" })).toBeInTheDocument(),
-    );
   });
 
   test("해시 라우팅 → workitems", async () => {
@@ -405,12 +404,12 @@ describe("D7 운영 콘솔 shell", () => {
     );
   });
 
-  test("잘못된 해시 → myWork 폴백", async () => {
+  test("잘못된 해시 → create 폴백", async () => { // E1
     renderApp();
     location.hash = "#nonsense";
     await waitFor(() =>
       expect(
-        screen.getByRole("heading", { level: 1, name: "내 할 일" }),
+        screen.getByRole("heading", { level: 1, name: "만들기 콘솔" }),
       ).toBeInTheDocument(),
     );
   });

@@ -32,7 +32,8 @@ export const NAV_GROUPS: readonly { readonly label: string; readonly keys: reado
   { label: "고급 설정", keys: ["llmGateway", "security", "openGate"] },
 ];
 
-const DEFAULT_VIEW: ViewKey = "myWork";
+// E1: 기본 랜딩 = 만들기 홈("무엇을 시킬까"가 첫 화면 — 쉬운 제작 재설계 §2.1 확정). myWork는 R4 은퇴 예정.
+const DEFAULT_VIEW: ViewKey = "create";
 
 export function viewFromHash(hash: string): ViewKey {
   // `#viewKey` 또는 `#viewKey?param=...` — 뷰 키는 `?` 이전 부분(드릴다운 딥링크가 쿼리 파라미터를 붙임).

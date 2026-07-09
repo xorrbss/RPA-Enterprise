@@ -37,7 +37,7 @@ async function getWorkbench(): Promise<HTMLElement> {
 
 describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 시작", () => {
   beforeEach(() => {
-    location.hash = "";
+    location.hash = "#scenarioStudio"; // E1: 기본 랜딩이 create(생성기·큐 쿼리 다수)가 되어 빈 해시 시작은 교차 오염 — 워크벤치 검증은 스튜디오 직행
     localStorage.clear();
     localStorage.setItem("rpa.token", jwt(["operator"]));
   });
