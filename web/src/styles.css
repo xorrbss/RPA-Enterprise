@@ -389,6 +389,22 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 .review-strip-title { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .review-strip-meta { display: inline-flex; gap: 8px; align-items: center; margin-right: auto; }
 .review-strip-more { margin: 0; }
+/* E2: 사람 말 단계 카드(step-sentences 공용 번역기 소비면) — 만들기 초안·계획 미리보기·트레이스 공유. */
+.step-cards { display: grid; gap: 8px; }
+.step-card-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.step-card { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); padding: 10px 12px; }
+.step-card-fallback { border-style: dashed; }
+.step-card-order { flex: none; width: 22px; height: 22px; border-radius: 999px; background: var(--blue-soft); color: var(--blue); font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.step-card-body { min-width: 0; display: grid; gap: 2px; flex: 1; }
+.step-card-sentence { font-weight: 600; overflow-wrap: anywhere; }
+.step-card-detail { font-size: 12px; overflow-wrap: anywhere; }
+.step-card-branch pre { margin: 4px 0 0; font-size: 11px; white-space: pre-wrap; }
+.step-card-badges { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.step-cards-others summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.step-cards-others { display: grid; gap: 8px; }
+.step-cards-advanced { justify-self: start; font-size: 12px; }
+.step-cards-raw { margin: 0; font-size: 11px; max-height: 320px; overflow: auto; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; }
+.generation-draft-preview { display: grid; gap: 8px; }
 .ops-signal-panel { overflow: hidden; }
 .ops-signal-body { padding: 14px 16px; display: grid; gap: 12px; }
 .ops-signal-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }

@@ -1,4 +1,5 @@
 import { FileVideo, Image, Play } from "lucide-react";
+import { StepCards } from "../easy-create/StepCards";
 
 import { navigate } from "../../router";
 import type { ScenarioGenerationResult } from "../../api/types";
@@ -61,6 +62,13 @@ export function GenerationResult({
         <span className="subtle">AI 방식</span>
         <strong>{plannerLabel(result.planner)}</strong>
       </div>
+      {/* E2: 초안을 사람 말 단계 카드로 확인 — 만들 때 본 문장 = 계획·트레이스에서 볼 문장(step-sentences 공유). */}
+      {result.draft_ir !== null && result.draft_ir !== undefined && (
+        <section className="generation-draft-preview" aria-label="초안 미리보기">
+          <strong>초안 미리보기</strong>
+          <StepCards ir={result.draft_ir} emptyMessage="초안 단계를 표시할 수 없습니다. 아래 원문에서 확인하세요." />
+        </section>
+      )}
       <details className="developer-details result-raw-details">
         <summary>고급/원문 식별값 보기</summary>
         <div className="result-grid">

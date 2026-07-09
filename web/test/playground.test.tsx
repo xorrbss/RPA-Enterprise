@@ -78,7 +78,7 @@ describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 �
     location.hash = "#playground?scenario=sc1";
 
     expect(await within(await getWorkbench()).findByRole("combobox")).toHaveValue("sc1");
-    await waitFor(() => expect(screen.getByText(/open★/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("화면을 확인합니다")).toBeInTheDocument()); // E2: StepCards 문장(원시 노드 id 미노출)
   });
 
   test("Playground scenario selector follows the scenario cursor", async () => {
@@ -103,7 +103,7 @@ describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 �
     await waitFor(() => expect(calls.some((c) => c.cursor === "cursor-2")).toBe(true));
     fireEvent.change(await within(await getWorkbench()).findByRole("combobox"), { target: { value: "sc1" } });
 
-    await waitFor(() => expect(screen.getByText(/open/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("화면을 확인합니다")).toBeInTheDocument()); // E2: StepCards 문장
   });
 
   // 핵심 갭 수정: 자동화 선택 → 실제 실행(createRun) 시작이 이 화면에서 가능.
@@ -126,7 +126,7 @@ describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 �
     renderApp(withScenario());
     location.hash = "#playground";
     fireEvent.change(await within(await getWorkbench()).findByRole("combobox"), { target: { value: "sc1" } });
-    await waitFor(() => expect(screen.getByText(/open/)).toBeInTheDocument()); // start 노드 표시
+    await waitFor(() => expect(screen.getByText("화면을 확인합니다")).toBeInTheDocument()); // E2: 사람 말 문장으로 표시
   });
 
   // F2(어휘/DRY): Plan의 action 라벨은 badges.actionLabel(계약 IRActionType 미러) 단일 출처를 쓴다.
@@ -154,9 +154,9 @@ describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 �
     location.hash = "#playground";
     fireEvent.change(await within(await getWorkbench()).findByRole("combobox"), { target: { value: "sc1" } });
     // 계약-미러 라벨(badges.actionLabel)로 표시.
-    await waitFor(() => expect(screen.getByText(/화면 확인/)).toBeInTheDocument()); // observe
-    expect(screen.getByText(/화면 조작/)).toBeInTheDocument(); // act
-    expect(screen.getByText(/데이터 추출/)).toBeInTheDocument(); // extract
+    await waitFor(() => expect(screen.getByText("화면을 확인합니다")).toBeInTheDocument()); // observe
+    expect(screen.getByText("화면을 조작합니다")).toBeInTheDocument(); // act(instruction 없음 → 폴백 문장)
+    expect(screen.getByText("데이터를 읽습니다")).toBeInTheDocument(); // extract
     // 옛 로컬 ACTION_LABEL 드리프트 라벨('관찰')은 부재 — 단일출처 수렴 회귀 봉쇄.
     expect(screen.queryByText(/관찰/)).toBeNull();
   });
@@ -181,8 +181,8 @@ describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 �
     );
     location.hash = "#playground";
     fireEvent.change(await within(await getWorkbench()).findByRole("combobox"), { target: { value: "sc1" } });
-    await waitFor(() => expect(screen.getByText(/주문 페이지 주소/)).toBeInTheDocument());
-    expect(screen.getByText(/출력 형식 리뷰/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/주문 페이지 주소/)).toBeInTheDocument()); // urlRefLabel 공유(StepCards)
+    expect(screen.getByText(/결과 형식: 리뷰/)).toBeInTheDocument();
     expect(screen.queryByText(/orders_url/)).toBeNull();
   });
 
