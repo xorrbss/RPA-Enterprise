@@ -163,23 +163,27 @@ function HumanTaskStreamView(): JSX.Element {
     <>
       {sel !== null && <HumanTaskDetailPanel api={api} humanTaskId={sel} detail={detail} principalOptions={principalOptions} onClose={() => { mergeParams({ ht: null }); }} />}
       <DashboardEnvironmentState errors={pageErrors} />
-      <section className="metrics human-task-metrics" aria-label="문서 검증 업무 요약">
-        <button className="metric metric-link" type="button" onClick={() => setDocumentOnly((value) => !value)} aria-pressed={documentOnly}>
-          <span className="label">검증 대기 문서</span>
-          <span className="value">{documentItems.length}</span>
-          <span className="subtle metric-hint">{documentOnly ? "전체 업무 보기" : "문서 검증만 보기"}</span>
-        </button>
-        <button className="metric metric-link" type="button" onClick={() => setDocumentOnly(true)} disabled={documentWithArtifacts.length === 0}>
-          <span className="label">증빙 자료 있음</span>
-          <span className="value">{documentWithArtifacts.length}</span>
-          <span className="subtle metric-hint">증빙 자료 포함</span>
-        </button>
-        <button className="metric metric-link" type="button" onClick={() => setDocumentOnly(true)} disabled={documentWithForm.length === 0}>
-          <span className="label">업무 입력 필요</span>
-          <span className="value">{documentWithForm.length}</span>
-          <span className="subtle metric-hint">입력 항목 포함</span>
-        </button>
-      </section>
+      {/* T5: 문서 검증 요약 타일은 해당 업무가 있을 때만 — 전부 0인 타일이 첫 화면을 선점하지 않는다(감사 P1-8).
+          documentOnly 필터가 켜져 있으면 0건이어도 유지(필터 해제 진입점 보존). */}
+      {(documentItems.length > 0 || documentOnly) && (
+        <section className="metrics human-task-metrics" aria-label="문서 검증 업무 요약">
+          <button className="metric metric-link" type="button" onClick={() => setDocumentOnly((value) => !value)} aria-pressed={documentOnly}>
+            <span className="label">검증 대기 문서</span>
+            <span className="value">{documentItems.length}</span>
+            <span className="subtle metric-hint">{documentOnly ? "전체 업무 보기" : "문서 검증만 보기"}</span>
+          </button>
+          <button className="metric metric-link" type="button" onClick={() => setDocumentOnly(true)} disabled={documentWithArtifacts.length === 0}>
+            <span className="label">증빙 자료 있음</span>
+            <span className="value">{documentWithArtifacts.length}</span>
+            <span className="subtle metric-hint">증빙 자료 포함</span>
+          </button>
+          <button className="metric metric-link" type="button" onClick={() => setDocumentOnly(true)} disabled={documentWithForm.length === 0}>
+            <span className="label">업무 입력 필요</span>
+            <span className="value">{documentWithForm.length}</span>
+            <span className="subtle metric-hint">입력 항목 포함</span>
+          </button>
+        </section>
+      )}
       <section className="panel" style={{ padding: 16, marginBottom: 12, display: "grid", gap: 12 }} aria-label="사람 확인 현재 보기 요약">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
           <div>
@@ -214,7 +218,10 @@ function HumanTaskStreamView(): JSX.Element {
           <strong>업무 목록 관리</strong>
           <p className="subtle">{documentOnly ? "증빙 자료나 입력 항목이 있는 문서 검증 업무만 보고 있습니다." : "현재 목록에서 담당자, 마감, 다음 처리 업무를 빠르게 확인합니다."}</p>
         </div>
-        <div className="quick-actions">
+        {/* T5: 조회·필터(1줄)와 일괄 처리(2줄)를 시각적으로 분리 — '일괄 승인'이 필터 칩과 같은 무게로
+            나열되던 것(감사 P1-8)을 해소. 일괄 처리 줄은 여러 건에 적용됨을 그룹 라벨로 명시. */}
+        <div className="queue-control-groups">
+        <div className="quick-actions" role="group" aria-label="목록 조회·필터">
           <button
             className="btn"
             type="button"
@@ -240,6 +247,8 @@ function HumanTaskStreamView(): JSX.Element {
           <button className="btn" type="button" disabled={nextTask === undefined} onClick={() => { if (nextTask !== undefined) mergeParams({ ht: nextTask.human_task_id }); }}>
             다음 업무 열기
           </button>
+        </div>
+        <div className="quick-actions queue-bulk-actions" role="group" aria-label="일괄 처리 — 현재 목록 여러 건에 적용">
           {can("human_task.assign") && bulkAssignable.length > 0 && (
             <ActionButton
               label={`현재 목록 ${bulkAssignable.length}건 담당자 지정`}
@@ -320,6 +329,7 @@ function HumanTaskStreamView(): JSX.Element {
               invalidateKeys={KEYS}
             />
           )}
+        </div>
         </div>
       </section>
       <QueryPanel<HumanTaskItem>

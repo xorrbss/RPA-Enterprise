@@ -71,6 +71,49 @@ export function HumanTaskActions({
       검토 입력
     </button>
   );
+  // T5(감사 P1-8): 승인 업무의 1차 액션을 [승인][반려]로 승격 — 결정까지 시작/이관 2단계를 거치지 않는다.
+  //   대상은 구조화 검토가 불필요한 approval 업무만(양식·증빙 검토를 건너뛴 blanket 결정 차단 — 일괄 승인과 동일 기준).
+  //   상태 전이는 일괄 승인이 검증한 H1→H2→H3 체인(단계별 결정형 멱등키)을 단건 재사용. 타인 배정 업무는 제외(가로채기 방지).
+  const decisionEligible =
+    subject !== null &&
+    subject.length > 0 &&
+    task.kind === "approval" &&
+    !requiresStructuredReview &&
+    (task.state === "open" || task.state === "escalated" || ((task.state === "assigned" || task.state === "in_progress") && task.assignee === subject));
+  async function chainToInProgress(key: string): Promise<void> {
+    if (task.state === "open" || task.state === "escalated") {
+      await api.assignHumanTask(id, subject as string, `${key}:a`);
+      await api.startHumanTask(id, `${key}:s`);
+    } else if (task.state === "assigned") {
+      await api.startHumanTask(id, `${key}:s`);
+    }
+  }
+  const approveNow = decisionEligible ? (
+    <ActionButton
+      label="승인"
+      action={`human_task.resolve.${task.kind}`}
+      confirmText="이 업무를 승인 처리할까요? 승인하면 자동화가 이어서 실제 동작을 진행하며 되돌릴 수 없습니다."
+      run={async (key) => {
+        await chainToInProgress(key);
+        await api.resolveHumanTask(id, `${key}:r`, { decision: "approve" });
+      }}
+      invalidateKeys={KEYS}
+    />
+  ) : null;
+  const rejectNow = decisionEligible ? (
+    <ActionButton
+      label="반려"
+      action={`human_task.resolve.${task.kind}`}
+      confirmText="이 업무를 반려 처리할까요? 자동화는 반려 경로로 이어집니다."
+      inputLabel="반려 사유"
+      run={async (key, reason) => {
+        if (reason === undefined || reason.trim() === "") return Promise.reject(new Error("반려 사유를 입력하세요."));
+        await chainToInProgress(key);
+        await api.resolveHumanTask(id, `${key}:r`, { decision: "reject", reason: reason.trim() });
+      }}
+      invalidateKeys={KEYS}
+    />
+  ) : null;
   // U2-1: 구조화 검토 1건이 지정(확인)→시작(확인)→입력→제출 4단계였다 — 일괄 승인이 이미 쓰는 H1→H2 체인
   //   (task+step 결정형 멱등키, 재시도 안전)을 단건용으로 재사용해 확인 1회로 in_progress+검토 폼에 도달한다.
   //   타인에게 배정된 업무는 제외(가로채기 방지) — 그 경우 기존 시작/이관 경로 그대로.
@@ -97,9 +140,11 @@ export function HumanTaskActions({
     ) : null;
   return (
     <span style={{ display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
-      {task.state === "open" && (<>{reviewChain}{selfAssign}{assign}{escalate}</>)}
+      {task.state === "open" && (<>{approveNow}{rejectNow}{reviewChain}{selfAssign}{assign}{escalate}</>)}
       {task.state === "assigned" && (
         <>
+          {approveNow}
+          {rejectNow}
           {reviewChain}
           <ActionButton label="시작" action="human_task.start" confirmText="이 업무를 시작할까요?" run={(key) => api.startHumanTask(id, key)} invalidateKeys={KEYS} />
           {escalate}
@@ -109,13 +154,15 @@ export function HumanTaskActions({
         <>
           {requiresStructuredReview ? (
             structuredReviewAction
+          ) : decisionEligible ? (
+            <>{approveNow}{rejectNow}</>
           ) : (
             <ActionButton label="완료 처리" action={`human_task.resolve.${task.kind}`} confirmText="업무를 완료 처리하고 자동화를 이어서 진행할까요? (별도 입력 항목 없이 완료됩니다)" run={(key) => api.resolveHumanTask(id, key)} invalidateKeys={KEYS} />
           )}
           {escalate}
         </>
       )}
-      {task.state === "escalated" && (<>{reviewChain}{selfAssign}{assign}</>)}
+      {task.state === "escalated" && (<>{approveNow}{rejectNow}{reviewChain}{selfAssign}{assign}</>)}
       {HUMAN_TASK_TERMINAL_STATES.has(task.state) && "—"}
     </span>
   );

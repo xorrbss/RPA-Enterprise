@@ -357,6 +357,10 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 .role-workbench h2 { font-size: 16px; margin: 0 0 4px; }
 .role-workbench p, .queue-controls p { margin: 0; }
 .quick-actions { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* T5: 조회·필터 줄과 일괄 처리 줄의 시각 분리 — 위험 액션이 필터와 같은 무게로 섞이지 않게 한다. */
+.queue-control-groups { display: grid; gap: 8px; justify-items: end; }
+.queue-bulk-actions { border-top: 1px dashed var(--line-strong); padding-top: 8px; }
+.queue-bulk-actions:empty { display: none; }
 .ops-signal-panel { overflow: hidden; }
 .ops-signal-body { padding: 14px 16px; display: grid; gap: 12px; }
 .ops-signal-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
