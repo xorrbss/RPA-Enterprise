@@ -60,7 +60,7 @@ describe("scenario-studio-first-action", () => {
       fakeClient({
         listTemplates: async () => ({
           items: [
-            { template_id: "tpl-1", connector_id: "con-1", name: "결재 알림", summary: "새 결재를 확인해 알립니다", kind: "notification_workflow", status: "candidate", priority: "P2", best_for: [], required_params: [], required_secret_refs: [], produced_ir_pattern: "", success_criteria: "", created_at: "2026-07-01T00:00:00.000Z", updated_at: "2026-07-01T00:00:00.000Z" },
+            { catalog_id: "cat-1", template_id: "tpl-1", connector_id: "con-1", name: "결재 알림", summary: "새 결재를 확인해 알립니다", kind: "notification_workflow" as const, status: "candidate" as const, priority: "P2" as const, best_for: [], required_params: [], required_secret_refs: [], produced_ir_pattern: "", success_criteria: "", created_at: "2026-07-01T00:00:00.000Z", updated_at: "2026-07-01T00:00:00.000Z" },
           ],
           next_cursor: null,
         }),
