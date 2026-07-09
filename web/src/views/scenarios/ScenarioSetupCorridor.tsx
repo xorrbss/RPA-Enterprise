@@ -1,4 +1,7 @@
+import { useState } from "react";
+
 import { navigate } from "../../router";
+import { CaptureGuide } from "../../components/CaptureGuide";
 import type { RunItem, ScenarioItem, SiteItem } from "../../api/types";
 import {
   READINESS_LABELS,
@@ -80,7 +83,7 @@ function siteStep(
   };
 }
 
-function sessionStep(
+function sessionStep(onOpenCapture: (site: SiteItem) => void, 
   state: CorridorQueryState,
   sites: readonly SiteItem[],
   firstMissingSession: SiteItem | null,
@@ -112,7 +115,16 @@ function sessionStep(
     detail: decision.detail,
     action:
       canCaptureSession && (decision.siteId !== undefined || firstMissingSession !== null)
-        ? { label: "세션 등록", run: () => navigate("security", { section: "sites", site: decision.siteId ?? firstMissingSession!.site_profile_id }), primary: true }
+        ? {
+            label: "세션 등록",
+            // E3: 화면을 보내지 않는다 — 그 자리에서 운영자 PC 등록 안내(CaptureGuide)를 연다. 완료 판정은
+            //   사이트 재조회(session_ready)가 담당(낙관 갱신 금지 — 조용한 green 금지).
+            run: () => {
+              const target = sites.find((s) => s.site_profile_id === (decision.siteId ?? firstMissingSession!.site_profile_id));
+              if (target !== undefined) onOpenCapture(target);
+            },
+            primary: true,
+          }
         : undefined,
   };
 }
@@ -256,9 +268,10 @@ export function ScenarioSetupCorridor({
   onCreateDraft: () => void;
   onOpenTest?: (scenarioId?: string) => void;
 }): JSX.Element {
+  const [captureSite, setCaptureSite] = useState<SiteItem | null>(null);
   const steps = [
     siteStep(siteState, sites, canCreateSite, canUpdateSite),
-    sessionStep(siteState, sites, firstLoginSiteNeedingSession, canCaptureSession),
+    sessionStep((site) => setCaptureSite(site), siteState, sites, firstLoginSiteNeedingSession, canCaptureSession),
     draftStep(scenarioState, scenarios, canCreateScenario, onCreateDraft),
     testStep(runState, recentRuns, latestScenario, canCreateRun, onOpenTest),
     evidenceStep(runState, latestCompletedRun, canReadEvidence),
@@ -293,6 +306,8 @@ export function ScenarioSetupCorridor({
           </li>
         ))}
       </ol>
+      {/* E3: 세션 등록은 화면 이동 없이 그 자리에서 안내(운영자 PC 등록 프레이밍 유지). */}
+      {captureSite !== null && <CaptureGuide site={captureSite} onClose={() => setCaptureSite(null)} />}
     </section>
   );
 }
