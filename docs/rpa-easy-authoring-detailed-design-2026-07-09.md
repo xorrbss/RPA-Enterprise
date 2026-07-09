@@ -3,6 +3,7 @@
 작성일: 2026-07-09
 상태: 구현 착수용 상세 설계 (개념 설계: `docs/rpa-console-easy-authoring-redesign-2026-07-09.md`)
 근거: 본 문서의 모든 file:line 인용은 2026-07-09 코드 기준 실측이다. 추측 항목은 §12 "구현 시 검증 포인트"에 분리했다.
+개정 2026-07-09: 단순화 검토(`docs/rpa-console-simplification-review-2026-07-09.md`) 반영 — E5 집중 스튜디오 삭제(edit 모드는 위저드 재사용), myWork 은퇴(리다이렉트), 위저드 단계 칩 삭제, 은퇴 슬라이스 R1~R6 연계.
 
 ## 0. 개념 설계에서 달라진 점 (조사 결과 반영)
 
@@ -26,7 +27,6 @@ web/src/components/easy-create/
   TestProgress.tsx                            (신규) 인라인 테스트 진행         [E4]
   useEasyGeneration.ts                        (신규) 생성·재생성·테스트 실행 훅  [E2]
   easy-labels.ts                              (신규) 쉬운 언어 사전(순수 상수)   [E6]
-web/src/views/create/EasyStudio.tsx           (신규) 집중 스튜디오(수정 모드)    [E5]
 web/src/components/run-scenario/site-readiness.ts (신규·추출) siteReadiness 순수화 [E0]
 --- 수정 ---
 web/src/router.ts                              VIEW_KEYS + NAV_GROUPS("제작")   [E1]
@@ -50,7 +50,8 @@ web/src/views/Playground.tsx                   creator 파라미터 제거      
   - `NAV_POLICY_GROUPS`의 `"내 업무"` 그룹 맨 앞에 `create` 배치.
 - `views/meta.ts` `VIEW_META.create = { title: "만들기", subtitle: "말로 설명하면 자동화 초안을 만들어 드립니다", icon: <기존 lucide 세트에서 선택> }`.
 - `App.tsx`: `const CreateView = lazy(...)` + `case "create"` (기존 패턴 `App.tsx:9-26, 29-70`).
-- `DEFAULT_VIEW`(`router.ts:35`)를 `"myWork"` → `"create"`로 변경. 근거: 첫 화면이 "무엇을 시킬까"여야 한다는 재설계 원칙. `myWork`는 뷰로 존치(북마크 보존, 리다이렉트 불필요).
+- `DEFAULT_VIEW`(`router.ts:35`)를 `"myWork"` → `"create"`로 변경. 근거: 첫 화면이 "무엇을 시킬까"여야 한다는 재설계 원칙.
+- `myWork`는 **은퇴**(단순화 검토 R4): 확인 큐는 HumanTasks의 부분집합(`MyWork.tsx:90`이 위임)이고 진입점 역할은 만들기 홈의 확인 스트립이 흡수. `LEGACY_HASH_REDIRECTS`에 `myWork: "create"` 추가(E1 머지 후 실행).
 
 ### 2.2 해시 파라미터 계약
 
@@ -61,16 +62,17 @@ web/src/views/Playground.tsx                   creator 파라미터 제거      
 | `prompt`, `name`, `params`, `site`, `start_url`, `browser_identity`, `network_policy`, `connector_id`, `template_id` | 프리필 — **기존 `usePrefill` 키 집합과 동일**(`usePrefill.ts:50-58`). 템플릿 갤러리/커넥터 카탈로그가 그대로 사용 | 문자열 |
 | `generation` | 진행 중/완료된 생성 복원 → `getScenarioGeneration(id)` | `useHashIdParam` |
 | `run` | 테스트 실행 복원 → TestProgress가 이어서 폴링 | `useHashIdParam` |
-| `edit` | 집중 스튜디오(수정 모드) 진입 대상 scenario | `useHashIdParam` |
+| `edit` | 수정 모드 — 위저드가 해당 scenario의 IR을 로드해 PREVIEW부터 시작 | `useHashIdParam` |
 
 - 새로고침/뒤로가기 복원: 위저드 단계는 별도 상태 저장 없이 `generation`/`run` 파라미터에서 재유도한다(§3의 상태는 전부 서버 상태로부터 계산 가능).
 - **`creator` 파라미터는 폐기**: 현재 어디서도 소비되지 않는 데드 파라미터(전달만: `ConnectorCatalog.tsx:150`, `Playground.tsx:127`). E6에서 전달부 제거. `intent` 파라미터는 도입하지 않음(선행 설계의 제안 철회 — Security 딥링크는 기존 `section`/`site` 규약 유지).
 
 ### 2.3 만들기 콘솔 ↔ 관리 콘솔 = 기존 navMode 재사용
 
-- **기본(standard) 모드 = 만들기 콘솔**: `VIEW_VISIBILITY`의 `standardRoles`를 조정해 기본 모드 내비를 업무 중심 4~5항목으로 슬림화 — `create`(전 역할), `myWork`, `humanTasks`, `runTrace`(+ 관리자에겐 `dashboard`). 나머지 뷰는 `advancedRoles`로 이동.
-- **고급(advanced) 모드 = 관리 콘솔**: 현행 전체 뷰. 전환 토글은 기존 것(`Layout.tsx:189-190`, `hasAdvancedNav`).
-- 영향 범위: `nav-policy.test.ts`/`layout-nav-policy.test.tsx`의 기대값 갱신 필요. 어떤 뷰를 standard에 남길지의 최종 목록은 E1 PR에서 테이블로 확정하고 테스트에 박는다.
+- **기본(standard) 모드 = 만들기 콘솔** — 최종 목록(단순화 검토로 확정): 전 역할 `create`/`humanTasks`/`runTrace`/`dashboard`, operator+ `workitems`(전 역할→축소)/`automationOps`/`documentIdp`. 나머지 뷰는 `advancedRoles`로 이동.
+- **고급(advanced) 모드 = 관리 콘솔**: 현행 전체 뷰(은퇴분 제외). 전환 토글은 기존 것(`Layout.tsx:189-190`, `hasAdvancedNav`).
+- 은퇴 뷰(R1~R4): `playground`·`irValidation`·`idempotency`·`myWork` — 근거·방법은 단순화 검토 문서 §2.
+- 영향 범위: `nav-policy.test.ts`/`layout-nav-policy.test.tsx`/`ux-quickwins.test.tsx`(A6) 기대값 갱신, 위 목록을 테스트에 고정.
 
 ## 3. 위저드 상태 머신
 
@@ -128,7 +130,8 @@ SUCCEEDED --> 운영 예약 / 실행 증거 / 봇으로 굳히기 / 계속 고�
 ### 4.2 `easy-create/Wizard.tsx` — 셸·상태 머신
 
 - §3 상태 머신 보유. props: `{ prefill: PrefillValues }`(홈이 해시에서 읽어 전달).
-- 렌더: 단계 칩(준비/초안/테스트) + `PrepChecklist` + `StepCards` + `TestProgress` + CTA 행. 각 하위는 표시 전용, 전이는 Wizard가 소유.
+- 렌더: `PrepChecklist` + `StepCards` + `TestProgress` + CTA 행 — 한 화면에서 섹션이 순차 등장(단계 칩 없음 — 단순화 검토로 삭제). 각 하위는 표시 전용, 전이는 Wizard가 소유.
+- **edit 모드**(`?edit=<scenario_id>`): `getScenario(id)`로 `ScenarioDetail.ir` 로드 → PREVIEW 상태에서 시작(생성 단계 생략). 말로 고치기는 §3.3과 동일 재생성 경로 — 기존 시나리오의 재생성은 새 초안을 만들므로 "고치면 새 초안이 만들어집니다" 정직 고지(기존 자동화 유지). IR 직접 수정(PUT + If-Match)은 P1(§13).
 
 ### 4.3 `easy-create/PrepChecklist.tsx` — 준비 확인
 
@@ -178,12 +181,9 @@ SUCCEEDED --> 운영 예약 / 실행 증거 / 봇으로 굳히기 / 계속 고�
 - suspended 시: `listHumanTasks({run_id, terminal:"false"})`로 해당 task 조회, kind별 기존 처리 컴포넌트(`HumanTaskReviewPanel` 계열) 인라인 재사용. resolve 성공 → run이 `resume_requested`로 자동 전이(계약: `reserved-handlers.md:110`, `api-surface.md:380`)하므로 **UI는 resolve 후 폴링 지속만** 하면 됨(별도 resume 호출 불필요·금지 — R13은 이벤트가 밀어올림).
 - 성공 CTA: [운영 예약]→`navigate("automationOps",{scenario})`, [실행 증거 보기]→인라인 `RunArtifactsList`(기존, `focusOnMount`) 또는 `navigate("runTrace",{run,focus:"artifacts"})`, [봇으로 굳히기]→`can("scenario.promote")`시 `promoteScenarioFromRun(scenarioId, runId, \`promote-from-run:${scenarioId}:${runId}\`)`(기존 키 관례 `RunDetailPanel.tsx:55-59`).
 
-### 4.8 `views/create/EasyStudio.tsx` — 집중 스튜디오 (E5)
+### 4.8 수정 모드 (구 E5 집중 스튜디오 — 단순화 검토로 삭제)
 
-- 진입: `#create?edit=<scenario_id>`. `getScenario(id)`로 `ScenarioDetail.ir` 로드 → `StepCards` 렌더.
-- 상단 바: 이름(표시, 이름 변경은 P1), `promotion_status` 배지, [테스트](`createRun run_mode:"test"` → 인라인 `TestProgress`), [나가기](`#create`).
-- 말로 고치기 = §3.3과 동일 재생성 경로. **주의**: 기존 시나리오의 재생성은 새 scenario를 만들 수 있음(generation API는 시나리오 갱신이 아니라 생성) — P0에서는 "고치면 새 초안이 만들어집니다" 정직 고지 + 기존 자동화는 유지. IR 직접 수정(PUT + If-Match)은 P1(§13).
-- 우측 레일: 준비 확인 요약(접힘, `site-readiness`), 최근 테스트(`listRuns({scenario_id, run_mode:"test", limit:1})` — scenario_id 필터 계약 존재 `api-surface.md:73`).
+별도 `EasyStudio.tsx`·풀스크린 레이아웃·우측 레일은 만들지 않는다. `#create?edit=<scenario_id>` 진입 시 **위저드 화면 그대로**가 §4.2의 edit 모드로 동작한다(사용자가 배울 화면 1개 감소). 이름 표시는 `ScenarioItem.name` + `promotion_status` 배지를 위저드 헤더에 표기. 최근 테스트 이력 표시는 P1(필요 시 `listRuns({scenario_id, run_mode:"test", limit:1})` — 계약 존재 `api-surface.md:73`).
 
 ## 5. IR → 문장 렌더 규칙표 (P0 확정)
 
@@ -277,7 +277,7 @@ flow/부속(카드 배지·주석):
 | `step-sentences.test.ts` (E2) | §5 규칙 전수(action 10·flow 4·핸들러 3·fallback·200 상한·기타 경로 그룹) |
 | `easy-wizard.test.tsx` (E2/E3) | 제출→generateScenario(mode save) 인자 검증; saved→카드 렌더; blocked→준비 행 매핑; 준비 green이면 접힌 한 줄(행 미노출); 세션 서브스텝 완료→사이트 재조회로 session_ready 확인 후 진행; model_required 복구; 말로 고치기→합성 프롬프트 재생성+변경 카드 강조; `generation` 해시 복원 |
 | `test-progress.test.tsx` (E4) | run 상태별 배너(§4.7 표); step 9상태 매핑(uncertain을 성공으로 칠하지 않음); 실패 코드→§6 CTA; suspended→task 인라인→resolve 후 폴링 지속(resume 직접 호출 없음 검증); 터미널 폴링 중단 |
-| `easy-studio.test.tsx` (E5) | edit 진입·카드 렌더·테스트 인라인·재생성 고지 |
+| `easy-wizard.test.tsx` 추가 케이스 (E5′) | `?edit=` 진입 시 IR 로드→PREVIEW 시작·재생성 고지·테스트 인라인 |
 | 기존 갱신 | `ux-quickwins.test.tsx`(A6), `nav-policy.test.ts`/`layout-nav-policy.test.tsx`(standard 목록), `connector-catalog.test.tsx`(CTA가 `#create` 프리필, creator 제거), `run-scenario-*`(siteReadiness 추출 회귀) |
 
 검증 명령(전 슬라이스): `npm --prefix web run typecheck` / `npm --prefix web test` / `npm --prefix web run build` / `git diff --check`.
@@ -291,9 +291,10 @@ flow/부속(카드 배지·주석):
 | **E2** | `useEasyGeneration` + `step-sentences` + `StepCards` + 위저드 GENERATING/PREVIEW | E0, E1 |
 | **E3** | PRECHECK/PREP_FIX (선점검 + 인라인 사이트/세션 + 서버 blockers 매핑) | E2 |
 | **E4** | `TestProgress` (TESTING~SUCCEEDED/FAILED/WAITING_HUMAN) | E2 |
-| **E5** | `EasyStudio` (edit 모드) | E2, E4 |
+| **E5′** | 위저드 edit 모드 (`?edit=` — §4.8, 별도 뷰 없음) | E2, E4 |
 | **E6** | 템플릿 갤러리 + `easy-labels` 일괄 적용 + creator 파라미터 제거 | E1 |
 | **E7** | 관리 콘솔 정리(구 스튜디오 create-strip이 `#create` 우선 안내 등) | E1~E6 |
+| **R1~R6** | 은퇴·분리 슬라이스(playground/irValidation/idempotency/myWork/dashboard adoption 탭/automationOps today) — 상세는 `rpa-console-simplification-review-2026-07-09.md` §6 | R4는 E1, R1은 E4 |
 
 ## 12. 구현 시 검증 포인트 (설계가 확정하지 않은 사실)
 
@@ -310,6 +311,7 @@ flow/부속(카드 배지·주석):
 | `creator`/`intent` 파라미터 | **폐기 확정** — 전달부 제거(E6), 신규 도입 없음 |
 | 말로 고치기 방식 | P0=합성 프롬프트 재생성(계약 무변경). 전용 revision API는 P1 추가 계약 후보(api-surface.md 갱신 필요) |
 | SecretRef 준비 행 | P0 **제외** (SiteItem에 판정 필드 없음 — 확인 불가를 행으로 만들지 않음) |
-| DEFAULT_VIEW | `create`로 변경 확정. `myWork` 존치 |
+| DEFAULT_VIEW | `create`로 변경 확정. `myWork`는 **은퇴**(R4, 단순화 검토로 존치 결정 번복) |
+| 집중 스튜디오(E5) | **삭제 확정** — edit 모드는 위저드 재사용(§4.8). 전용 스튜디오는 사용 데이터가 필요성을 입증할 때 재논의 |
 | 카드 직접 편집·이름 변경·IR PUT 저장 | P1 (말로 고치기 사용 데이터 확인 후) |
-| standard 모드 잔존 뷰 최종 목록 | E1 PR에서 확정·테스트에 고정 |
+| standard 모드 잔존 뷰 최종 목록 | §2.3에서 확정(단순화 검토 반영) — E1 PR 테스트에 고정 |
