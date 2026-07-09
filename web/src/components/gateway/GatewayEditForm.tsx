@@ -124,6 +124,10 @@ export function GatewayEditForm({
       <h3 style={{ margin: "8px 0 0" }}>
         정책 편집 (AI 모델 {policy.model} · 변경 {policy.version})
       </h3>
+      {/* 저장값-편집값 구분(T3) — 위 요약 타일은 저장된 정책, 이 폼은 저장 전 입력값. 둘이 달라 보이는 혼동 방지. */}
+      <p className="subtle" style={{ margin: 0 }}>
+        아래는 저장 전 입력값입니다. 저장된 정책은 위 요약에 표시되며, [저장]을 눌러야 반영됩니다.
+      </p>
       <label style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
         <input
           type="checkbox"

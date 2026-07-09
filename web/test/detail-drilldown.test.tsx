@@ -55,6 +55,9 @@ describe("작업항목·사람확인 상세 드릴다운", () => {
     expect(panel).not.toHaveTextContent("wi-abc12345");
     await within(panel).findByText("w-9"); // checked_out_by(실 필드) — 상세 쿼리 resolve 후 표시
     expect(within(panel).getByText("3")).toBeInTheDocument(); // attempts(실 필드)
+    // T3: 처리 시작 시각은 formatDateTime(ko-KR)로 — raw ISO 원문을 노출하지 않는다.
+    expect(panel).not.toHaveTextContent("2026-06-15T00:00:00.000Z");
+    expect(panel).toHaveTextContent("26. 6. 15.");
   });
 
   // T2 — run_id 채워진 작업항목 → '원본 실행 보기' → #runTrace?run=<id> 교차 동선.

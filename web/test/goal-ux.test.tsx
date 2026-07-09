@@ -262,7 +262,7 @@ describe("goal UX improvements", () => {
     await waitFor(() => expect(location.hash).toContain("ht=ht-due"));
     fireEvent.click(within(await screen.findByRole("region", { name: "검토 업무 상세" })).getByRole("button", { name: "닫기" }));
 
-    fireEvent.click(within(controls).getByRole("button", { name: "마감 임박 1" }));
+    fireEvent.click(within(controls).getByRole("button", { name: "마감 임박 1건" }));
     await waitFor(() => expect(within(screen.getByRole("table")).getByText("보안문자 입력")).toBeInTheDocument());
     expect(within(screen.getByRole("table")).queryByText("승인 요청")).toBeNull();
 
@@ -401,10 +401,10 @@ describe("goal UX improvements", () => {
 
     fireEvent.change(await screen.findByLabelText("AI 모델"), { target: { value: "gpt-4.1-mini" } });
     expect(screen.queryByLabelText("기능 세부 설정")).toBeNull();
-    fireEvent.change(screen.getByLabelText("컨텍스트 한도"), { target: { value: "16000" } });
+    fireEvent.change(screen.getByLabelText("컨텍스트 한도 (토큰)"), { target: { value: "16000" } });
     fireEvent.change(screen.getByLabelText("입력 토큰 한도"), { target: { value: "2000" } });
     fireEvent.change(screen.getByLabelText("출력 토큰 한도"), { target: { value: "800" } });
-    fireEvent.change(screen.getByLabelText("비용 한도"), { target: { value: "3.5" } });
+    fireEvent.change(screen.getByLabelText("비용 한도 (USD/실행)"), { target: { value: "3.5" } });
     fireEvent.click(screen.getByLabelText("화면 이미지 입력 지원"));
     fireEvent.change(screen.getByLabelText("대체 모델"), { target: { value: "gpt-4o-mini" } });
     fireEvent.click(screen.getByRole("button", { name: "정책 생성" }));
