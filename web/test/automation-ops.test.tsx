@@ -1225,7 +1225,10 @@ describe("automation ops view", () => {
 
     expect(await screen.findByRole("heading", { name: "운영 헬스" })).toBeInTheDocument();
     expect(await screen.findByText("위험")).toBeInTheDocument();
-    expect(await screen.findByText("미연결")).toBeInTheDocument();
+    // T2: 값 자리는 값만("—") — 미연결 상태는 detail 배지("작업 큐 미연결")가 전달한다.
+    const queueTile = (await screen.findByText("큐 대기")).closest(".ops-health-tile") as HTMLElement;
+    expect(queueTile).toHaveTextContent("—");
+    expect(screen.queryByText("미연결")).toBeNull();
     expect(screen.getAllByText("작업 큐 미연결").length).toBeGreaterThanOrEqual(2);
     // 브라우저 세션 타일: 만료 미회수 건수 + 다음 만료 시각(next_expiry_at) 표면화.
     const browserTile = screen.getByText("브라우저 세션").closest(".ops-health-tile") as HTMLElement;

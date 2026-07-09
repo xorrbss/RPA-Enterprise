@@ -91,7 +91,8 @@ export function DashboardView(): JSX.Element {
     refetchInterval: 60_000,
   });
   const opsHealth = useQuery({ queryKey: ["ops-health", "dashboard"], queryFn: () => api.getOpsHealth(), refetchInterval: 5_000 });
-  const opsAlerts = useQuery({ queryKey: ["ops-alerts", "dashboard"], queryFn: () => api.listOpsAlerts({ limit: 3 }), refetchInterval: 5_000 });
+  // T2: 그룹핑(대표+외 N건)이 전체 집합을 봐야 하므로 3건이 아니라 넉넉히 가져온다(표시는 그룹 후 상위 3개).
+  const opsAlerts = useQuery({ queryKey: ["ops-alerts", "dashboard"], queryFn: () => api.listOpsAlerts({ limit: 50 }), refetchInterval: 5_000 });
 
   async function exportPerformanceReportCsv(): Promise<void> {
     setReportExportState("pending");

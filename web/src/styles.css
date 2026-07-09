@@ -360,7 +360,11 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 .ops-signal-panel { overflow: hidden; }
 .ops-signal-body { padding: 14px 16px; display: grid; gap: 12px; }
 .ops-signal-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.ops-signal-facts span { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); padding: 10px 12px; display: grid; gap: 4px; min-width: 0; }
+/* 직계 자식만 타일 — 타일 안의 상태 배지(span.badge)에 타일 스타일이 중복 적용되지 않게 한다(T2). */
+.ops-signal-facts > span { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); padding: 10px 12px; display: grid; gap: 4px; min-width: 0; }
+.ops-signal-facts > span .badge { justify-self: start; }
+.ops-signal-alert-title { display: inline-flex; gap: 6px; align-items: center; min-width: 0; }
+.ops-signal-more { justify-self: end; }
 .ops-signal-facts strong { font-size: 20px; line-height: 1.1; overflow-wrap: anywhere; }
 .ops-signal-facts small { color: var(--muted); font-size: 12px; }
 .ops-signal-alerts { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
