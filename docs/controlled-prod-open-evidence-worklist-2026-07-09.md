@@ -9,12 +9,16 @@ URLs, tokens, credentials, rosters, training documents, provider responses,
 
 ## Current Status
 
-- Latest intended `main` commit must be checked after this worklist is merged.
+- Latest repo-controlled product-code `main` commit checked:
+  `31fac6c3dbc98019bc90a64a1faab78112727635`.
+- `main` `Contract Gates` run `29020806944` concluded `success`; required
+  job URLs are recorded below and in the release evidence docs.
 - The cancelled run `29018141965` for commit `01e36cac07dc5932112a59000630f47bea69669e`
   is not passing evidence. It was superseded by a newer `main` push under the
   `contract-gates-${{ github.ref }}` concurrency group.
-- Record only the latest successful `main` `Contract Gates` run and fresh job
-  URLs in release evidence.
+- Evidence-only documentation commits after this worklist still require their
+  own `main` `Contract Gates` `conclusion=success` check before external
+  release citation.
 - Staging governance packet: `docs/staging-github-governance-evidence-2026-06-26.md`.
 - Controlled-prod packet shape: `docs/controlled-prod-readiness-packet-template.md`.
 - Staging governance does not imply managed runtime deployment or production
@@ -73,7 +77,17 @@ an alias maps to real owner-operated infrastructure.
 
 Before external release review, attach:
 
-- Latest successful `main` `Contract Gates` run URL and required job URLs.
+- Latest successful repo-controlled product-code `main` `Contract Gates` run:
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/29020806944`
+  on commit `31fac6c3dbc98019bc90a64a1faab78112727635`; required jobs:
+  `secret-scan`
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/29020806944/job/86126869836`,
+  `PostgreSQL 15 migration smoke`
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/29020806944/job/86126869821`,
+  `Operations console (web) typecheck, tests, build`
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/29020806944/job/86126869878`,
+  and `App runtime typecheck and tests`
+  `https://github.com/xorrbss/RPA-Enterprise/actions/runs/29020806944/job/86126869909`.
 - Staging governance packet validation result.
 - Owner release approval reference.
 - Rollback confirmation and recovery path.
@@ -120,12 +134,11 @@ Out of scope until owner/provider evidence and new contracts exist:
 
 ## Next Actions
 
-1. Wait for the latest `main` `Contract Gates` run for the final intended
-   commit in this release thread.
-2. If it succeeds, update `release-open-checklist.md` and
-   `product-open-candidate-report.md` with the new run and job URLs.
-3. If it fails, fix the failing gate before updating release evidence.
-4. Ask the owner to provide a real controlled-prod readiness packet using
+1. Repo-controlled product-code CI evidence is recorded for run `29020806944`
+   / commit `31fac6c3dbc98019bc90a64a1faab78112727635`.
+2. After this evidence-only docs update is pushed, confirm that commit's own
+   `main` `Contract Gates` run has `conclusion=success` before external review.
+3. Ask the owner to provide a real controlled-prod readiness packet using
    `docs/controlled-prod-readiness-packet-template.md`.
-5. Validate the owner packet with
+4. Validate the owner packet with
    `npm --prefix codegen run prod-readiness-packet:validate -- --file <owner-packet.md>`.
