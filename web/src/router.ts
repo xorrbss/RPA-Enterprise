@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 
 // 해시 라우터 — HTML 콘솔의 navigate/hashchange 미러.
 export const VIEW_KEYS = [
-  "myWork",
   "create",
   "coePipeline",
   "connectorCatalog",
@@ -28,7 +27,7 @@ export type ViewKey = (typeof VIEW_KEYS)[number];
 // 모든 VIEW_KEYS가 정확히 한 그룹에 속해야 한다(router.test가 강제). nav 순서는 그룹 순서를 따른다.
 export const NAV_GROUPS: readonly { readonly label: string; readonly keys: readonly ViewKey[] }[] = [
   { label: "제작", keys: ["create", "coePipeline", "connectorCatalog", "objectRepository", "scenarioStudio", "playground"] },
-  { label: "운영", keys: ["myWork", "dashboard", "adoptionEvidence", "automationOps", "documentIdp", "runTrace", "workitems", "humanTasks", "auditExplorer"] },
+  { label: "운영", keys: ["dashboard", "adoptionEvidence", "automationOps", "documentIdp", "runTrace", "workitems", "humanTasks", "auditExplorer"] },
   { label: "고급 설정", keys: ["llmGateway", "security", "openGate"] },
 ];
 
@@ -66,6 +65,8 @@ const LEGACY_HASH_REDIRECTS: Record<string, string> = {
   approvalInbox: "humanTasks?source=approvals",
   // R2: 자동화 검사 뷰 은퇴 — 검증은 저장·실행 시 자동 수행(수동 IR 붙여넣기는 콘솔 화면일 이유 없음). 북마크 보존.
   irValidation: "scenarioStudio",
+  // R4: 내 할 일 은퇴 — 확인 큐는 만들기 홈 스트립이, 자동화 목록·실행은 만들기 홈이 흡수. 북마크 보존.
+  myWork: "create",
 };
 
 function legacyPlaygroundTarget(queryPart: string | undefined): string {

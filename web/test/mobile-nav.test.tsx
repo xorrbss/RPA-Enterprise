@@ -85,7 +85,7 @@ function drawerNavItemCount(dialog: HTMLElement): number {
   return dialog.querySelectorAll(".nav-item").length;
 }
 
-const OPERATOR_STANDARD_NAV_ITEM_COUNT = 8; // E1(§2.3): 스튜디오·도입 증빙·감사 이력은 고급 강등
+const OPERATOR_STANDARD_NAV_ITEM_COUNT = 7; // E1 §2.3 + R4(내 할 일 은퇴)
 
 describe("mobile drawer navigation", () => {
   beforeEach(() => {

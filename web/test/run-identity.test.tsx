@@ -102,7 +102,7 @@ describe("run identity (S1)", () => {
     expect(screen.getByText("#bbbb2222")).toBeInTheDocument();
   });
 
-  test("내 할 일: '실행 기록 보기'가 그 자동화 필터를 실은 딥링크로 이동한다", async () => {
+  test("레거시 #myWork 해시는 만들기 홈으로 리다이렉트된다 (R4 은퇴·북마크 보존)", async () => {
     location.hash = "#myWork";
     renderApp(
       fakeClient({
@@ -115,11 +115,8 @@ describe("run identity (S1)", () => {
       }),
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "실행 기록 보기 →" }));
-    await waitFor(() => {
-      expect(location.hash).toContain("runTrace");
-      expect(location.hash).toContain(`scenario=${SCEN}`);
-    });
+    await waitFor(() => expect(location.hash).toBe("#create"));
+    expect(await screen.findByRole("heading", { level: 1, name: "만들기 콘솔" })).toBeInTheDocument();
   });
 
   test("실행 상세: 자동화 이름 표시 + 원본 입력값 프리필 '수정 입력으로 재실행'(타입 보존 강제)", async () => {

@@ -381,7 +381,7 @@ describe("UX quick-wins (A)", () => {
     expect(within(nav).getByText("자동화")).toBeInTheDocument();
     expect(within(nav).getByText("현황")).toBeInTheDocument();
     expect(within(nav).getByText("설정·점검")).toBeInTheDocument();
-    expect(nav.querySelectorAll(".nav-item")).toHaveLength(13); // E1: 전 역할 standard = 13(스튜디오·도입 증빙·감사 이력은 고급 강등)
+    expect(nav.querySelectorAll(".nav-item")).toHaveLength(12); // E1 §2.3 + R4(내 할 일 은퇴)
     expect(within(nav).queryByRole("button", { name: "도입 증빙" })).toBeNull(); // E1: 고급 모드 소속
     expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
   });

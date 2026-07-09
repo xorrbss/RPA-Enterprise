@@ -4,7 +4,6 @@ import type { ViewKey } from "../router";
 // helpText — 도입 담당자용 '?' 맥락 도움말. 각 화면이 '언제·무엇을 위해' 쓰는지 운영자 문장으로 설명한다.
 //            (각 view 컴포넌트 주석의 화면 의도를 옮긴 것 — 없는 기능은 만들지 않는다. 없으면 subtitle 폴백)
 export const VIEW_META: Record<ViewKey, { title: string; subtitle: string; icon: string; helpText?: string }> = {
-  myWork: { title: "내 할 일", subtitle: "지금 내가 확인할 업무와 내 자동화 현황을 한 곳에서", icon: "Inbox", helpText: "로그인하면 먼저 보이는 화면입니다. 내가 확인해야 할 사람-확인 업무와, 내가 등록한 자동화의 실행 현황을 모아 봅니다." },
   create: { title: "만들기 콘솔", subtitle: "말로 설명하고 준비를 확인한 뒤 초안 생성과 테스트까지 이어가기", icon: "Video", helpText: "첫 자동화를 만들 때 쓰는 기본 경로입니다. 업무를 말로 설명하고, 사이트·세션 준비 상태를 확인한 뒤 초안을 만들고 테스트로 이어갑니다." },
   coePipeline: { title: "업무 발굴/ROI", subtitle: "자동화 후보, 승인 단계, 예상 절감효과를 CoE 관점에서 관리", icon: "Lightbulb", helpText: "자동화로 만들 업무를 발굴하고, 승인 단계를 거쳐 예상 절감효과(ROI)를 비교·관리하는 화면입니다." },
   connectorCatalog: { title: "커넥터/템플릿", subtitle: "브라우저 RPA 중심 재사용 커넥터와 업무 템플릿 후보를 검토", icon: "Plug", helpText: "이미 만들어 둔 재사용 커넥터와 업무 템플릿을 둘러보고, 새 자동화의 출발점으로 고를 때 사용합니다." },
