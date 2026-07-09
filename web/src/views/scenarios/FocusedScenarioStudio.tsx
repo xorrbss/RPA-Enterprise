@@ -4,6 +4,7 @@ import { ClipboardCheck, FileCheck2, ListChecks, PlaySquare, ScrollText, Setting
 import { navigate } from "../../router";
 import { formatDateTime } from "../../util/time";
 import { RunModeBadge, StatusBadge } from "../../components/badges";
+import { assessTestRunReadiness, runStatusLabel } from "../../components/readiness";
 import type { RunItem, ScenarioItem } from "../../api/types";
 
 type FocusTab = "plan" | "test" | "links" | "activity" | "versions" | "settings";
@@ -80,6 +81,8 @@ export function FocusedScenarioStudio({
   const latestRunTime = formatDateTime(latestRun?.as_of ?? latestRun?.updated_at);
   const hasEvidencePath = latestRun !== null && canReadEvidence;
   const runCompleted = latestRun?.status === "completed";
+  const testReadiness = assessTestRunReadiness(recentRuns);
+  const testBadgeLabel = testReadiness.status === "ready" ? "성공 테스트" : testReadiness.status === "blocked" ? "재확인 필요" : testReadiness.status === "checking" ? "확인 중" : "확인 필요";
 
   return (
     <section className="panel focused-studio" aria-label="집중 자동화 스튜디오">
@@ -134,17 +137,17 @@ export function FocusedScenarioStudio({
           {activeTab === "plan" && (
             <ol className="focus-step-list">
               <li>
-                <span className="badge green">준비됨</span>
+                <span className="badge blue">초안 있음</span>
                 <strong>현재 초안 v{scenario.version}</strong>
                 <p className="subtle">세부 IR은 기본 화면 뒤에 두고, 이 화면에서는 업무 순서와 다음 행동만 확인합니다.</p>
               </li>
               <li>
-                <span className={`badge ${latestRun === null ? "amber" : "green"}`}>{latestRun === null ? "확인 필요" : "기록 있음"}</span>
+                <span className={`badge ${testReadiness.tone}`}>{testBadgeLabel}</span>
                 <strong>테스트 실행</strong>
                 <p className="subtle">
                   {latestRun === null
                     ? "아직 연결된 최근 테스트 실행이 없습니다. 먼저 테스트를 돌려 결과를 남기세요."
-                    : `최근 실행은 ${latestRunTime} 기준으로 ${latestRun.status} 상태입니다.`}
+                    : `최근 실행은 ${latestRunTime} 기준으로 ${runStatusLabel(latestRun.status)} 상태입니다.`}
                 </p>
               </li>
               <li>

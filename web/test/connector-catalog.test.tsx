@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { RenderResult } from "@testing-library/react";
@@ -23,6 +23,17 @@ function renderApp(client: ApiClient = fakeClient()): RenderResult {
       </ApiClientProvider>
     </QueryClientProvider>,
   );
+}
+
+const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+
+function mockScrollIntoView() {
+  const scrollIntoView = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: scrollIntoView,
+  });
+  return scrollIntoView;
 }
 
 function connector(id: string, name: string): ConnectorCatalogItem {
@@ -73,6 +84,27 @@ describe("connector catalog view", () => {
   beforeEach(() => {
     location.hash = "#connectorCatalog";
     localStorage.setItem("rpa.token", jwt(["viewer", "operator", "reviewer", "approver", "admin"]));
+  });
+
+  afterEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: originalScrollIntoView,
+    });
+  });
+
+  test.each([
+    ["#connectorCatalog?focus=templates", "템플릿 목록"],
+    ["#connectorCatalog?focus=connectors", "커넥터 목록"],
+  ])("%s focuses and scrolls the requested catalog section", async (hash, sectionLabel) => {
+    location.hash = hash;
+    const scrollIntoView = mockScrollIntoView();
+    renderApp();
+
+    const section = await screen.findByRole("region", { name: sectionLabel });
+
+    await waitFor(() => expect(section).toHaveFocus());
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
   });
 
   test("lists connector and template metadata without secret values", async () => {

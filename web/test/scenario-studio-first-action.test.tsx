@@ -63,6 +63,15 @@ describe("scenario-studio-first-action", () => {
     await waitFor(() => expect(location.hash).toBe("#connectorCatalog?focus=templates"));
   });
 
+  test("creator ai deep link focuses the natural-language request", async () => {
+    location.hash = "#scenarioStudio?creator=ai";
+    renderApp();
+
+    const request = await screen.findByLabelText("자연어 요청");
+
+    await waitFor(() => expect(request).toHaveFocus());
+  });
+
   test("setup corridor surfaces the first missing preparation step without marking unknown evidence green", async () => {
     renderApp(
       fakeClient({

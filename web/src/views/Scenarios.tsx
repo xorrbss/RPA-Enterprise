@@ -36,6 +36,7 @@ export function ScenariosView(): JSX.Element {
   const [releasesFor, setReleasesFor] = useState<ScenarioItem | null>(null);
   const recorderRef = useRef<HTMLDivElement | null>(null);
   const testWorkbenchRef = useRef<HTMLDivElement | null>(null);
+  const aiCreatorFocusConsumedRef = useRef(false);
   const focusParam = useHashParam("focus");
   const modeParam = useHashParam("mode");
   const selectedScenarioParam = useHashParam("scenario");
@@ -88,6 +89,16 @@ export function ScenariosView(): JSX.Element {
   useEffect(() => {
     if (focusParam === "test") testWorkbenchRef.current?.scrollIntoView?.({ block: "start" });
   }, [focusParam]);
+  useEffect(() => {
+    if (creatorParam !== "ai") {
+      aiCreatorFocusConsumedRef.current = false;
+      return;
+    }
+    if (aiCreatorFocusConsumedRef.current || inFocusMode || !can("scenario.create")) return;
+    aiCreatorFocusConsumedRef.current = true;
+    const handle = window.setTimeout(focusNaturalLanguageInput, 0);
+    return () => window.clearTimeout(handle);
+  }, [can, creatorParam, inFocusMode]);
 
   function focusNaturalLanguageInput(): void {
     const target = document.getElementById("scenario-natural-language-request");

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -24,10 +24,39 @@ function renderApp(client: ApiClient = fakeClient()): void {
   );
 }
 
+const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+
+function mockScrollIntoView() {
+  const scrollIntoView = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: scrollIntoView,
+  });
+  return scrollIntoView;
+}
+
 describe("document IDP view", () => {
   beforeEach(() => {
     location.hash = "#documentIdp";
     localStorage.setItem("rpa.token", jwt(["viewer", "operator", "reviewer", "approver", "admin"]));
+  });
+
+  afterEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: originalScrollIntoView,
+    });
+  });
+
+  test("scenario-start source deep link focuses and scrolls the document automation start", async () => {
+    location.hash = "#documentIdp?source=scenario-start";
+    const scrollIntoView = mockScrollIntoView();
+    renderApp();
+
+    const start = await screen.findByRole("region", { name: "문서 자동화 시작" });
+
+    await waitFor(() => expect(start).toHaveFocus());
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
   });
 
   test("shows document jobs and extraction detail without raw technical IDs", async () => {

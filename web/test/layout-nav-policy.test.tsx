@@ -49,12 +49,13 @@ describe("layout nav policy", () => {
     }
   });
 
-  test("operator quick start menu exposes creation, test, schedule, and setup starts", () => {
+  test("operator global create menu exposes creation, template, test, schedule, and setup starts", () => {
     renderApp();
-    fireEvent.click(screen.getByRole("button", { name: /빠른 시작/ }));
+    fireEvent.click(screen.getByRole("button", { name: /새로 만들기/ }));
 
-    const menu = screen.getByRole("menu", { name: "빠른 시작" });
+    const menu = screen.getByRole("menu", { name: "새로 만들기" });
     expect(within(menu).getByRole("menuitem", { name: /자동화 만들기/ })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: /템플릿에서 시작/ })).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: /테스트 실행/ })).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: /운영 예약/ })).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: /사이트\/세션 등록/ })).toBeInTheDocument();
@@ -63,16 +64,45 @@ describe("layout nav policy", () => {
     fireEvent.click(within(menu).getByRole("menuitem", { name: /테스트 실행/ }));
 
     expect(location.hash).toBe("#scenarioStudio?focus=test");
-    expect(screen.queryByRole("menu", { name: "빠른 시작" })).toBeNull();
+    expect(screen.queryByRole("menu", { name: "새로 만들기" })).toBeNull();
+  });
+
+  test("global create schedule item deep links to the schedule section", () => {
+    renderApp();
+    fireEvent.click(screen.getByRole("button", { name: /새로 만들기/ }));
+
+    fireEvent.click(within(screen.getByRole("menu", { name: "새로 만들기" })).getByRole("menuitem", { name: /운영 예약/ }));
+
+    expect(location.hash).toBe("#automationOps?section=schedule");
+    expect(screen.queryByRole("menu", { name: "새로 만들기" })).toBeNull();
+  });
+
+  test("global create menu closes on Escape with focus restored and outside clicks", () => {
+    renderApp();
+    const trigger = screen.getByRole("button", { name: /새로 만들기/ });
+
+    trigger.focus();
+    fireEvent.click(trigger);
+    fireEvent.keyDown(screen.getByRole("menu", { name: "새로 만들기" }), { key: "Escape" });
+
+    expect(screen.queryByRole("menu", { name: "새로 만들기" })).toBeNull();
+    expect(trigger).toHaveFocus();
+
+    fireEvent.click(trigger);
+    expect(screen.getByRole("menu", { name: "새로 만들기" })).toBeInTheDocument();
+    fireEvent.mouseDown(document.body);
+
+    expect(screen.queryByRole("menu", { name: "새로 만들기" })).toBeNull();
   });
 
   test("viewer quick start does not expose write actions", () => {
     localStorage.setItem("rpa.token", jwt(["viewer"]));
     renderApp();
-    fireEvent.click(screen.getByRole("button", { name: /빠른 시작/ }));
+    fireEvent.click(screen.getByRole("button", { name: /새로 만들기/ }));
 
-    const menu = screen.getByRole("menu", { name: "빠른 시작" });
+    const menu = screen.getByRole("menu", { name: "새로 만들기" });
     expect(within(menu).queryByRole("menuitem", { name: /자동화 만들기/ })).toBeNull();
+    expect(within(menu).queryByRole("menuitem", { name: /템플릿에서 시작/ })).toBeNull();
     expect(within(menu).queryByRole("menuitem", { name: /테스트 실행/ })).toBeNull();
     expect(within(menu).queryByRole("menuitem", { name: /운영 예약/ })).toBeNull();
     expect(within(menu).queryByRole("menuitem", { name: /사이트\/세션 등록/ })).toBeNull();

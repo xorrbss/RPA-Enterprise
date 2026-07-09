@@ -267,6 +267,7 @@ export function SecurityView(): JSX.Element {
   const focusSiteId = useHashParam("site");
   const focusPrincipalId = useHashParam("principal");
   const focus = useHashParam("focus");
+  const intent = useHashParam("intent");
   const focusCredential = useHashParam("credential");
   const focusCredentialSite = useHashParam("credential_site");
   const activeSection = resolveSecuritySection({
@@ -339,7 +340,7 @@ export function SecurityView(): JSX.Element {
               captureSession={(siteId, key) => api.captureSession(siteId, key)}
             />
           )}
-          {can("site.create") ? <SiteCreateForm /> : <SectionAccessNotice title="사이트 등록" />}
+          {can("site.create") ? <SiteCreateForm openSignal={intent === "site-create" ? 1 : 0} /> : <SectionAccessNotice title="사이트 등록" />}
           <QueryPanel<SiteItem>
             title="사이트 접근 정책"
             query={lv.query}

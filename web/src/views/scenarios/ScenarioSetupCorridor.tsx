@@ -1,5 +1,13 @@
 import { navigate } from "../../router";
 import type { RunItem, ScenarioItem, SiteItem } from "../../api/types";
+import {
+  READINESS_LABELS,
+  assessLoginSessionReadiness,
+  assessSiteCollectionReadiness,
+  assessTestRunReadiness,
+  readinessTone,
+  type ReadinessTone,
+} from "../../components/readiness";
 
 type CorridorQueryState = "checking" | "error" | "ready";
 type CorridorStatus = "ready" | "needs" | "blocked" | "checking";
@@ -25,29 +33,11 @@ export function queryState(query: { readonly isLoading: boolean; readonly isErro
 }
 
 function corridorStatusLabel(status: CorridorStatus): string {
-  switch (status) {
-    case "ready":
-      return "준비됨";
-    case "needs":
-      return "확인 필요";
-    case "blocked":
-      return "차단";
-    case "checking":
-      return "확인 중";
-  }
+  return READINESS_LABELS[status];
 }
 
-function corridorTone(status: CorridorStatus): "green" | "amber" | "red" | "blue" {
-  switch (status) {
-    case "ready":
-      return "green";
-    case "blocked":
-      return "red";
-    case "checking":
-      return "blue";
-    case "needs":
-      return "amber";
-  }
+function corridorTone(status: CorridorStatus): ReadinessTone {
+  return readinessTone(status);
 }
 
 function siteStep(
@@ -68,16 +58,16 @@ function siteStep(
       action: canCreateSite || canUpdateSite ? { label: "사이트 설정 확인", run: () => navigate("security", { section: "sites" }) } : undefined,
     };
   }
-  const approved = sites.filter((site) => site.approval_status === "approved");
-  if (approved.length > 0) {
-    return { key: "site", label: "사이트", status: "ready", detail: `${approved.length}개 승인된 실행 대상이 있습니다.` };
+  const decision = assessSiteCollectionReadiness(sites);
+  if (decision.status === "ready") {
+    return { key: "site", label: "사이트", status: "ready", detail: decision.detail };
   }
-  if (sites.length > 0) {
+  if (decision.status === "blocked") {
     return {
       key: "site",
       label: "사이트",
       status: "blocked",
-      detail: "등록된 사이트가 있지만 아직 승인된 실행 대상은 없습니다.",
+      detail: decision.detail,
       action: canUpdateSite ? { label: "사이트 승인 상태 보기", run: () => navigate("security", { section: "sites" }) } : undefined,
     };
   }
@@ -85,7 +75,7 @@ function siteStep(
     key: "site",
     label: "사이트",
     status: "needs",
-    detail: "첫 자동화를 실행할 대상 사이트를 먼저 등록하세요.",
+    detail: decision.detail,
     action: canCreateSite ? { label: "사이트 등록", run: () => navigate("security", { section: "sites", intent: "site-create" }), primary: true } : undefined,
   };
 }
@@ -108,22 +98,21 @@ function sessionStep(
       action: canCaptureSession ? { label: "세션 설정 확인", run: () => navigate("security", { section: "sites" }) } : undefined,
     };
   }
-  const loginSites = sites.filter((site) => site.approval_status === "approved" && site.login_capable === true);
-  if (loginSites.length === 0) {
-    return { key: "session", label: "로그인 세션", status: "needs", detail: "로그인 대상 사이트가 정해지면 세션 등록 여부를 확인합니다." };
+  const decision = assessLoginSessionReadiness(sites);
+  if (decision.status === "deferred") {
+    return { key: "session", label: "로그인 세션", status: "needs", detail: decision.detail };
   }
-  const ready = loginSites.filter((site) => site.session_ready === true);
-  if (ready.length > 0) {
-    return { key: "session", label: "로그인 세션", status: "ready", detail: `${ready.length}개 로그인 대상의 세션이 준비됐습니다.` };
+  if (decision.status === "ready") {
+    return { key: "session", label: "로그인 세션", status: "ready", detail: decision.detail };
   }
   return {
     key: "session",
     label: "로그인 세션",
     status: "needs",
-    detail: "로그인이 필요한 사이트가 있지만 저장된 세션 증거가 없습니다.",
+    detail: decision.detail,
     action:
-      canCaptureSession && firstMissingSession !== null
-        ? { label: "세션 등록", run: () => navigate("security", { section: "sites", site: firstMissingSession.site_profile_id }), primary: true }
+      canCaptureSession && (decision.siteId !== undefined || firstMissingSession !== null)
+        ? { label: "세션 등록", run: () => navigate("security", { section: "sites", site: decision.siteId ?? firstMissingSession!.site_profile_id }), primary: true }
         : undefined,
   };
 }
@@ -176,9 +165,21 @@ function testStep(
       action: canCreateRun ? { label: "테스트 화면", run: () => navigate("scenarioStudio", { focus: "test" }) } : undefined,
     };
   }
-  const testRuns = runs.filter((run) => run.run_mode === "test");
-  if (testRuns.length > 0) {
-    return { key: "test", label: "테스트 실행", status: "ready", detail: `${testRuns.length}개 테스트 실행 이력이 있습니다.` };
+  const decision = assessTestRunReadiness(runs);
+  if (decision.status === "ready") {
+    return { key: "test", label: "테스트 실행", status: "ready", detail: decision.detail };
+  }
+  if (decision.status === "blocked" || decision.status === "checking") {
+    return {
+      key: "test",
+      label: "테스트 실행",
+      status: decision.status,
+      detail: decision.detail,
+      action:
+        canCreateRun && latestScenario !== undefined
+          ? { label: "계획 확인으로 이동", run: () => navigate("scenarioStudio", { scenario: latestScenario.scenario_id, focus: "test" }), primary: decision.status === "blocked" }
+          : undefined,
+    };
   }
   return {
     key: "test",

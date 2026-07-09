@@ -46,14 +46,14 @@ function installObjectUrlMock(): void {
   });
 }
 
-// 실행 상세 패널을 열어 도착 배너(RunDetail.status 파생)를 마운트.
+// 실행 상세 패널을 열어 단일 상태 패널(RunDetail.status 파생)을 마운트.
 async function openDetail(): Promise<void> {
   location.hash = "#runTrace";
   (await screen.findByRole("button", { name: "실행 추적 상세 보기" })).click();
 }
 
-// F3 — 터미널 '도착 순간' 배너. 도착 판정=RunDetail.status(실 필드), 사유(reason)는 만들지 않음.
-describe("실행 도착 배너 — 터미널 상태(F3)", () => {
+// F3 — 터미널 '도착 순간'은 실행 상세 단일 상태 패널에서 표시한다.
+describe("실행 상세 상태 패널 — 터미널 상태(F3)", () => {
   beforeEach(() => {
     location.hash = "";
     localStorage.setItem("rpa.token", "test-token");
@@ -74,7 +74,7 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     await waitFor(() => expect(document.activeElement).toBe(region));
   });
 
-  test("completed → .arrival-banner.green + '완료' 라벨", async () => {
+  test("completed → 단일 상태 패널 green + '완료' 라벨", async () => {
     renderApp(
       fakeClient({
         getRun: async (id) => ({
@@ -87,14 +87,10 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
       }),
     );
     await openDetail();
-    const banner = await waitFor(() => {
-      const el = document.querySelector<HTMLElement>(".arrival-banner");
-      expect(el).not.toBeNull();
-      return el!;
-    });
-    expect(banner.getAttribute("role")).toBe("status");
-    expect(banner.className).toContain("green");
-    expect(banner.textContent).toContain("완료"); // StatusBadge 라벨
+    const panel = await screen.findByRole("region", { name: "테스트 실행 상태" });
+    expect(panel.className).toContain("green");
+    expect(panel.textContent).toContain("완료"); // StatusBadge 라벨
+    expect(document.querySelector(".arrival-banner")).toBeNull();
   });
 
   test("completed test run → primary CTA로 실행 결과·증빙 영역에 포커스한다", async () => {
@@ -315,7 +311,7 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     );
   });
 
-  test("cancelled → .arrival-banner.muted + '취소됨'(abort→cancelled 어휘)", async () => {
+  test("cancelled → 단일 상태 패널 muted + '취소됨'(abort→cancelled 어휘)", async () => {
     renderApp(
       fakeClient({
         getRun: async (id) => ({
@@ -328,16 +324,14 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
       }),
     );
     await openDetail();
-    const banner = await waitFor(() => {
-      const el = document.querySelector<HTMLElement>(".arrival-banner");
-      expect(el).not.toBeNull();
-      return el!;
-    });
-    expect(banner.className).toContain("muted");
-    expect(banner.textContent).toContain("취소됨");
+    const panel = await screen.findByRole("region", { name: "테스트 실행 상태" });
+    expect(panel.className).toContain("muted");
+    expect(panel.textContent).toContain("취소됨");
+    expect(panel.textContent).toContain("취소된 실행");
+    expect(panel.textContent).not.toContain("실행 상태 확인 필요");
   });
 
-  test("failed_system → .arrival-banner.red + 실패 라벨 + 단계 트레이스 유도 문구", async () => {
+  test("failed_system → 단일 상태 패널 red + 실패 라벨 + 단계 트레이스 유도 문구", async () => {
     renderApp(
       fakeClient({
         getRun: async (id) => ({
@@ -350,18 +344,14 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
       }),
     );
     await openDetail();
-    const banner = await waitFor(() => {
-      const el = document.querySelector<HTMLElement>(".arrival-banner");
-      expect(el).not.toBeNull();
-      return el!;
-    });
-    expect(banner.className).toContain("red");
-    expect(banner.textContent).toContain("시스템 실패");
-    expect(banner.textContent).toContain("시도 3회"); // attempts>1 표기(실 필드)
-    expect(banner.textContent).toContain("단계 트레이스"); // 구체 사유 대신 유도(reason 창작 금지)
+    const panel = await screen.findByRole("region", { name: "테스트 실행 상태" });
+    expect(panel.className).toContain("red");
+    expect(panel.textContent).toContain("시스템 실패");
+    expect(panel.textContent).toContain("시도 3회"); // attempts>1 표기(실 필드)
+    expect(panel.textContent).toContain("단계 트레이스"); // 구체 사유 대신 유도(reason 창작 금지)
   });
 
-  test("failed_system + failure_reason → 코드와 메시지를 상세 배너에 표시", async () => {
+  test("failed_system + 미매핑 failure_reason → generic + 진단 코드와 메시지를 상태 패널에 표시", async () => {
     renderApp(
       fakeClient({
         getRun: async (id) => ({
@@ -378,13 +368,49 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
       }),
     );
     await openDetail();
-    const banner = await waitFor(() => {
-      const el = document.querySelector<HTMLElement>(".arrival-banner");
-      expect(el).not.toBeNull();
-      return el!;
-    });
-    expect(banner.textContent).toContain("RUN_LOOP_FAILED");
-    expect(banner.textContent).toContain("site profile not found");
+    const panel = await screen.findByRole("region", { name: "테스트 실행 상태" });
+    expect(panel.textContent).toContain("오류 원인 확인 필요");
+    expect(panel.textContent).toContain("진단 코드 RUN_LOOP_FAILED");
+    expect(panel.textContent).toContain("site profile not found");
+    expect(within(panel).queryByText("RUN_LOOP_FAILED")).toBeNull();
+  });
+
+  test("failed_system + 미매핑 단계 예외 → 최근 단계에 generic + 진단 코드로 표시", async () => {
+    renderApp(
+      fakeClient({
+        getRun: async (id) => ({
+          run_id: id,
+          status: "failed_system",
+          worker_id: "w1",
+          attempts: 1,
+          as_of: null,
+        }),
+        listRunSteps: async () => ({
+          items: [
+            {
+              step_id: "s-extract",
+              node_id: "extract",
+              attempt: 1,
+              action: "extract",
+              status: "failed_system",
+              cache_mode: "bypass",
+              artifact_ids: [],
+              stagehand_calls: [],
+              started_at: null,
+              ended_at: null,
+              duration_ms: 400,
+              exception: { class: "VendorError", code: "VENDOR_EDGE_CASE" },
+            },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+    await openDetail();
+    const panel = await screen.findByRole("region", { name: "테스트 실행 상태" });
+    expect(await within(panel).findByText(/진단 코드 VENDOR_EDGE_CASE/)).toBeInTheDocument();
+    expect(panel.textContent).toContain("오류 원인 확인 필요");
+    expect(within(panel).queryByText("VENDOR_EDGE_CASE")).toBeNull();
   });
 
   test("failed_system + 페이지 열기 실패 → primary CTA로 사이트·세션 설정으로 이동한다", async () => {
@@ -1641,14 +1667,14 @@ describe("실행 취소 즉시 피드백", () => {
 });
 
 // U3-1: 계약 operatorAction 한국어 미러(errorOperatorActionLabel)가 정의·테스트만 있고 렌더 0곳이던 갭 —
-// 실패 배너가 원인+권장 조치를 함께 안내하는지, 미매핑 코드는 raw 조치 줄을 만들지 않는지 가드.
-describe("실패 배너 권장 조치 (U3-1)", () => {
+// 실패 상태 패널이 원인+권장 조치를 함께 안내하는지, 미매핑 코드는 raw 조치 줄을 만들지 않는지 가드.
+describe("실패 상태 패널 권장 조치 (U3-1)", () => {
   beforeEach(() => {
     location.hash = "#runTrace";
     localStorage.setItem("rpa.token", jwt(["viewer", "operator"]));
   });
 
-  test("매핑된 실패 코드는 배너에 권장 조치를 함께 그린다", async () => {
+  test("매핑된 실패 코드는 상태 패널에 권장 조치를 함께 그린다", async () => {
     renderApp(
       fakeClient({
         getRun: async (id) => ({
@@ -1662,16 +1688,12 @@ describe("실패 배너 권장 조치 (U3-1)", () => {
       }),
     );
     await openDetail();
-    const banner = await waitFor(() => {
-      const el = document.querySelector<HTMLElement>(".arrival-banner");
-      expect(el).not.toBeNull();
-      return el!;
-    });
-    expect(banner.textContent).toContain("권장 조치:");
-    expect(banner.textContent).toContain("차단율");
+    const panel = await screen.findByRole("region", { name: "테스트 실행 상태" });
+    expect(panel.textContent).toContain("권장 조치:");
+    expect(panel.textContent).toContain("차단율");
   });
 
-  test("미매핑 코드는 권장 조치 줄을 만들지 않는다(raw 폴백 미노출)", async () => {
+  test("미매핑 코드는 generic 진단 코드로 보이고 권장 조치 줄을 만들지 않는다", async () => {
     renderApp(
       fakeClient({
         getRun: async (id) => ({
@@ -1685,11 +1707,9 @@ describe("실패 배너 권장 조치 (U3-1)", () => {
       }),
     );
     await openDetail();
-    const banner = await waitFor(() => {
-      const el = document.querySelector<HTMLElement>(".arrival-banner");
-      expect(el).not.toBeNull();
-      return el!;
-    });
-    expect(banner.textContent).not.toContain("권장 조치:");
+    const panel = await screen.findByRole("region", { name: "테스트 실행 상태" });
+    expect(panel.textContent).toContain("오류 원인 확인 필요");
+    expect(panel.textContent).toContain("진단 코드 RUN_LOOP_FAILED");
+    expect(panel.textContent).not.toContain("권장 조치:");
   });
 });

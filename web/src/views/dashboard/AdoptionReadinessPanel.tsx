@@ -1,5 +1,13 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 
+import {
+  READINESS_LABELS,
+  assessLoginSessionReadiness,
+  assessSiteCollectionReadiness,
+  assessTestRunReadiness,
+  readinessTone,
+  type ReadinessStatus,
+} from "../../components/readiness";
 import { desktopStateForError } from "../../components/states";
 import { navigate, type ViewKey } from "../../router";
 import type {
@@ -13,7 +21,7 @@ import type {
   SiteItem,
 } from "../../api/types";
 
-type GateStatus = "ready" | "needs" | "blocked" | "deferred";
+type GateStatus = Exclude<ReadinessStatus, "checking">;
 
 interface ReadinessAction {
   readonly label: string;
@@ -31,17 +39,19 @@ interface ReadinessGate {
 }
 
 const GATE_LABELS: Readonly<Record<GateStatus, string>> = {
-  ready: "준비됨",
-  needs: "확인 필요",
-  blocked: "차단",
-  deferred: "보류",
+  ready: READINESS_LABELS.ready,
+  needs: READINESS_LABELS.needs,
+  blocked: READINESS_LABELS.blocked,
+  deferred: READINESS_LABELS.deferred,
 };
 
 function gateTone(status: GateStatus): "green" | "amber" | "red" | "muted" {
-  if (status === "ready") return "green";
-  if (status === "blocked") return "red";
-  if (status === "needs") return "amber";
-  return "muted";
+  const tone = readinessTone(status);
+  return tone === "blue" ? "muted" : tone;
+}
+
+function gateStatus(status: ReadinessStatus): GateStatus {
+  return status === "checking" ? "deferred" : status;
 }
 
 function queryPendingDetail(query: { readonly isFetching: boolean; readonly data: unknown }): string {
@@ -83,8 +93,9 @@ function buildReadinessGates(args: {
   const auth = args.auth.data;
   const sites = args.sites.data?.items ?? [];
   const scenarios = args.scenarios.data?.items ?? [];
-  const loginSites = sites.filter((site) => site.login_capable === true);
-  const missingSession = loginSites.find((site) => site.session_ready !== true);
+  const siteDecision = assessSiteCollectionReadiness(sites);
+  const sessionDecision = assessLoginSessionReadiness(sites);
+  const testRunDecision = assessTestRunReadiness(args.recent.data?.items ?? []);
   const roiEvidenceCount = args.performance.data?.summary.roi_actuals.evidence_count ?? 0;
 
   gates.push(
@@ -124,15 +135,18 @@ function buildReadinessGates(args: {
       ? { key: "sites", label: "사이트", status: "needs", detail: queryErrorDetail(args.sites.error), action: { label: "사이트 등록", view: "security", params: { section: "sites" }, requiredAction: "site.create" } }
       : args.sites.data === undefined
         ? { key: "sites", label: "사이트", status: "deferred", detail: queryPendingDetail(args.sites) }
-        : sites.length > 0
-          ? { key: "sites", label: "사이트", status: "ready", detail: `${sites.length}개 사이트가 등록되어 있습니다.` }
-          : {
-              key: "sites",
-              label: "사이트",
-              status: "needs",
-              detail: "파일럿 대상 사이트를 등록해야 합니다.",
-              action: { label: "사이트 등록", view: "security", params: { section: "sites" }, requiredAction: "site.create" },
-            },
+        : {
+            key: "sites",
+            label: "사이트",
+            status: gateStatus(siteDecision.status),
+            detail: siteDecision.detail,
+            action:
+              siteDecision.status === "ready"
+                ? undefined
+                : siteDecision.status === "blocked"
+                  ? { label: "사이트 승인 상태 보기", view: "security", params: { section: "sites" }, requiredAction: "site.approve" }
+                  : { label: "사이트 등록", view: "security", params: { section: "sites", intent: "site-create" }, requiredAction: "site.create" },
+          },
   );
 
   gates.push(
@@ -140,19 +154,18 @@ function buildReadinessGates(args: {
       ? { key: "sessions", label: "브라우저 세션", status: "needs", detail: queryErrorDetail(args.sites.error), action: { label: "세션 확인", view: "security", params: { section: "sites" }, requiredAction: "session.capture" } }
       : args.sites.data === undefined
         ? { key: "sessions", label: "브라우저 세션", status: "deferred", detail: queryPendingDetail(args.sites) }
-        : sites.length === 0
-          ? { key: "sessions", label: "브라우저 세션", status: "deferred", detail: "사이트 등록 후 확인합니다.", action: { label: "사이트 등록", view: "security", params: { section: "sites" }, requiredAction: "site.create" } }
-          : loginSites.length === 0
-            ? { key: "sessions", label: "브라우저 세션", status: "deferred", detail: "로그인 세션이 필요한 사이트가 아직 없습니다." }
-            : missingSession === undefined
-              ? { key: "sessions", label: "브라우저 세션", status: "ready", detail: "로그인 필요 사이트의 세션이 준비되어 있습니다." }
-              : {
-                  key: "sessions",
-                  label: "브라우저 세션",
-                  status: "needs",
-                  detail: `${missingSession.name ?? "대상 사이트"} 세션 등록이 필요합니다.`,
-                  action: { label: "세션 등록", view: "security", params: { section: "sites", site: missingSession.site_profile_id }, requiredAction: "session.capture" },
-                },
+        : {
+            key: "sessions",
+            label: "브라우저 세션",
+            status: gateStatus(sessionDecision.status),
+            detail: sessionDecision.detail,
+            action:
+              sessionDecision.status === "needs" && sessionDecision.siteId !== undefined
+                ? { label: "세션 등록", view: "security", params: { section: "sites", site: sessionDecision.siteId }, requiredAction: "session.capture" }
+                : sites.length === 0
+                  ? { label: "사이트 등록", view: "security", params: { section: "sites", intent: "site-create" }, requiredAction: "site.create" }
+                  : undefined,
+          },
   );
 
   gates.push(
@@ -172,19 +185,20 @@ function buildReadinessGates(args: {
   );
 
   gates.push(
-    args.summary.isError
-      ? { key: "test-run", label: "테스트 실행", status: "needs", detail: queryErrorDetail(args.summary.error), action: { label: "테스트 실행", view: "scenarioStudio", params: { focus: "test" }, requiredAction: "run.create" } }
-      : args.summary.data === undefined
-        ? { key: "test-run", label: "테스트 실행", status: "deferred", detail: queryPendingDetail(args.summary) }
-        : args.summary.data.total > 0
-          ? { key: "test-run", label: "테스트 실행", status: "ready", detail: `${args.summary.data.total}건의 실행 기록이 있습니다.` }
-          : {
-              key: "test-run",
-              label: "테스트 실행",
-              status: "deferred",
-              detail: "자동화 초안 생성 후 테스트 실행을 시작합니다.",
-              action: { label: "테스트 실행", view: "scenarioStudio", params: { focus: "test" }, requiredAction: "run.create" },
-            },
+    args.recent.isError
+      ? { key: "test-run", label: "테스트 실행", status: "needs", detail: queryErrorDetail(args.recent.error), action: { label: "테스트 실행", view: "scenarioStudio", params: { focus: "test" }, requiredAction: "run.create" } }
+      : args.recent.data === undefined
+        ? { key: "test-run", label: "테스트 실행", status: "deferred", detail: queryPendingDetail(args.recent) }
+        : {
+            key: "test-run",
+            label: "테스트 실행",
+            status: gateStatus(testRunDecision.status),
+            detail: scenarios.length === 0 && testRunDecision.status === "needs" ? "자동화 초안 생성 후 테스트 실행을 시작합니다." : testRunDecision.detail,
+            action:
+              testRunDecision.status === "ready"
+                ? undefined
+                : { label: "테스트 실행", view: "scenarioStudio", params: { focus: "test" }, requiredAction: "run.create" },
+          },
   );
 
   gates.push(

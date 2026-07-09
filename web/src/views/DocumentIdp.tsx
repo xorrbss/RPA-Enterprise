@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useApiClient } from "../api/context";
 import type {
@@ -11,7 +11,7 @@ import type {
   ListParams,
 } from "../api/types";
 import { useListView } from "../api/useListView";
-import { mergeParams, navigate, useHashIdParam } from "../router";
+import { mergeParams, navigate, useHashIdParam, useHashParam } from "../router";
 import { EmptyState, Loading } from "../components/states";
 import { formatDateTime } from "../util/time";
 import { DocumentDetail } from "./document-idp/DocumentDetail";
@@ -44,6 +44,8 @@ export function DocumentIdpView(): JSX.Element {
   const selectedId = useHashIdParam("doc");
   const runParam = useHashIdParam("run");
   const artifactParam = useHashIdParam("artifact");
+  const sourceParam = useHashParam("source");
+  const startSectionRef = useRef<HTMLElement | null>(null);
   const [status, setStatus] = useState<"" | DocumentJobStatus>("");
   const [sourceRunId, setSourceRunId] = useState<string>(runParam ?? "");
   const [sourceArtifactId, setSourceArtifactId] = useState<string>(artifactParam ?? "");
@@ -73,6 +75,11 @@ export function DocumentIdpView(): JSX.Element {
   useEffect(() => {
     if (runParam !== null && runParam !== sourceRunId) setSourceRunId(runParam);
   }, [runParam, sourceRunId]);
+  useEffect(() => {
+    if (sourceParam !== "scenario-start" || startSectionRef.current === null) return;
+    startSectionRef.current.scrollIntoView?.({ block: "start" });
+    startSectionRef.current.focus({ preventScroll: true });
+  }, [sourceParam]);
   useEffect(() => {
     if (artifactParam === null || runArtifacts.data === undefined) return;
     if (sourceArtifacts.some((artifact) => artifact.artifact_id === artifactParam) && artifactParam !== sourceArtifactId) {
@@ -197,7 +204,7 @@ export function DocumentIdpView(): JSX.Element {
 
   return (
     <div className="stack document-idp">
-      <section className="panel">
+      <section ref={startSectionRef} className="panel" aria-label="문서 자동화 시작" tabIndex={-1}>
         <div className="panel-head">
           <div>
             <h2>문서 자동화</h2>

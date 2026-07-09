@@ -4,15 +4,12 @@ import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { useApiClient } from "../api/context";
 import { useCan, useRoles } from "../api/permissions";
 import { OnboardingBanner } from "../components/OnboardingBanner";
-import { AdoptionEvidencePacket } from "../components/AdoptionEvidencePacket";
 import { DashboardEnvironmentState, environmentErrorKind, type DashboardEnvironmentError } from "../components/DashboardEnvironmentState";
 import { QueryPanel } from "../components/QueryPanel";
 import { StatusBadge } from "../components/badges";
 import { navigate, useHashParam } from "../router";
 import { isActiveHumanTask } from "./humanTaskFilters";
 import { ActionQueue, collectActionItems } from "./dashboard/ActionQueue";
-import { AdminAdoptionSetup } from "./dashboard/AdminAdoptionSetup";
-import { AdoptionReadinessPanel } from "./dashboard/AdoptionReadinessPanel";
 import { AutomationPerformancePanel } from "./dashboard/AutomationPerformancePanel";
 import { OpsSignalPanel } from "./dashboard/OpsSignalPanel";
 import { RoleWorkbench } from "./dashboard/RoleWorkbench";
@@ -21,8 +18,6 @@ import { DASHBOARD_RUN_MODE, Metric, cacheHitRateLabel, exactCount, pageCount, s
 import { currentReportMonth, type ReportExportFormat, type ReportExportState } from "./dashboard/report-format";
 import type {
   AutomationPerformanceRunMode,
-  Paginated,
-  RunArtifactItem,
   RunItem,
 } from "../api/types";
 
@@ -67,7 +62,6 @@ export function DashboardView(): JSX.Element {
   const can = useCan();
   const roles = useRoles();
   const focusTarget = useHashParam("focus");
-  const evidencePacketRef = useRef<HTMLDivElement | null>(null);
   const automationReportRef = useRef<HTMLDivElement | null>(null);
   const [reportMonth, setReportMonth] = useState(currentReportMonth);
   const [reportRunMode, setReportRunMode] = useState<AutomationPerformanceRunMode>("prod");
@@ -98,30 +92,6 @@ export function DashboardView(): JSX.Element {
   });
   const opsHealth = useQuery({ queryKey: ["ops-health", "dashboard"], queryFn: () => api.getOpsHealth(), refetchInterval: 5_000 });
   const opsAlerts = useQuery({ queryKey: ["ops-alerts", "dashboard"], queryFn: () => api.listOpsAlerts({ limit: 3 }), refetchInterval: 5_000 });
-  const readinessSites = useQuery({ queryKey: ["sites", "adoption-readiness"], queryFn: () => api.listSites({ limit: 50 }), refetchInterval: 30_000 });
-  const readinessScenarios = useQuery({ queryKey: ["scenarios", "adoption-readiness"], queryFn: () => api.listScenarios({ limit: 50 }), refetchInterval: 30_000 });
-  const authReadiness = useQuery({ queryKey: ["auth-readiness", "dashboard"], queryFn: () => api.getAuthReadiness(), refetchInterval: 60_000 });
-  const productionReadiness = useQuery({ queryKey: ["production-readiness", "dashboard"], queryFn: () => api.getProductionReadiness(), refetchInterval: 60_000 });
-  const scimProviders = useQuery({ queryKey: ["scim-providers", "dashboard-admin"], queryFn: () => api.listScimProviders(), enabled: roles.includes("admin"), refetchInterval: 60_000 });
-  const secretAudit = useQuery({ queryKey: ["audit-log", "secret-resolve", "dashboard-evidence"], queryFn: () => api.listAuditLog({ action: "secret.resolve", limit: 100 }), enabled: roles.includes("admin"), refetchInterval: 30_000 });
-  const secretAuditSummary = useQuery({
-    queryKey: ["audit-log-summary", "secret-resolve", "dashboard-evidence"],
-    queryFn: () => api.getAuditLogSummary({ action: "secret.resolve" }),
-    refetchInterval: 30_000,
-  });
-  const aiGovernanceEvidenceSummary = useQuery({
-    queryKey: ["ai-governance-evidence-summary", "dashboard-evidence"],
-    queryFn: () => api.getAiGovernanceEvidenceSummary(),
-    refetchInterval: 60_000,
-  });
-  const connectorCatalog = useQuery({ queryKey: ["connectors", "dashboard-admin-setup"], queryFn: () => api.listConnectors({ limit: 100 }), enabled: roles.includes("admin"), refetchInterval: 60_000 });
-  const latestRunId = recent.data?.items[0]?.run_id;
-  const latestRunArtifacts = useQuery<Paginated<RunArtifactItem>>({
-    queryKey: ["run-artifacts", "adoption-evidence", latestRunId],
-    queryFn: () => api.listRunArtifacts(latestRunId as string, { limit: 50 }),
-    enabled: latestRunId !== undefined,
-    refetchInterval: 30_000,
-  });
 
   async function exportPerformanceReportCsv(): Promise<void> {
     setReportExportState("pending");
@@ -173,21 +143,14 @@ export function DashboardView(): JSX.Element {
   if (sinkDlq.isError) dashboardErrors.push({ label: "외부 전달 재처리", error: sinkDlq.error, onRetry: () => void sinkDlq.refetch() });
   if (opsHealth.isError) dashboardErrors.push({ label: "운영 헬스", error: opsHealth.error, onRetry: () => void opsHealth.refetch() });
   if (opsAlerts.isError) dashboardErrors.push({ label: "운영 알림", error: opsAlerts.error, onRetry: () => void opsAlerts.refetch() });
-  if (secretAudit.isError) dashboardErrors.push({ label: "SecretRef 감사 요약", error: secretAudit.error, onRetry: () => void secretAudit.refetch() });
-  if (secretAuditSummary.isError) dashboardErrors.push({ label: "SecretRef 감사 summary", error: secretAuditSummary.error, onRetry: () => void secretAuditSummary.refetch() });
-  if (aiGovernanceEvidenceSummary.isError) dashboardErrors.push({ label: "AI 거버넌스 summary", error: aiGovernanceEvidenceSummary.error, onRetry: () => void aiGovernanceEvidenceSummary.refetch() });
-  if (latestRunArtifacts.isError) dashboardErrors.push({ label: "최근 실행 artifact 증거", error: latestRunArtifacts.error, onRetry: () => void latestRunArtifacts.refetch() });
-  if (scimProviders.isError) dashboardErrors.push({ label: "SCIM 도입 설정", error: scimProviders.error, onRetry: () => void scimProviders.refetch() });
-  if (connectorCatalog.isError) dashboardErrors.push({ label: "커넥터 SecretRef 카탈로그", error: connectorCatalog.error, onRetry: () => void connectorCatalog.refetch() });
   const dashboardErrorKind = environmentErrorKind(dashboardErrors);
 
   useEffect(() => {
-    const target =
-      focusTarget === "evidence-packet"
-        ? evidencePacketRef.current
-        : focusTarget === "automation-report"
-          ? automationReportRef.current
-          : null;
+    if (focusTarget === "evidence-packet") {
+      navigate("adoptionEvidence");
+      return;
+    }
+    const target = focusTarget === "automation-report" ? automationReportRef.current : null;
     if (target === null) return;
     target.scrollIntoView?.({ block: "start" });
     target.focus({ preventScroll: true });
@@ -207,44 +170,6 @@ export function DashboardView(): JSX.Element {
           ) : undefined
         }
       />
-      <AdoptionReadinessPanel
-        auth={authReadiness}
-        production={productionReadiness}
-        sites={readinessSites}
-        scenarios={readinessScenarios}
-        summary={summary}
-        recent={recent}
-        performance={performanceReport}
-        can={can}
-      />
-      <AdminAdoptionSetup
-        roles={roles}
-        can={can}
-        auth={authReadiness}
-        production={productionReadiness}
-        sites={readinessSites}
-        scenarios={readinessScenarios}
-        summary={summary}
-        recent={recent}
-        artifacts={latestRunArtifacts}
-        scimProviders={scimProviders}
-        secretAudit={secretAudit}
-        connectors={connectorCatalog}
-      />
-      <div id="dashboard-focus-evidence-packet" ref={evidencePacketRef} tabIndex={-1} data-dashboard-focus="evidence-packet">
-        <AdoptionEvidencePacket
-          auth={authReadiness}
-          production={productionReadiness}
-          sites={readinessSites}
-          scenarios={readinessScenarios}
-          summary={summary}
-          recent={recent}
-          artifacts={latestRunArtifacts}
-          performance={performanceReport}
-          secretAuditSummary={secretAuditSummary}
-          aiGovernanceEvidenceSummary={aiGovernanceEvidenceSummary}
-        />
-      </div>
       <RoleWorkbench roles={roles} can={can} />
       <OpsSignalPanel
         health={opsHealth.data}

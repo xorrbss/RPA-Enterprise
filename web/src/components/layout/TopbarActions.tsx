@@ -1,5 +1,5 @@
-import { useEffect, useId, useMemo, useState } from "react";
-import { CalendarClock, ChevronDown, ClipboardCheck, LogOut, PlaySquare, Plus, Search, ShieldCheck, Video, type LucideIcon } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { CalendarClock, ChevronDown, ClipboardCheck, LayoutTemplate, LogOut, PlaySquare, Plus, Search, ShieldCheck, Video, type LucideIcon } from "lucide-react";
 
 import { navigate, type ViewKey } from "../../router";
 import { decodeSubject, ROLE_LABELS, rolesCan } from "../../api/permissions";
@@ -85,6 +85,14 @@ function createMenuItems(roles: readonly string[]): readonly GlobalCreateItem[] 
       icon: Video,
       view: "scenarioStudio",
     });
+    items.push({
+      key: "template",
+      label: "템플릿에서 시작",
+      description: "검증된 업무 템플릿을 골라 자동화 초안 생성",
+      icon: LayoutTemplate,
+      view: "connectorCatalog",
+      params: { focus: "templates" },
+    });
   }
   if (can("run.create")) {
     items.push({
@@ -103,6 +111,7 @@ function createMenuItems(roles: readonly string[]): readonly GlobalCreateItem[] 
       description: "검증된 자동화를 일정·트리거에 연결",
       icon: CalendarClock,
       view: "automationOps",
+      params: { section: "schedule" },
     });
   }
   if (can("session.capture") || can("site.create") || can("site.update")) {
@@ -130,19 +139,35 @@ function createMenuItems(roles: readonly string[]): readonly GlobalCreateItem[] 
 export function GlobalCreateMenu({ roles }: { roles: readonly string[] }): JSX.Element | null {
   const items = useMemo(() => createMenuItems(roles), [roles]);
   const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLSpanElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuId = useId();
   useEffect(() => setOpen(false), [roles]);
+  useEffect(() => {
+    if (!open) return;
+    const onMouseDown = (event: MouseEvent): void => {
+      const target = event.target;
+      if (!(target instanceof Node) || rootRef.current?.contains(target) === true) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, [open]);
   if (items.length === 0) return null;
   return (
     <span
+      ref={rootRef}
       className="create-menu"
       onKeyDown={(event) => {
-        if (event.key !== "Escape") return;
+        if (event.key !== "Escape" || !open) return;
         event.preventDefault();
+        event.stopPropagation();
         setOpen(false);
+        triggerRef.current?.focus();
       }}
     >
       <button
+        ref={triggerRef}
         className="btn create-menu-button"
         type="button"
         aria-haspopup="menu"
@@ -151,11 +176,11 @@ export function GlobalCreateMenu({ roles }: { roles: readonly string[] }): JSX.E
         onClick={() => setOpen((current) => !current)}
       >
         <Plus size={14} aria-hidden="true" />
-        <span className="topbar-action-text">빠른 시작</span>
+        <span className="topbar-action-text">새로 만들기</span>
         <ChevronDown className="create-menu-chevron" size={13} aria-hidden="true" />
       </button>
       {open && (
-        <div id={menuId} className="create-menu-popover" role="menu" aria-label="빠른 시작">
+        <div id={menuId} className="create-menu-popover" role="menu" aria-label="새로 만들기">
           {items.map((item) => {
             const Icon = item.icon;
             return (

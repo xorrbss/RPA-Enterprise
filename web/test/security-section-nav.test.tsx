@@ -67,6 +67,15 @@ describe("security-section-nav", () => {
     expect(screen.queryByRole("heading", { name: "전용 워커 풀" })).toBeNull();
   });
 
+  test("site-create intent opens the site registration form", async () => {
+    location.hash = "#security?section=sites&intent=site-create";
+    renderApp();
+
+    expect(await screen.findByRole("button", { name: "닫기" })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("예: 하이웍스")).toBeInTheDocument();
+    expect(screen.getAllByPlaceholderText("예: https://login.office.hiworks.com").length).toBeGreaterThan(0);
+  });
+
   test("clicking a section tab updates the security hash", async () => {
     location.hash = "#security";
     renderApp();
