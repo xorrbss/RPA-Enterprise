@@ -1,3 +1,6 @@
+import { useApiClient } from "../../api/context";
+import { StepCards } from "../../components/easy-create/StepCards";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { ClipboardCheck, FileCheck2, ListChecks, PlaySquare, ScrollText, Settings, X, type LucideIcon } from "lucide-react";
 
@@ -139,7 +142,9 @@ export function FocusedScenarioStudio({
               <li>
                 <span className="badge blue">초안 있음</span>
                 <strong>현재 초안 v{scenario.version}</strong>
-                <p className="subtle">세부 IR은 기본 화면 뒤에 두고, 이 화면에서는 업무 순서와 다음 행동만 확인합니다.</p>
+                <p className="subtle">아래에 업무 순서를 사람 말 단계로 보여줍니다. 원문 정의는 [정의 보기 (전문가)]에만 둡니다.</p>
+                {/* E5′: 설계 탭이 실제 초안을 사람 말 카드로 보여준다 — 만들 때 본 문장과 동일(step-sentences 공유). */}
+                <DesignStepCards scenarioId={scenario.scenario_id} />
               </li>
               <li>
                 <span className={`badge ${testReadiness.tone}`}>{testBadgeLabel}</span>
@@ -259,4 +264,16 @@ function FocusedActivityTab({ recentRuns }: { recentRuns: readonly RunItem[] }):
       )}
     </div>
   );
+}
+
+// E5′: 설계 탭 전용 초안 로더 — 상세(ir)는 필요할 때만 조회(쿼리키는 기존 scenario-detail 관례 공유).
+function DesignStepCards({ scenarioId }: { readonly scenarioId: string }): JSX.Element {
+  const api = useApiClient();
+  const detail = useQuery({
+    queryKey: ["scenario-detail", scenarioId],
+    queryFn: () => api.getScenario(scenarioId),
+  });
+  if (detail.isLoading) return <p className="subtle">초안을 불러오는 중입니다.</p>;
+  if (detail.isError) return <p className="subtle">초안을 불러오지 못했습니다 — 새로고침 후 다시 확인하세요.</p>;
+  return <StepCards ir={detail.data?.ir} emptyMessage="표시할 초안 단계가 없습니다." />;
 }

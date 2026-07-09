@@ -46,6 +46,6 @@ PR → CI green → 머지 → main green 확인 후 다음. 문서 file:line은
 | E3 준비 확인 인라인 | ✅머지 | #438 | web 1015·CI 12/12 | 대부분 STALE(사이트 인라인 등록·blocked 보정 가이드는 Phase 7 선반영) — 잔여=세션 등록 인라인화(corridor CTA→CaptureGuide 다이얼로그, 화면 이동 제거) |
 | E4 인라인 테스트 진행 | ✅머지 | #436 | web 1014·CI 12/12 | TestProgress(getRun/steps 폴링+SSE, 배너 §4.7, 9상태 오버레이)·RunScenarioButton onStarted·워크벤치 인라인(run 해시 보존, 화면 튕김 제거) |
 | R1 playground 은퇴 | ✅머지 | #437 | web 1014·CI 12/12 | 뷰키 5곳 해제(리다이렉트·워크벤치·테스트는 기존 유지) |
-| E5′ edit 모드 | 대기 | — | — | — |
-| E6 템플릿 갤러리 | 진행 | — | — | 홈 갤러리(listTemplates+카탈로그 프리필 계약 재사용). creator 파라미터=STALE(Phase 7이 소비 로직 신설). easy-labels 사전=T4 게이트로 최소선 충족, 위저드 셸 부재로 보류(설계 개정 기록) |
+| E5′ 설계 탭 실초안 | 진행 | — | — | 집중 스튜디오 설계 탭에 StepCards(scenario-detail 공유). 말로 고치기=P1 확정(원본 프롬프트 접근 계약 부재 — 설계 §13 revision API 후보 유지) |
+| E6 템플릿 갤러리 | ✅머지 | #440 | web 1015·CI 12/12(픽스처 타입 1회 수정) | 홈 갤러리(listTemplates+카탈로그 프리필 계약 재사용). creator 파라미터=STALE(Phase 7이 소비 로직 신설). easy-labels 사전=T4 게이트로 최소선 충족, 위저드 셸 부재로 보류(설계 개정 기록) |
 | E7+T7 스튜디오 액션 재편 | ✅머지 | #439 | web 1015·CI 12/12 | 행 [열기][실행]+더 보기(테스트 계획·편집·이력·배포·운영 기준·보관), 용어 단일화(테스트), 실행 기준 단정 배지 열 삭제 |
