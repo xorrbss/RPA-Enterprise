@@ -6,6 +6,7 @@ import { mergeParams, useHashIdParam, viewFromHash } from "../src/router";
 describe("viewFromHash — 딥링크 쿼리 파라미터 지원", () => {
   test("플레인 해시 → 뷰 키", () => {
     expect(viewFromHash("#runTrace")).toBe("runTrace");
+    expect(viewFromHash("#create")).toBe("create");
     expect(viewFromHash("#dashboard")).toBe("dashboard");
     expect(viewFromHash("#adoptionEvidence")).toBe("adoptionEvidence");
     expect(viewFromHash("#automationOps")).toBe("automationOps");

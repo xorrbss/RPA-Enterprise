@@ -23,13 +23,13 @@ function renderApp(client: ApiClient): void {
   );
 }
 
-describe("site onboarding to scenario studio", () => {
+describe("site onboarding to create console", () => {
   beforeEach(() => {
     location.hash = "";
     localStorage.setItem("rpa.token", jwt(["viewer", "operator", "reviewer", "approver", "admin"]));
   });
 
-  test("site create response pre-fills natural-language save-and-run target", async () => {
+  test("site create response pre-fills natural-language draft target", async () => {
     const generated: Array<Parameters<ApiClient["generateScenario"]>[0]> = [];
     renderApp(
       fakeClient({
@@ -86,7 +86,7 @@ describe("site onboarding to scenario studio", () => {
     fireEvent.change(screen.getByLabelText("사이트 주소"), { target: { value: "https://login.office.hiworks.com" } });
     screen.getByRole("button", { name: "등록" }).click();
 
-    await waitFor(() => expect(location.hash.startsWith("#scenarioStudio?")).toBe(true));
+    await waitFor(() => expect(location.hash.startsWith("#create?")).toBe(true));
     const params = new URLSearchParams(location.hash.split("?")[1]);
     expect(params.get("site")).toBe("site-new");
     expect(params.get("start_url")).toBe("https://login.office.hiworks.com");
@@ -98,10 +98,11 @@ describe("site onboarding to scenario studio", () => {
     await waitFor(() => expect(screen.getByLabelText("보안 정책 선택값")).toHaveValue("network-new"));
 
     fireEvent.change(await screen.findByLabelText("자연어 요청"), { target: { value: "오늘 결재함을 확인해줘" } });
-    screen.getByRole("button", { name: "저장 후 실행" }).click();
+    screen.getByRole("button", { name: "자동화 초안 만들기" }).click();
     await waitFor(() => expect(generated).toHaveLength(1));
     expect(generated[0]).toMatchObject({
       prompt: "오늘 결재함을 확인해줘",
+      mode: "save",
       start_url: "https://login.office.hiworks.com",
       target: {
         site_profile_id: "site-new",

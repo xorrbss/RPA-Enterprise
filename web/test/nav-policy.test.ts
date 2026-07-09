@@ -29,7 +29,7 @@ describe("Phase 15 nav policy", () => {
   test("operator standard nav exposes the lifecycle IA (내 업무→자동화→현황)", () => {
     expect(getVisibleNavGroups(ctx(["operator"]))).toEqual([
       { label: "내 업무", keys: ["myWork", "humanTasks", "workitems"] },
-      { label: "자동화", keys: ["scenarioStudio", "runTrace", "automationOps", "documentIdp"] },
+      { label: "자동화", keys: ["create", "scenarioStudio", "runTrace", "automationOps", "documentIdp"] },
       { label: "현황", keys: ["dashboard", "adoptionEvidence"] },
       { label: "설정·점검", keys: ["auditExplorer"] },
     ]);
@@ -41,6 +41,7 @@ describe("Phase 15 nav policy", () => {
       "myWork",
       "humanTasks",
       "workitems",
+      "create",
       "scenarioStudio",
       "runTrace",
       "dashboard",
@@ -51,6 +52,7 @@ describe("Phase 15 nav policy", () => {
       "myWork",
       "humanTasks",
       "workitems",
+      "create",
       "scenarioStudio",
       "runTrace",
       "dashboard",
@@ -64,6 +66,7 @@ describe("Phase 15 nav policy", () => {
       "myWork",
       "humanTasks",
       "workitems",
+      "create",
       "scenarioStudio",
       "runTrace",
       "automationOps",
@@ -110,6 +113,7 @@ describe("Phase 15 nav policy", () => {
       "myWork",
       "humanTasks",
       "workitems",
+      "create",
       "scenarioStudio",
       "runTrace",
       "automationOps",

@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+﻿import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { axe } from "vitest-axe";
 import { beforeEach, describe, expect, test } from "vitest";
@@ -30,7 +30,7 @@ function renderApp(): HTMLElement {
 describe("AI 생성기 예시 프롬프트 칩", () => {
   beforeEach(() => {
     localStorage.setItem("rpa.token", jwt(["operator"]));
-    location.hash = "#scenarioStudio";
+    location.hash = "#create";
   });
 
   test("칩 클릭 시 자연어 요청 textarea가 예시 문장으로 채워진다", async () => {

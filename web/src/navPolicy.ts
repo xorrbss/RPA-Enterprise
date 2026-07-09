@@ -34,6 +34,7 @@ const ADVANCED_NON_VIEWER_ROLES: readonly ConsoleRole[] = ["operator", "reviewer
 
 const VIEW_VISIBILITY: Record<ViewKey, ViewVisibilityPolicy> = {
   myWork: { standardRoles: ALL_ROLES },
+  create: { standardRoles: CREATOR_ROLES },
   dashboard: { standardRoles: ALL_ROLES },
   adoptionEvidence: { standardRoles: ALL_ROLES },
   runTrace: { standardRoles: ALL_ROLES },
@@ -62,7 +63,7 @@ const VIEW_VISIBILITY: Record<ViewKey, ViewVisibilityPolicy> = {
 // 메뉴 구조로. 결재 인박스는 '사람 확인'의 결재 목록 탭으로 흡수(별도 메뉴 은퇴). 가시성 정책(VIEW_VISIBILITY)은 불변 — 묶음만 재편.
 const NAV_POLICY_GROUPS: readonly VisibleNavGroup[] = [
   { label: "내 업무", keys: ["myWork", "humanTasks", "workitems"] },
-  { label: "자동화", keys: ["scenarioStudio", "runTrace", "automationOps", "documentIdp"] },
+  { label: "자동화", keys: ["create", "scenarioStudio", "runTrace", "automationOps", "documentIdp"] },
   { label: "현황", keys: ["dashboard", "adoptionEvidence"] },
   { label: "설정·점검", keys: ["coePipeline", "connectorCatalog", "objectRepository", "irValidation", "auditExplorer", "llmGateway", "security", "idempotency", "openGate"] },
 ];

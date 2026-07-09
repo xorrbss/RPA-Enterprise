@@ -8,6 +8,7 @@ import { PlaceholderView } from "./views/Placeholder";
 
 const DashboardView = lazy(() => import("./views/Dashboard").then((module) => ({ default: module.DashboardView })));
 const CoePipelineView = lazy(() => import("./views/CoePipeline").then((module) => ({ default: module.CoePipelineView })));
+const CreateView = lazy(() => import("./views/Create").then((module) => ({ default: module.CreateView })));
 const ConnectorCatalogView = lazy(() => import("./views/ConnectorCatalog").then((module) => ({ default: module.ConnectorCatalogView })));
 const SiteElementsView = lazy(() => import("./views/SiteElements").then((module) => ({ default: module.SiteElementsView })));
 const OrchestrationView = lazy(() => import("./views/Orchestration").then((module) => ({ default: module.OrchestrationView })));
@@ -31,6 +32,8 @@ function renderView(view: ViewKey): JSX.Element {
   switch (view) {
     case "myWork":
       return <MyWorkView />;
+    case "create":
+      return <CreateView />;
     case "coePipeline":
       return <CoePipelineView />;
     case "connectorCatalog":

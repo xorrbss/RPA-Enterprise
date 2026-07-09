@@ -195,7 +195,7 @@ function setupItems(args: {
         : scenarios.length > 0 && args.summary.data.total > 0
           ? `${scenarios.length}개 자동화와 ${args.summary.data.total}건 실행 기록이 있습니다.`
           : "scenario draft와 test run 증빙이 필요합니다.",
-      action: { label: "자동화 만들기", view: "scenarioStudio", requiredAction: "scenario.create" },
+      action: { label: "자동화 만들기", view: "create", requiredAction: "scenario.create" },
     },
     {
       key: "readiness",

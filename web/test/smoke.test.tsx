@@ -373,7 +373,7 @@ describe("D7 운영 콘솔 shell", () => {
   test("사이드바는 역할 정책으로 필터된 nav item을 렌더", () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
-    expect(nav.querySelectorAll(".nav-item")).toHaveLength(17);
+    expect(nav.querySelectorAll(".nav-item")).toHaveLength(18);
     expect(within(nav).getByRole("button", { name: "도입 증빙" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: "보안/개인정보" })).toBeInTheDocument();
     expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
@@ -731,7 +731,7 @@ describe("D7 운영 콘솔 shell", () => {
         },
       }),
     );
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
     fireEvent.change(await screen.findByLabelText("자연어 요청"), {
       target: { value: "https://shop.example/orders. 주문 목록을 요약해줘" },
     });
@@ -786,7 +786,7 @@ describe("D7 운영 콘솔 shell", () => {
         listScenarios: async () => ({ items: [], next_cursor: null }),
       }),
     );
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
 
     const promptBox = await screen.findByLabelText("자연어 요청");
     fireEvent.change(promptBox, {
@@ -887,7 +887,7 @@ describe("D7 운영 콘솔 shell", () => {
         },
       }),
     );
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
 
     fireEvent.change(await screen.findByLabelText("자연어 요청"), {
       target: { value: "새 포털에서 주문 목록을 요약해줘" },
@@ -965,7 +965,7 @@ describe("D7 운영 콘솔 shell", () => {
         }),
       }),
     );
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
     const plannerSelect = await screen.findByLabelText("생성 방식");
     expect(plannerSelect).toHaveValue("deterministic_mvp");
     expect(
@@ -1038,7 +1038,7 @@ describe("D7 운영 콘솔 shell", () => {
         },
       }),
     );
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
     fireEvent.change(await screen.findByLabelText("자연어 요청"), {
       target: { value: "주문 목록을 요약해줘" },
     });
@@ -1098,7 +1098,7 @@ describe("D7 운영 콘솔 shell", () => {
         },
       }),
     );
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
     fireEvent.change(await screen.findByLabelText("자연어 요청"), {
       target: { value: "주문 목록을 요약해줘" },
     });
@@ -1185,7 +1185,7 @@ describe("D7 운영 콘솔 shell", () => {
         },
       }),
     );
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
     fireEvent.change(await screen.findByLabelText("자연어 요청"), {
       target: { value: "주문 목록을 요약해줘" },
     });
@@ -1247,7 +1247,7 @@ describe("D7 운영 콘솔 shell", () => {
         },
       }),
     );
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
     fireEvent.change(await screen.findByLabelText("자연어 요청"), {
       target: { value: "주문 목록을 요약해줘" },
     });
@@ -1315,7 +1315,7 @@ describe("D7 운영 콘솔 shell", () => {
         },
       }),
     );
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
     fireEvent.change(await screen.findByLabelText("자연어 요청"), {
       target: { value: "오늘 주문을 확인해줘" },
     });
@@ -1362,7 +1362,7 @@ describe("D7 운영 콘솔 shell", () => {
         }),
       }),
     );
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
 
     expect(
       await screen.findByText("이미지·동영상 저장 요청됨"),
@@ -1400,7 +1400,7 @@ describe("D7 운영 콘솔 shell", () => {
         }),
       }),
     );
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
 
     fireEvent.change(await screen.findByLabelText("자연어 요청"), {
       target: { value: "주문 결과 증거를 확인해줘" },
@@ -1498,7 +1498,7 @@ describe("D7 운영 콘솔 shell", () => {
         },
       }),
     );
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
 
     const search = await screen.findByLabelText("생성 검색");
     const history = search.closest(".generation-history") as HTMLElement;
@@ -1586,14 +1586,14 @@ describe("D7 운영 콘솔 shell", () => {
         }),
       }),
     );
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
 
     expect(
       await screen.findByText(/검토 필요 사유: 시작 주소가 필요합니다/),
     ).toHaveTextContent("외 1건");
     fireEvent.click(screen.getByRole("button", { name: "검토 사유·산출물 보기" }));
 
-    expect(location.hash).toBe("#scenarioStudio");
+    expect(location.hash).toBe("#create?mode=save_and_run");
     expect(
       await screen.findByLabelText("생성 결과 증빙"),
     ).toBeInTheDocument();
@@ -1691,7 +1691,7 @@ describe("D7 운영 콘솔 shell", () => {
         },
       }),
     );
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
 
     fireEvent.change(await screen.findByLabelText("자연어 요청"), {
       target: { value: "결과 이미지를 저장해줘" },
@@ -1816,7 +1816,7 @@ describe("D7 운영 콘솔 shell", () => {
         }),
       }),
     );
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
 
     expect(await screen.findByText("실행 연결 없음")).toBeInTheDocument();
     expect(
@@ -1825,7 +1825,7 @@ describe("D7 운영 콘솔 shell", () => {
     expect(screen.queryByLabelText("생성 결과 증빙")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "저장본 확인" }));
 
-    expect(location.hash).toBe("#scenarioStudio");
+    expect(location.hash).toBe("#create?mode=save_and_run");
     expect(
       await screen.findByLabelText("생성 결과 증빙"),
     ).toBeInTheDocument();
@@ -1838,9 +1838,9 @@ describe("D7 운영 콘솔 shell", () => {
     if (historyTestAction === undefined) throw new Error("history test action not found");
     fireEvent.click(historyTestAction);
     expect(location.hash).toBe(
-      "#scenarioStudio?scenario=00000000-0000-0000-0000-0000000000c1&focus=test",
+      "#create?scenario=00000000-0000-0000-0000-0000000000c1&focus=test",
     );
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
     fireEvent.click(screen.getAllByRole("button", { name: "CoE 연결" })[0]!);
     expect(location.hash).toBe(
       "#coePipeline?scenario=00000000-0000-0000-0000-0000000000c1",
@@ -2017,7 +2017,7 @@ describe("D7 운영 콘솔 shell", () => {
       name: /자동화 만들기에서 진행/,
     });
     goto.click();
-    await waitFor(() => expect(location.hash).toBe("#scenarioStudio")); // navigate 실배선(죽은 버튼 아님)
+    await waitFor(() => expect(location.hash).toBe("#create")); // navigate 실배선(죽은 버튼 아님)
   });
 
   test("운영자 명령 실패 → 코드 표면화", async () => {

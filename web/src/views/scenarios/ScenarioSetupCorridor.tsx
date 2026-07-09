@@ -152,6 +152,7 @@ function testStep(
   runs: readonly RunItem[],
   latestScenario: ScenarioItem | undefined,
   canCreateRun: boolean,
+  onOpenTest: (scenarioId?: string) => void,
 ): CorridorStep {
   if (state === "checking") {
     return { key: "test", label: "테스트 실행", status: "checking", detail: "최근 테스트 실행 이력을 확인하고 있습니다." };
@@ -162,7 +163,7 @@ function testStep(
       label: "테스트 실행",
       status: "needs",
       detail: "실행 이력을 불러오지 못했습니다. 테스트 화면에서 직접 확인하세요.",
-      action: canCreateRun ? { label: "테스트 화면", run: () => navigate("scenarioStudio", { focus: "test" }) } : undefined,
+      action: canCreateRun ? { label: "테스트 화면", run: () => onOpenTest() } : undefined,
     };
   }
   const decision = assessTestRunReadiness(runs);
@@ -177,7 +178,7 @@ function testStep(
       detail: decision.detail,
       action:
         canCreateRun && latestScenario !== undefined
-          ? { label: "계획 확인으로 이동", run: () => navigate("scenarioStudio", { scenario: latestScenario.scenario_id, focus: "test" }), primary: decision.status === "blocked" }
+          ? { label: "계획 확인으로 이동", run: () => onOpenTest(latestScenario.scenario_id), primary: decision.status === "blocked" }
           : undefined,
     };
   }
@@ -188,7 +189,7 @@ function testStep(
     detail: latestScenario === undefined ? "초안을 만든 뒤 계획 확인과 테스트 실행으로 이어갑니다." : "저장된 초안으로 계획을 확인하고 테스트하세요.",
     action:
       canCreateRun && latestScenario !== undefined
-        ? { label: "계획 확인으로 이동", run: () => navigate("scenarioStudio", { scenario: latestScenario.scenario_id, focus: "test" }), primary: true }
+        ? { label: "계획 확인으로 이동", run: () => onOpenTest(latestScenario.scenario_id), primary: true }
         : undefined,
   };
 }
@@ -235,6 +236,7 @@ export function ScenarioSetupCorridor({
   canCreateRun,
   canReadEvidence,
   onCreateDraft,
+  onOpenTest = (scenarioId?: string) => navigate("scenarioStudio", scenarioId === undefined ? { focus: "test" } : { scenario: scenarioId, focus: "test" }),
 }: {
   sites: readonly SiteItem[];
   siteState: CorridorQueryState;
@@ -252,12 +254,13 @@ export function ScenarioSetupCorridor({
   canCreateRun: boolean;
   canReadEvidence: boolean;
   onCreateDraft: () => void;
+  onOpenTest?: (scenarioId?: string) => void;
 }): JSX.Element {
   const steps = [
     siteStep(siteState, sites, canCreateSite, canUpdateSite),
     sessionStep(siteState, sites, firstLoginSiteNeedingSession, canCaptureSession),
     draftStep(scenarioState, scenarios, canCreateScenario, onCreateDraft),
-    testStep(runState, recentRuns, latestScenario, canCreateRun),
+    testStep(runState, recentRuns, latestScenario, canCreateRun, onOpenTest),
     evidenceStep(runState, latestCompletedRun, canReadEvidence),
   ];
   const firstAction = steps.find((step) => step.status !== "ready" && step.action !== undefined)?.action;

@@ -380,7 +380,7 @@ describe("UX quick-wins (A)", () => {
     expect(within(nav).getByText("자동화")).toBeInTheDocument();
     expect(within(nav).getByText("현황")).toBeInTheDocument();
     expect(within(nav).getByText("설정·점검")).toBeInTheDocument();
-    expect(nav.querySelectorAll(".nav-item")).toHaveLength(17); // playground는 Studio의 테스트 작업대로 흡수, openGate는 internal flag 없으면 숨김
+    expect(nav.querySelectorAll(".nav-item")).toHaveLength(18); // create는 표준 제작 진입점, playground는 Studio의 테스트 작업대로 흡수, openGate는 internal flag 없으면 숨김
     expect(within(nav).getByRole("button", { name: "도입 증빙" })).toBeInTheDocument();
     expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
   });
@@ -552,14 +552,14 @@ describe("Phase 2 온보딩", () => {
 
   const ONBOARD_CTA = "자동화 화면으로 가기";
 
-  // (1) 빈 대시보드 + run.create 보유 → CTA 노출, 클릭 시 scenarioStudio로 이동.
-  test("빈 대시보드 + run.create → CTA 노출·클릭 시 #scenarioStudio", async () => {
+  // (1) 빈 대시보드 + run.create 보유 → CTA 노출, 클릭 시 create 콘솔로 이동.
+  test("빈 대시보드 + run.create → CTA 노출·클릭 시 #create", async () => {
     renderApp(
       fakeClient({ listRuns: async () => ({ items: [], next_cursor: null }) }),
     );
     const cta = await screen.findByRole("button", { name: ONBOARD_CTA });
     cta.click();
-    await waitFor(() => expect(location.hash).toBe("#scenarioStudio"));
+    await waitFor(() => expect(location.hash).toBe("#create"));
   });
 
   // (2) 실행 ≥1건이면 배너 미노출(회귀 가드): 기본 fakeClient(listRuns 1건) → 배너 텍스트 없음, 지표·'최근 실행' 유지.

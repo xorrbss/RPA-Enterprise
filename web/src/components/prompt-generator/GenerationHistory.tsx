@@ -118,7 +118,7 @@ export function GenerationHistory({
                 )}
                 {item.status === "saved" && item.run_id === null && item.scenario_id !== null && (
                   <>
-                    <button className="linklike" type="button" onClick={() => navigate("scenarioStudio", { scenario: item.scenario_id!, focus: "test" })}>
+                    <button className="linklike" type="button" onClick={() => navigate("create", { scenario: item.scenario_id!, focus: "test" })}>
                       테스트 실행
                     </button>
                     <button className="linklike" type="button" onClick={() => navigate("automationOps", { scenario: item.scenario_id! })}>

@@ -261,7 +261,7 @@ export function SiteCreateForm({
       setOpen(false);
       void qc.invalidateQueries({ queryKey: ["sites"] });
       if (!embedded && !needsSessionRegistration) {
-        navigate("scenarioStudio", {
+        navigate("create", {
           site: created.site_profile_id,
           start_url: created.url_pattern,
           browser_identity: created.default_browser_identity_id,

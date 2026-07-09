@@ -40,8 +40,8 @@ describe("layout nav policy", () => {
   test("operator standard nav hides advanced and admin surfaces", () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
-    expect(navItemCount(nav)).toBe(10);
-    for (const label of ["내 할 일", "RPA 운영 대시보드", "도입 증빙", "사람 확인", "작업 목록", "자동화 만들기", "실행 기록", "실행 예약·알림", "문서 자동화"]) {
+    expect(navItemCount(nav)).toBe(11);
+    for (const label of ["내 할 일", "RPA 운영 대시보드", "도입 증빙", "사람 확인", "작업 목록", "만들기 콘솔", "자동화 스튜디오", "실행 기록", "실행 예약·알림", "문서 자동화"]) {
       expect(within(nav).getByRole("button", { name: label })).toBeInTheDocument();
     }
     for (const hidden of ["Product-open 점검", "중복 방지", "보안/개인정보", "AI 모델 설정", "자동화 검사"]) {
@@ -63,7 +63,7 @@ describe("layout nav policy", () => {
 
     fireEvent.click(within(menu).getByRole("menuitem", { name: /테스트 실행/ }));
 
-    expect(location.hash).toBe("#scenarioStudio?focus=test");
+    expect(location.hash).toBe("#create?focus=test");
     expect(screen.queryByRole("menu", { name: "새로 만들기" })).toBeNull();
   });
 

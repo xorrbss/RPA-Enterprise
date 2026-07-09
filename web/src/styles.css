@@ -622,6 +622,29 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 .catalog-detail-body { padding: 16px; display: grid; gap: 14px; }
 .catalog-detail-body h3 { margin: 0 0 6px; font-size: 16px; }
 .catalog-detail-body p { margin: 0; color: var(--muted); line-height: 1.5; }
+.template-preflight-panel { gap: 16px; }
+.template-preflight-hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, auto); gap: 14px; align-items: start; }
+.template-preflight-cta { display: grid; gap: 4px; justify-items: start; }
+.template-preflight-facts { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.template-preflight-line { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.template-preflight-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.template-preflight-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text);
+}
+.template-preflight-list span,
+.template-preflight-list code { overflow-wrap: anywhere; }
+.template-step-preview { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 10px; min-width: 0; }
+.template-step-preview-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.template-step-preview-head strong { overflow-wrap: anywhere; }
+.template-step-preview-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.template-step-preview-list li { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 10px; align-items: start; }
+.template-step-preview-list strong { color: var(--muted); font-size: 12px; }
+.template-step-preview-list span { overflow-wrap: anywhere; line-height: 1.4; }
 .catalog-facts { display: grid; gap: 10px; margin: 0; }
 .catalog-facts div { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); padding: 10px; min-width: 0; }
 .catalog-facts dt { color: var(--muted); font-size: 12px; font-weight: 700; margin-bottom: 4px; }
@@ -786,6 +809,23 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 .policy-fields .check-field { display: inline-flex; grid-template-columns: none; align-items: center; gap: 8px; }
 
 .scenario-generator { margin-bottom: 12px; }
+.create-console { display: grid; gap: 12px; }
+.create-journey { padding: 16px; display: grid; grid-template-columns: minmax(260px, .9fr) minmax(420px, 1.4fr); gap: 18px; align-items: center; }
+.create-journey-copy { min-width: 0; }
+.create-journey-copy h2 { margin: 2px 0 6px; font-size: 20px; line-height: 1.25; }
+.create-journey-copy p { margin: 0; }
+.create-journey-steps { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.create-journey-steps li { min-width: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); padding: 10px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.create-journey-steps strong,
+.create-journey-steps small { display: block; overflow-wrap: anywhere; }
+.create-journey-steps small { color: var(--muted); margin-top: 2px; line-height: 1.35; }
+.create-journey-icon { width: 28px; height: 28px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--blue); display: inline-flex; align-items: center; justify-content: center; }
+.create-readonly-panel { padding: 14px 16px; }
+.create-readonly-panel h2 { margin: 0 0 4px; font-size: 16px; }
+.create-readonly-panel p { margin: 0; }
+.expert-studio-intro { padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.expert-studio-intro h2 { font-size: 17px; margin: 2px 0 4px; }
+.expert-studio-intro p { margin: 0; max-width: 760px; }
 .automation-start-chooser { margin-bottom: 12px; overflow: hidden; }
 .automation-start-head { padding: 14px 16px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
 .automation-start-head h2 { font-size: 17px; margin: 0 0 4px; }
@@ -1250,6 +1290,7 @@ tr[data-focus="true"] td { background: var(--amber-soft); }
   .topbar-actions .freshness { flex: 0 1 auto; min-width: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
   .content { padding: 14px; }
   .panel-head { flex-direction: column; align-items: flex-start; }
+  .template-preflight-hero { grid-template-columns: 1fr; }
   .automation-start-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .orchestration-layout, .orchestration-grid, .ops-health-grid, .performance-compact-visuals, .performance-report-grid, .coe-layout, .coe-roi-summary, .coe-filter-grid, .coe-priority-list, .catalog-layout, .focused-studio-grid, .mini-table-row { grid-template-columns: 1fr; }
   .focused-studio-bar { flex-direction: column; }
@@ -1262,9 +1303,11 @@ tr[data-focus="true"] td { background: var(--amber-soft); }
 @media (max-width: 520px) {
   .metrics { grid-template-columns: 1fr; }
   .readiness-row { grid-template-columns: 1fr; }
+  .template-step-preview-list li { grid-template-columns: 1fr; }
   .automation-start-head { flex-direction: column; }
   .automation-start-head .btn { width: 100%; justify-content: center; }
   .automation-start-grid { grid-template-columns: 1fr; }
+  .create-journey-steps { grid-template-columns: 1fr; }
   .test-run-status-actions .inline-actions { justify-content: flex-start; }
   .test-run-status-steps li { grid-template-columns: 1fr; }
   .compact-bar-legend, .model-cost-mini { grid-template-columns: 1fr; }
@@ -1968,6 +2011,7 @@ tr[data-focus="true"] td { background: var(--amber-soft); }
   overflow-wrap: anywhere;
 }
 @media (max-width: 840px) {
+  .create-journey,
   .browser-recorder-layout,
   .browser-recorder-grid,
   .browser-recorder-event-form,
@@ -1980,6 +2024,8 @@ tr[data-focus="true"] td { background: var(--amber-soft); }
   .object-repo-layout { grid-template-columns: 1fr; }
   .object-repo-summary { grid-template-columns: 1fr; }
   .object-repo-form { grid-template-columns: 1fr; }
+  .create-journey-steps { grid-template-columns: 1fr 1fr; }
+  .create-journey-steps li svg:last-child { display: none; }
 }
 
 /* 커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·화면 이동 오버레이 */

@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+﻿import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   fireEvent,
   render,
@@ -66,7 +66,7 @@ describe("PromptScenarioGenerator correction run", () => {
       [];
     const policyChecks: string[] = [];
     const blobCalls: string[] = [];
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
     renderApp(
       fakeClient({
         listScenarios: async () => ({ items: [], next_cursor: null }),
@@ -354,7 +354,7 @@ describe("PromptScenarioGenerator correction run", () => {
         },
       }),
     );
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
 
     await waitFor(() =>
       expect(view.container.querySelector("textarea")).not.toBeNull(),
@@ -458,7 +458,7 @@ describe("PromptScenarioGenerator correction run", () => {
         default_network_policy_id: string | null;
       }
     >();
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
     renderApp(
       fakeClient({
         listScenarios: async () => ({ items: [], next_cursor: null }),
@@ -660,7 +660,7 @@ describe("PromptScenarioGenerator correction run", () => {
       },
       validation_report: {},
     };
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
     renderApp(
       fakeClient({
         listScenarios: async () => ({ items: [], next_cursor: null }),
@@ -738,7 +738,7 @@ describe("PromptScenarioGenerator correction run", () => {
       draft_ir: {},
       validation_report: {},
     };
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
     renderApp(
       fakeClient({
         listScenarios: async () => ({ items: [], next_cursor: null }),
@@ -797,7 +797,7 @@ describe("PromptScenarioGenerator correction run", () => {
     async (_caseName, paramsInput) => {
       const generateCalls: Array<Parameters<ApiClient["generateScenario"]>[0]> =
         [];
-      location.hash = "#scenarioStudio";
+      location.hash = "#create?mode=save_and_run";
       renderApp(
         fakeClient({
           listScenarios: async () => ({ items: [], next_cursor: null }),
@@ -832,7 +832,7 @@ describe("PromptScenarioGenerator correction run", () => {
       generationId: string;
       body: Parameters<ApiClient["runScenarioGeneration"]>[1];
     }> = [];
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
     renderApp(
       fakeClient({
         listScenarios: async () => ({ items: [], next_cursor: null }),
@@ -931,7 +931,7 @@ describe("PromptScenarioGenerator correction run", () => {
           },
         }),
       );
-      location.hash = "#scenarioStudio";
+      location.hash = "#create?mode=save_and_run";
 
       await waitFor(() =>
         expect(view.container.querySelector("textarea")).not.toBeNull(),
@@ -956,7 +956,7 @@ describe("PromptScenarioGenerator correction run", () => {
   );
 
   test("failed generation history surfaces Korean blocker labels (no raw codes)", async () => {
-    location.hash = "#scenarioStudio";
+    location.hash = "#create?mode=save_and_run";
     const failedGeneration: ScenarioGenerationResult = {
       generation_id: "00000000-0000-0000-0000-0000000000f1",
       mode: "save_and_run",
@@ -1071,7 +1071,7 @@ describe("PromptScenarioGenerator correction run", () => {
           },
         }),
       );
-      location.hash = "#scenarioStudio";
+      location.hash = "#create?mode=save_and_run";
 
       await waitFor(() =>
         expect(view.container.querySelector("textarea")).not.toBeNull(),

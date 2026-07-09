@@ -1,0 +1,199 @@
+import { useEffect, useMemo, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { ArrowRight, ClipboardCheck, FileText, PlaySquare, Sparkles } from "lucide-react";
+
+import { useApiClient } from "../api/context";
+import { useCan } from "../api/permissions";
+import { useListView } from "../api/useListView";
+import type { ScenarioGenerationRequest, ScenarioItem } from "../api/types";
+import { BrowserRecorderPanel } from "../components/BrowserRecorderPanel";
+import { PromptScenarioGenerator } from "../components/PromptScenarioGenerator";
+import { navigate, useHashParam } from "../router";
+import { ScenarioTestWorkbench } from "./Playground";
+import { AutomationStartChooser } from "./scenarios/AutomationStartChooser";
+import { ScenarioSetupCorridor, queryState } from "./scenarios/ScenarioSetupCorridor";
+
+export function CreateView(): JSX.Element {
+  const api = useApiClient();
+  const can = useCan();
+  const recorderRef = useRef<HTMLDivElement | null>(null);
+  const testWorkbenchRef = useRef<HTMLDivElement | null>(null);
+  const aiCreatorFocusConsumedRef = useRef(false);
+  const focusParam = useHashParam("focus");
+  const creatorParam = useHashParam("creator");
+  const templateParam = useHashParam("template_id");
+  const promptParam = useHashParam("prompt");
+  const startParam = useHashParam("start");
+  const modeParam = useHashParam("mode");
+  const generationMode: ScenarioGenerationRequest["mode"] =
+    modeParam === "save_and_run" || modeParam === "save" || modeParam === "draft_only" ? modeParam : "save";
+
+  const scenarioList = useListView<ScenarioItem>(
+    ["scenarios"],
+    (params) => api.listScenarios(params),
+    { limit: 50, refetchInterval: 10_000 },
+  );
+  const sitesQuery = useQuery({
+    queryKey: ["create-console", "setup-sites"],
+    queryFn: () => api.listSites({ limit: 50 }),
+    staleTime: 15_000,
+  });
+  const recentRunsQuery = useQuery({
+    queryKey: ["create-console", "setup-runs"],
+    queryFn: () => api.listRuns({ limit: 50 }),
+    staleTime: 15_000,
+  });
+
+  const sites = sitesQuery.data?.items ?? [];
+  const scenarios = scenarioList.query.data?.items ?? [];
+  const recentRuns = recentRunsQuery.data?.items ?? [];
+  const latestScenario = scenarios[0];
+  const latestCompletedRun = useMemo(
+    () => recentRuns.find((run) => run.status === "completed") ?? null,
+    [recentRuns],
+  );
+  const firstLoginSiteNeedingSession = useMemo(
+    () => sites.find((site) => site.approval_status === "approved" && site.login_capable === true && site.session_ready !== true) ?? null,
+    [sites],
+  );
+  const showStartChooser = creatorParam === null && templateParam === null && promptParam === null;
+
+  useEffect(() => {
+    if (focusParam === "test") testWorkbenchRef.current?.scrollIntoView?.({ block: "start" });
+  }, [focusParam]);
+
+  useEffect(() => {
+    if (creatorParam !== "ai") {
+      aiCreatorFocusConsumedRef.current = false;
+      return;
+    }
+    if (aiCreatorFocusConsumedRef.current || !can("scenario.create")) return;
+    aiCreatorFocusConsumedRef.current = true;
+    const handle = window.setTimeout(focusNaturalLanguageInput, 0);
+    return () => window.clearTimeout(handle);
+  }, [can, creatorParam]);
+
+  useEffect(() => {
+    if (startParam !== "template") return;
+    const handle = window.setTimeout(() => {
+      document.getElementById("create-template-start")?.scrollIntoView?.({ block: "center" });
+    }, 0);
+    return () => window.clearTimeout(handle);
+  }, [startParam]);
+
+  function focusNaturalLanguageInput(): void {
+    const target = document.getElementById("scenario-natural-language-request");
+    target?.focus();
+    target?.scrollIntoView?.({ block: "center" });
+  }
+
+  function focusRecorder(): void {
+    recorderRef.current?.scrollIntoView?.({ block: "start" });
+  }
+
+  return (
+    <div className="create-console">
+      <CreateJourneyHeader />
+      {can("scenario.create") ? (
+        <>
+          {showStartChooser ? (
+            <AutomationStartChooser
+              onBrowserText={focusNaturalLanguageInput}
+              onBrowserRecord={focusRecorder}
+              onTemplate={() => navigate("connectorCatalog", { focus: "templates" })}
+              onDocument={() => navigate("documentIdp", { source: "create-console" })}
+              onConnector={() => navigate("connectorCatalog", { focus: "connectors" })}
+              onManual={() => navigate("scenarioStudio", { expert: "manual" })}
+            />
+          ) : (
+            <section className="panel scenario-create-strip" aria-label="선택한 자동화 출발점">
+              <div>
+                <h2>선택한 출발점 이어가기</h2>
+                <p className="subtle">가져온 요청을 말로 확인하고, 준비 상태를 본 뒤 초안을 만듭니다.</p>
+              </div>
+              <span className="scenario-create-actions">
+                <button className="btn primary" type="button" onClick={focusNaturalLanguageInput}>
+                  요청 확인
+                </button>
+                <button className="btn" type="button" onClick={() => navigate("create")}>
+                  다른 출발점 고르기
+                </button>
+              </span>
+            </section>
+          )}
+          <PromptScenarioGenerator defaultMode={generationMode} />
+        </>
+      ) : (
+        <section className="panel create-readonly-panel" aria-label="만들기 콘솔 읽기 전용 안내">
+          <h2>만들기 권한이 필요합니다</h2>
+          <p className="subtle">현재 역할에서는 초안을 만들 수 없지만, 준비 상태와 테스트/증빙 경로는 확인할 수 있습니다.</p>
+        </section>
+      )}
+
+      <ScenarioSetupCorridor
+        sites={sites}
+        siteState={queryState(sitesQuery)}
+        scenarios={scenarios}
+        scenarioState={queryState(scenarioList.query)}
+        recentRuns={recentRuns}
+        runState={queryState(recentRunsQuery)}
+        latestScenario={latestScenario}
+        latestCompletedRun={latestCompletedRun}
+        firstLoginSiteNeedingSession={firstLoginSiteNeedingSession}
+        canCreateSite={can("site.create")}
+        canUpdateSite={can("site.update")}
+        canCaptureSession={can("session.capture")}
+        canCreateScenario={can("scenario.create")}
+        canCreateRun={can("run.create")}
+        canReadEvidence={can("artifact.read")}
+        onCreateDraft={focusNaturalLanguageInput}
+        onOpenTest={(scenarioId) => navigate("create", scenarioId === undefined ? { focus: "test" } : { scenario: scenarioId, focus: "test" })}
+      />
+
+      <div ref={testWorkbenchRef}>
+        <ScenarioTestWorkbench embedded createRoute="create" />
+      </div>
+
+      {can("scenario.create") && (
+        <div ref={recorderRef}>
+          <BrowserRecorderPanel />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CreateJourneyHeader(): JSX.Element {
+  const steps = [
+    { label: "말로 설명", detail: "업무를 자연어로 적기", icon: Sparkles },
+    { label: "준비 확인", detail: "사이트·세션·보안 상태", icon: ClipboardCheck },
+    { label: "초안 생성", detail: "검증된 자동화 초안 저장", icon: FileText },
+    { label: "테스트", detail: "계획 확인 후 시험 실행", icon: PlaySquare },
+  ] as const;
+  return (
+    <section className="panel create-journey" aria-label="만들기 기본 경로">
+      <div className="create-journey-copy">
+        <p className="eyebrow">만들기 콘솔</p>
+        <h2>말로 시작해서 테스트까지 한 흐름으로 이어갑니다</h2>
+        <p className="subtle">전문가 설정은 자동화 스튜디오에 남겨 두고, 여기서는 첫 자동화의 기본 경로만 집중합니다.</p>
+      </div>
+      <ol className="create-journey-steps">
+        {steps.map((step, index) => {
+          const Icon = step.icon;
+          return (
+            <li key={step.label}>
+              <span className="create-journey-icon">
+                <Icon size={16} aria-hidden="true" />
+              </span>
+              <span>
+                <strong>{step.label}</strong>
+                <small>{step.detail}</small>
+              </span>
+              {index < steps.length - 1 && <ArrowRight size={14} aria-hidden="true" />}
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}

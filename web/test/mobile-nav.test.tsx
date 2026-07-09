@@ -85,7 +85,7 @@ function drawerNavItemCount(dialog: HTMLElement): number {
   return dialog.querySelectorAll(".nav-item").length;
 }
 
-const OPERATOR_STANDARD_NAV_ITEM_COUNT = 10;
+const OPERATOR_STANDARD_NAV_ITEM_COUNT = 11;
 
 describe("mobile drawer navigation", () => {
   beforeEach(() => {

@@ -339,7 +339,7 @@ export function OrchestrationView(): JSX.Element {
           <p className="subtle">예약 실행, 큐 상태, 사람 개입, 실패 복구를 한 화면에서 관리합니다.</p>
         </div>
         <div className="quick-actions">
-          <button className="btn" type="button" onClick={() => navigate("scenarioStudio")}>자동화 만들기</button>
+          <button className="btn" type="button" onClick={() => navigate("create")}>자동화 만들기</button>
           <button className="btn" type="button" onClick={() => navigate("runTrace")}>실행 기록</button>
           <button className="btn" type="button" onClick={() => navigate("workitems")}>작업 큐</button>
         </div>

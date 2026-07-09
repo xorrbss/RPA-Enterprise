@@ -32,7 +32,11 @@ import {
   type VideoPolicy,
 } from "./prompt-generator/helpers";
 
-export function PromptScenarioGenerator(): JSX.Element {
+export function PromptScenarioGenerator({
+  defaultMode = "save_and_run",
+}: {
+  readonly defaultMode?: ScenarioGenerationRequest["mode"];
+} = {}): JSX.Element {
   const api = useApiClient();
   const can = useCan();
   const qc = useQueryClient();
@@ -49,7 +53,7 @@ export function PromptScenarioGenerator(): JSX.Element {
   });
   const [prompt, setPrompt] = useState("");
   const [name, setName] = useState("");
-  const [mode, setMode] = useState<ScenarioGenerationRequest["mode"]>("save_and_run");
+  const [mode, setMode] = useState<ScenarioGenerationRequest["mode"]>(defaultMode);
   const [startUrl, setStartUrl] = useState("");
   const [siteProfileId, setSiteProfileId] = useState("");
   const [browserIdentityId, setBrowserIdentityId] = useState("");
@@ -78,7 +82,7 @@ export function PromptScenarioGenerator(): JSX.Element {
   const targetManuallyEditedRef = useRef(false);
   const canCreateSite = can("site.create");
 
-  const actionLabel = mode === "save_and_run" ? "저장 후 실행" : mode === "save" ? "저장" : "초안 생성";
+  const actionLabel = mode === "save_and_run" ? "저장 후 실행" : mode === "save" ? "자동화 초안 만들기" : "초안 생성";
   const evidenceSettingsLoading = capabilities.isLoading;
   const screenshotCapability = capabilities.data?.visual_evidence.screenshot;
   const screenshotRecordingEnabled = screenshotCapability?.enabled === true;
@@ -403,7 +407,7 @@ export function PromptScenarioGenerator(): JSX.Element {
             disabled={actions.generatePending || needModel || evidenceSettingsLoading}
           >
             <Play size={15} aria-hidden="true" />
-            {actions.generatePending ? "생성 중…" : evidenceSettingsLoading ? "증거 설정 확인 중…" : "자동화 초안 만들기"}
+            {actions.generatePending ? "생성 중…" : evidenceSettingsLoading ? "증거 설정 확인 중…" : actionLabel}
           </button>
           <span className="evidence-chip">
             <Image size={14} aria-hidden="true" />

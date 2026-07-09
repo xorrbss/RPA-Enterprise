@@ -235,7 +235,7 @@ export function IrValidationView(): JSX.Element {
         )}
         {/* 성공 표기는 validate가 실제 보고한 valid(=V1–V11 dry-run 통과)만 말한다. 승격 가능 여부(scenario.promote admin */}
         {/* 게이트·If-Match version 동시성)는 이 화면이 관찰한 적 없으므로 단정하지 않는다(조용한 false 금지; */}
-        {/* api-surface §2(validate=dry-run, line 91)·저장X, promote만 승격). 승격은 scenarioStudio 별도 명령으로 안내만 한다. */}
+        {/* api-surface §2(validate=dry-run, line 91)·저장X, promote만 승격). 새 자동화 시작은 create 콘솔로 안내한다. */}
         {mut.data !== undefined && (
           <div>
             <span className={`badge ${mut.data.valid ? "green" : "red"}`}>
@@ -250,7 +250,7 @@ export function IrValidationView(): JSX.Element {
                 <button
                   className="linklike"
                   type="button"
-                  onClick={() => navigate("scenarioStudio")}
+                  onClick={() => navigate("create")}
                 >
                   자동화 만들기에서 진행 <span aria-hidden="true">→</span>
                 </button>

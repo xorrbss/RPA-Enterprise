@@ -102,7 +102,7 @@ export function MyWorkView(): JSX.Element {
         <div className="panel-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h2>자동화</h2>
           {can("scenario.create") && (
-            <button className="btn primary" type="button" onClick={() => navigate("scenarioStudio")}>자동화 만들기</button>
+            <button className="btn primary" type="button" onClick={() => navigate("create")}>자동화 만들기</button>
           )}
         </div>
         <div className="panel-body">
@@ -124,7 +124,7 @@ export function MyWorkView(): JSX.Element {
               action={
                 <div className="inline-actions" style={{ justifyContent: "center" }}>
                   {can("scenario.create") && (
-                    <button className="btn primary" type="button" onClick={() => navigate("scenarioStudio")}>
+                    <button className="btn primary" type="button" onClick={() => navigate("create")}>
                       자동화 초안 만들기
                     </button>
                   )}

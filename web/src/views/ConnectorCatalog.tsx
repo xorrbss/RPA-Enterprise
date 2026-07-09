@@ -188,7 +188,7 @@ export function ConnectorCatalogView(): JSX.Element {
   function openConnectorDraft(connector: ConnectorCatalogItem): void {
     if (!canCreateScenario || connectorDraftBlocker(connector) !== null) return;
     const startUrl = connectorStartUrl(connector);
-    navigate("scenarioStudio", {
+    navigate("create", {
       creator: "ai",
       connector_id: connector.connector_id,
       name: `${connector.name} 자동화 초안`,
@@ -203,7 +203,7 @@ export function ConnectorCatalogView(): JSX.Element {
     if (!canCreateScenario || templateDraftBlocker(template, connector) !== null) return;
     const params = defaultTemplateParams(template, connector);
     const startUrl = connectorStartUrl(connector);
-    navigate("scenarioStudio", {
+    navigate("create", {
       creator: "ai",
       connector_id: template.connector_id,
       template_id: template.template_id,
@@ -222,7 +222,7 @@ export function ConnectorCatalogView(): JSX.Element {
           <p className="subtle">브라우저 RPA 중심으로 재사용 가능한 연동 후보와 업무 템플릿을 검토합니다.</p>
         </div>
         <div className="inline-actions">
-          {canCreateScenario && <button className="btn" type="button" onClick={() => navigate("scenarioStudio")}>자동화 생성</button>}
+          {canCreateScenario && <button className="btn" type="button" onClick={() => navigate("create")}>자동화 생성</button>}
           {can("trigger.manage") && <button className="btn" type="button" onClick={() => navigate("automationOps")}>운영 예약</button>}
           <button className="btn" type="button" onClick={() => void connectorQuery.refetch()}>새로고침</button>
         </div>

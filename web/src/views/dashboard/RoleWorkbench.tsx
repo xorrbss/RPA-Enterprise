@@ -44,7 +44,7 @@ function roleFocus(roles: readonly string[], can: (a: string) => boolean, flags:
       actions: [
         { label: "실패 실행", view: "runTrace", params: { status: "failed_system" } },
         { label: "작업 목록", view: "workitems" },
-        { label: "자동화 만들기", view: "scenarioStudio" },
+        { label: "자동화 만들기", view: "create" },
       ],
     };
   }

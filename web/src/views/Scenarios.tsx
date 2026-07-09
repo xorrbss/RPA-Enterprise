@@ -6,13 +6,10 @@ import { useCan } from "../api/permissions";
 import { useListView } from "../api/useListView";
 import { QueryPanel } from "../components/QueryPanel";
 import { ActionButton } from "../components/ActionButton";
-import { BrowserRecorderPanel } from "../components/BrowserRecorderPanel";
-import { PromptScenarioGenerator } from "../components/PromptScenarioGenerator";
 import { RunScenarioButton } from "../components/RunScenarioButton";
 import { ScenarioForm, type ScenarioFormMode } from "../components/ScenarioForm";
 import { navigate, useHashParam } from "../router";
 import { ScenarioTestWorkbench } from "./Playground";
-import { AutomationStartChooser } from "./scenarios/AutomationStartChooser";
 import { FocusedScenarioStudio } from "./scenarios/FocusedScenarioStudio";
 import { PromotionInbox } from "./scenarios/PromotionInbox";
 import { ScenarioReleasesPanel } from "./scenarios/ScenarioReleasesPanel";
@@ -34,15 +31,16 @@ export function ScenariosView(): JSX.Element {
   const [form, setForm] = useState<ScenarioFormMode | null>(null);
   const [versionsFor, setVersionsFor] = useState<ScenarioItem | null>(null);
   const [releasesFor, setReleasesFor] = useState<ScenarioItem | null>(null);
-  const recorderRef = useRef<HTMLDivElement | null>(null);
   const testWorkbenchRef = useRef<HTMLDivElement | null>(null);
-  const aiCreatorFocusConsumedRef = useRef(false);
   const focusParam = useHashParam("focus");
   const modeParam = useHashParam("mode");
   const selectedScenarioParam = useHashParam("scenario");
   const creatorParam = useHashParam("creator");
   const templateParam = useHashParam("template_id");
   const promptParam = useHashParam("prompt");
+  const siteParam = useHashParam("site");
+  const startUrlParam = useHashParam("start_url");
+  const expertParam = useHashParam("expert");
   const sitesQuery = useQuery({
     queryKey: ["scenario-studio", "setup-sites"],
     queryFn: () => api.listSites({ limit: 50 }),
@@ -80,7 +78,6 @@ export function ScenariosView(): JSX.Element {
     [recentRuns],
   );
   const inFocusMode = modeParam === "focus";
-  const showStartChooser = creatorParam === null && templateParam === null && promptParam === null;
   const firstLoginSiteNeedingSession = useMemo(
     () => sites.find((site) => site.approval_status === "approved" && site.login_capable === true && site.session_ready !== true) ?? null,
     [sites],
@@ -90,25 +87,20 @@ export function ScenariosView(): JSX.Element {
     if (focusParam === "test") testWorkbenchRef.current?.scrollIntoView?.({ block: "start" });
   }, [focusParam]);
   useEffect(() => {
-    if (creatorParam !== "ai") {
-      aiCreatorFocusConsumedRef.current = false;
-      return;
-    }
-    if (aiCreatorFocusConsumedRef.current || inFocusMode || !can("scenario.create")) return;
-    aiCreatorFocusConsumedRef.current = true;
-    const handle = window.setTimeout(focusNaturalLanguageInput, 0);
+    if (inFocusMode) return;
+    const params: Record<string, string> = {};
+    if (creatorParam !== null) params.creator = creatorParam;
+    if (templateParam !== null) params.template_id = templateParam;
+    if (promptParam !== null) params.prompt = promptParam;
+    if (siteParam !== null) params.site = siteParam;
+    if (startUrlParam !== null) params.start_url = startUrlParam;
+    if (Object.keys(params).length > 0) navigate("create", params);
+  }, [creatorParam, inFocusMode, promptParam, siteParam, startUrlParam, templateParam]);
+  useEffect(() => {
+    if (expertParam !== "manual" || !can("scenario.create") || form !== null) return;
+    const handle = window.setTimeout(() => setForm({ kind: "create" }), 0);
     return () => window.clearTimeout(handle);
-  }, [can, creatorParam, inFocusMode]);
-
-  function focusNaturalLanguageInput(): void {
-    const target = document.getElementById("scenario-natural-language-request");
-    target?.focus();
-    target?.scrollIntoView?.({ block: "center" });
-  }
-
-  function focusRecorder(): void {
-    recorderRef.current?.scrollIntoView?.({ block: "start" });
-  }
+  }, [can, expertParam, form]);
 
   function openTestWorkbench(scenarioId: string): void {
     navigate("scenarioStudio", { scenario: scenarioId, focus: "test" });
@@ -121,56 +113,13 @@ export function ScenariosView(): JSX.Element {
 
   return (
     <div>
-      {can("scenario.create") && !inFocusMode && (
-        <>
-          {showStartChooser ? (
-            <AutomationStartChooser
-              onBrowserText={focusNaturalLanguageInput}
-              onBrowserRecord={focusRecorder}
-              onTemplate={() => navigate("connectorCatalog", { focus: "templates" })}
-              onDocument={() => navigate("documentIdp", { source: "scenario-start" })}
-              onConnector={() => navigate("connectorCatalog", { focus: "connectors" })}
-              onManual={() => setForm({ kind: "create" })}
-            />
-          ) : (
-            <section className="panel scenario-create-strip" aria-label="선택한 자동화 출발점">
-              <div>
-                <h2>선택한 출발점 이어가기</h2>
-                <p className="subtle">카탈로그에서 가져온 요청을 확인하고, 필요한 값만 채운 뒤 초안을 만듭니다.</p>
-              </div>
-              <span className="scenario-create-actions">
-                <button className="btn primary" type="button" onClick={focusNaturalLanguageInput}>
-                  요청 확인
-                </button>
-                <button className="btn" type="button" onClick={() => navigate("scenarioStudio")}>
-                  다른 출발점 고르기
-                </button>
-              </span>
-            </section>
-          )}
-          <ScenarioSetupCorridor
-            sites={sites}
-            siteState={queryState(sitesQuery)}
-            scenarios={scenarios}
-            scenarioState={queryState(scenarioList.query)}
-            recentRuns={recentRuns}
-            runState={queryState(recentRunsQuery)}
-            latestScenario={latestScenario}
-            latestCompletedRun={latestCompletedRun}
-            firstLoginSiteNeedingSession={firstLoginSiteNeedingSession}
-            canCreateSite={can("site.create")}
-            canUpdateSite={can("site.update")}
-            canCaptureSession={can("session.capture")}
-            canCreateScenario={can("scenario.create")}
-            canCreateRun={can("run.create")}
-            canReadEvidence={can("artifact.read")}
-            onCreateDraft={focusNaturalLanguageInput}
-          />
-          <PromptScenarioGenerator />
-          <div ref={testWorkbenchRef}>
-            <ScenarioTestWorkbench embedded />
-          </div>
-        </>
+      {!inFocusMode && (
+        <ExpertStudioIntro
+          canCreateScenario={can("scenario.create")}
+          onCreateConsole={() => navigate("create", { creator: "ai" })}
+          onManualCreate={() => setForm({ kind: "create" })}
+          onOpenTest={() => navigate("scenarioStudio", { focus: "test" })}
+        />
       )}
       {can("scenario.create") && inFocusMode && (
         <ScenarioSetupCorridor
@@ -189,7 +138,7 @@ export function ScenariosView(): JSX.Element {
           canCreateScenario={can("scenario.create")}
           canCreateRun={can("run.create")}
           canReadEvidence={can("artifact.read")}
-          onCreateDraft={focusNaturalLanguageInput}
+          onCreateDraft={() => navigate("create", { creator: "ai" })}
         />
       )}
       {inFocusMode && (
@@ -215,6 +164,11 @@ export function ScenariosView(): JSX.Element {
           <ScenarioTestWorkbench embedded />
         </div>
       )}
+      {can("scenario.create") && !inFocusMode && focusParam === "test" && (
+        <div ref={testWorkbenchRef}>
+          <ScenarioTestWorkbench embedded />
+        </div>
+      )}
       {!can("scenario.create") && (
         <>
           <ScenarioSetupCorridor
@@ -233,16 +187,13 @@ export function ScenariosView(): JSX.Element {
             canCreateScenario={can("scenario.create")}
             canCreateRun={can("run.create")}
             canReadEvidence={can("artifact.read")}
-            onCreateDraft={focusNaturalLanguageInput}
+            onCreateDraft={() => navigate("create", { creator: "ai" })}
           />
-          <div ref={testWorkbenchRef}>
-            <ScenarioTestWorkbench embedded />
-          </div>
         </>
       )}
-      {can("scenario.create") && !inFocusMode && (
-        <div ref={recorderRef}>
-          <BrowserRecorderPanel />
+      {!can("scenario.create") && (
+        <div ref={testWorkbenchRef}>
+          <ScenarioTestWorkbench embedded />
         </div>
       )}
       {can("scenario.create") && !inFocusMode && (
@@ -262,7 +213,7 @@ export function ScenariosView(): JSX.Element {
         emptyMessage="저장된 자동화가 없습니다. 문장으로 초안을 만든 뒤 테스트 실행까지 이어가세요."
         emptyAction={
           can("scenario.create") ? (
-            <button className="btn primary" type="button" onClick={focusNaturalLanguageInput}>
+            <button className="btn primary" type="button" onClick={() => navigate("create", { creator: "ai" })}>
               자동화 초안 만들기
             </button>
           ) : undefined
@@ -353,6 +304,40 @@ export function ScenariosView(): JSX.Element {
       {versionsFor !== null && <ScenarioVersionsPanel scenario={versionsFor} onClose={() => setVersionsFor(null)} />}
       {releasesFor !== null && <ScenarioReleasesPanel scenario={releasesFor} onClose={() => setReleasesFor(null)} />}
     </div>
+  );
+}
+
+function ExpertStudioIntro(props: {
+  canCreateScenario: boolean;
+  onCreateConsole: () => void;
+  onManualCreate: () => void;
+  onOpenTest: () => void;
+}): JSX.Element {
+  return (
+    <section className="panel expert-studio-intro" aria-label="전문가 자동화 스튜디오 안내">
+      <div>
+        <p className="eyebrow">전문가 경로</p>
+        <h2>저장된 자동화 관리</h2>
+        <p className="subtle">
+          새 자동화의 기본 흐름은 만들기 콘솔에서 시작합니다. 이 화면은 버전, 배포 기준, 수동 정의, 집중 작업을 다루는 전문가 스튜디오입니다.
+        </p>
+      </div>
+      <span className="scenario-create-actions">
+        {props.canCreateScenario && (
+          <button className="btn primary" type="button" onClick={props.onCreateConsole}>
+            만들기 콘솔 열기
+          </button>
+        )}
+        {props.canCreateScenario && (
+          <button className="btn" type="button" onClick={props.onManualCreate}>
+            직접 정의 열기
+          </button>
+        )}
+        <button className="btn" type="button" onClick={props.onOpenTest}>
+          테스트 작업대
+        </button>
+      </span>
+    </section>
   );
 }
 

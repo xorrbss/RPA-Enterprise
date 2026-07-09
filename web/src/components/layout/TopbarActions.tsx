@@ -197,15 +197,16 @@ function createMenuItems(roles: readonly string[]): readonly GlobalCreateItem[] 
       label: "자동화 만들기",
       description: "말로 설명하거나 브라우저 녹화로 시작",
       icon: Video,
-      view: "scenarioStudio",
+      view: "create",
+      params: { creator: "ai" },
     });
     items.push({
       key: "template",
       label: "템플릿에서 시작",
       description: "검증된 업무 템플릿을 골라 자동화 초안 생성",
       icon: LayoutTemplate,
-      view: "connectorCatalog",
-      params: { focus: "templates" },
+      view: "create",
+      params: { start: "template" },
     });
   }
   if (can("run.create")) {
@@ -214,7 +215,7 @@ function createMenuItems(roles: readonly string[]): readonly GlobalCreateItem[] 
       label: "테스트 실행",
       description: "저장된 자동화의 계획을 확인하고 시험 실행",
       icon: PlaySquare,
-      view: "scenarioStudio",
+      view: "create",
       params: { focus: "test" },
     });
   }

@@ -25,11 +25,11 @@ function jwt(roles: readonly string[]): string {
 
 describe("scenario-studio-first-action", () => {
   beforeEach(() => {
-    location.hash = "#scenarioStudio";
+    location.hash = "#create";
     localStorage.setItem("rpa.token", jwt(["operator"]));
   });
 
-  test("starts with natural-language draft creation and keeps browser recording secondary", async () => {
+  test("create console starts with natural-language draft creation and keeps browser recording secondary", async () => {
     renderApp();
 
     const request = await screen.findByLabelText("자연어 요청");
@@ -43,12 +43,13 @@ describe("scenario-studio-first-action", () => {
     expect(within(chooser).getByRole("button", { name: "브라우저 녹화로 만들기" })).toBeInTheDocument();
     expect(within(chooser).getByText("AI Agent/MCP 자동화")).toBeInTheDocument();
     expect(within(chooser).getByText("결정 필요")).toBeInTheDocument();
-    expect(await screen.findByText("첫 실행 전")).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "만들기 기본 경로" })).toHaveTextContent("말로 설명");
+    expect(screen.getByText(/테스트까지 한 흐름/)).toBeInTheDocument();
 
     const draftButtons = screen.getAllByRole("button", { name: "자동화 초안 만들기" });
     expect(draftButtons.length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByRole("button", { name: "+ 새 자동화 만들기" })).toBeNull();
-    expect(screen.getByText("양식으로 직접 만들기")).toBeInTheDocument();
+    expect(within(chooser).getByRole("button", { name: "직접 설계" })).toBeInTheDocument();
     fireEvent.click(within(chooser).getByRole("button", { name: "브라우저 업무 자동화" }));
 
     expect(request).toHaveFocus();
@@ -64,7 +65,7 @@ describe("scenario-studio-first-action", () => {
   });
 
   test("creator ai deep link focuses the natural-language request", async () => {
-    location.hash = "#scenarioStudio?creator=ai";
+    location.hash = "#create?creator=ai";
     renderApp();
 
     const request = await screen.findByLabelText("자연어 요청");
@@ -108,6 +109,7 @@ describe("scenario-studio-first-action", () => {
   });
 
   test("saved automation actions lead with plan and dispatch direct runs as test mode", async () => {
+    location.hash = "#scenarioStudio";
     const calls: Array<{ runMode: string | undefined; scenarioVersionId: string }> = [];
     renderApp(
       fakeClient({
@@ -133,6 +135,7 @@ describe("scenario-studio-first-action", () => {
   });
 
   test("saved automation can open focused studio with test and evidence continuation", async () => {
+    location.hash = "#scenarioStudio";
     renderApp(
       fakeClient({
         listScenarios: async () => ({
@@ -174,10 +177,11 @@ describe("scenario-studio-first-action", () => {
   });
 
   test("keeps governance approval below the creation start path", async () => {
+    location.hash = "#scenarioStudio";
     localStorage.setItem("rpa.token", jwt(["operator", "approver"]));
     renderApp();
 
-    const create = await screen.findByRole("region", { name: "자동화 시작 방식" });
+    const create = await screen.findByRole("region", { name: "전문가 자동화 스튜디오 안내" });
     const inbox = await screen.findByRole("region", { name: "운영 기준 승인 대기" });
 
     expect(create.compareDocumentPosition(inbox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

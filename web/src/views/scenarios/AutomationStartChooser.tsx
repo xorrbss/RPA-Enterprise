@@ -39,6 +39,7 @@ export function AutomationStartChooser({
           onAction={onBrowserText}
         />
         <AutomationStartCard
+          id="create-template-start"
           icon={ListChecks}
           title="템플릿에서 시작"
           description="검토된 업무 템플릿을 골라 실행 입력값과 시작 주소를 미리 채웁니다."
@@ -83,6 +84,7 @@ export function AutomationStartChooser({
 }
 
 function AutomationStartCard({
+  id,
   icon: Icon,
   title,
   description,
@@ -93,6 +95,7 @@ function AutomationStartCard({
   primary = false,
   disabled = false,
 }: {
+  id?: string;
   icon: LucideIcon;
   title: string;
   description: string;
@@ -104,7 +107,7 @@ function AutomationStartCard({
   disabled?: boolean;
 }): JSX.Element {
   return (
-    <article className={`automation-start-card${primary ? " primary" : ""}${disabled ? " disabled" : ""}`} aria-disabled={disabled || undefined}>
+    <article id={id} className={`automation-start-card${primary ? " primary" : ""}${disabled ? " disabled" : ""}`} aria-disabled={disabled || undefined}>
       <span className="automation-start-icon">
         <Icon size={18} aria-hidden="true" />
       </span>

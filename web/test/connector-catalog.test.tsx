@@ -196,9 +196,15 @@ describe("connector catalog view", () => {
 
     const initialPreview = await screen.findByLabelText("선택한 템플릿 미리보기");
     expect(within(initialPreview).getByText("SAP list extract 미리보기")).toBeInTheDocument();
+    expect(within(initialPreview).getByText("P0 preflight")).toBeInTheDocument();
+    expect(within(initialPreview).getByText("scenario.create 확인됨")).toBeInTheDocument();
     expect(within(initialPreview).getByText("Open SAP web list, apply filters, extract visible table rows, and store redacted evidence.")).toBeInTheDocument();
     expect(within(initialPreview).getByText("monthly vendor reconciliation")).toBeInTheDocument();
-    expect(within(initialPreview).getByText(/웹 목록 조회와 표 추출|브라우저 표 추출/)).toBeInTheDocument();
+    expect(within(initialPreview).getAllByText(/웹 목록 조회와 표 추출|브라우저 표 추출/).length).toBeGreaterThan(0);
+    expect(within(initialPreview).getByLabelText("메타데이터 기반 단계 미리보기")).toBeInTheDocument();
+    expect(within(initialPreview).getByText(/session_ready 상태를 Security에서 확인하세요/)).toBeInTheDocument();
+    expect(within(initialPreview).getByText(/정확한 ordered step, 선택자, API 호출 순서는 현재 템플릿 계약에 없어 추측하지 않습니다/)).toBeInTheDocument();
+    expect(within(initialPreview).getByRole("button", { name: "초안 만들기" })).toBeEnabled();
 
     const documentRow = (await screen.findByText("Document IDP (Browser Artifacts)")).closest("tr") as HTMLTableRowElement;
     fireEvent.click(within(documentRow).getByRole("button"));
@@ -209,7 +215,8 @@ describe("connector catalog view", () => {
     expect(within(documentPreview).getByText("Document field validation 미리보기")).toBeInTheDocument();
     expect(within(documentPreview).getByText("invoice fields, contract metadata, manual correction loop")).toBeInTheDocument();
     expect(within(documentPreview).getByText("Required fields are extracted or a business_form_v1 validation task is opened with artifact references.")).toBeInTheDocument();
-    expect(within(documentPreview).getByText(/브라우저 증빙 기반 문서 검증/)).toBeInTheDocument();
+    expect(within(documentPreview).getAllByText(/브라우저 증빙 기반 문서 검증/).length).toBeGreaterThan(0);
+    expect(within(documentPreview).getByText(/브라우저 세션 대신 승인된 연동 프로필과 SecretRef 준비 상태를 확인하세요/)).toBeInTheDocument();
   });
 
   test("shows an error state when the connector catalog cannot load", async () => {
@@ -225,7 +232,7 @@ describe("connector catalog view", () => {
     const templateRow = (await screen.findByText("SAP list extract")).closest("tr") as HTMLTableRowElement;
     fireEvent.click(within(templateRow).getByRole("button", { name: "초안 만들기" }));
 
-    await waitFor(() => expect(location.hash).toContain("#scenarioStudio"));
+    await waitFor(() => expect(location.hash).toContain("#create"));
     expect(location.hash).toContain("connector_id=sap-web");
     expect(location.hash).toContain("template_id=sap-web-list-extract");
     await waitFor(() => expect(screen.getAllByDisplayValue(/SAP list extract/).length).toBeGreaterThan(0));
@@ -242,7 +249,7 @@ describe("connector catalog view", () => {
     expect(await within(detail).findByText("SAP Web / ERP Portal")).toBeInTheDocument();
     fireEvent.click(within(detail).getByRole("button", { name: "이 커넥터로 초안 만들기" }));
 
-    await waitFor(() => expect(location.hash).toContain("#scenarioStudio"));
+    await waitFor(() => expect(location.hash).toContain("#create"));
     expect(location.hash).toContain("connector_id=sap-web");
     expect(location.hash).not.toContain("template_id=");
     await waitFor(() => expect(screen.getByDisplayValue("SAP Web / ERP Portal 자동화 초안")).toBeInTheDocument());
@@ -258,7 +265,7 @@ describe("connector catalog view", () => {
     const templateRow = (await screen.findByText("Document field validation")).closest("tr") as HTMLTableRowElement;
     fireEvent.click(within(templateRow).getByRole("button", { name: "초안 만들기" }));
 
-    await waitFor(() => expect(location.hash).toContain("#scenarioStudio"));
+    await waitFor(() => expect(location.hash).toContain("#create"));
     const query = location.hash.slice(location.hash.indexOf("?") + 1);
     const params = new URLSearchParams(query).get("params") ?? "";
     expect(params).toContain("실행 결과에서 증빙을 선택하세요");

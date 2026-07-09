@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "vitest";
+﻿import { beforeEach, describe, expect, test } from "vitest";
 import {
   fireEvent,
   render,
@@ -90,7 +90,7 @@ function recordingLifecycleFields(
 
 describe("browser recorder panel", () => {
   beforeEach(() => {
-    location.hash = "#scenarioStudio";
+    location.hash = "#create";
     localStorage.setItem("rpa.token", tokenWithRoles(["admin"]));
   });
 

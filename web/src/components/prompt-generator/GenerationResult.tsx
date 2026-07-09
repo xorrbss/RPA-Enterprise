@@ -133,7 +133,7 @@ export function GenerationResult({
       )}
       {result.scenario_id !== null && (
         <div className="inline-actions" aria-label="저장된 자동화 연결">
-          <button className="btn" type="button" onClick={() => navigate("scenarioStudio", { scenario: result.scenario_id!, focus: "test" })}>
+          <button className="btn" type="button" onClick={() => navigate("create", { scenario: result.scenario_id!, focus: "test" })}>
             테스트 실행
           </button>
           <button className="btn" type="button" onClick={() => navigate("automationOps", { scenario: result.scenario_id! })}>

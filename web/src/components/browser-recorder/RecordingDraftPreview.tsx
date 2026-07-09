@@ -168,7 +168,7 @@ export function RecordingDraftPreview(props: {
               className="btn"
               type="button"
               onClick={() =>
-                navigate("scenarioStudio", {
+                navigate("create", {
                   scenario: props.savedScenario?.scenario_id ?? "",
                   focus: "test",
                 })

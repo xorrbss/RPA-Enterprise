@@ -170,7 +170,7 @@ function buildReadinessGates(args: {
 
   gates.push(
     args.scenarios.isError
-      ? { key: "automation", label: "첫 자동화", status: "needs", detail: queryErrorDetail(args.scenarios.error), action: { label: "자동화 초안 만들기", view: "scenarioStudio", requiredAction: "scenario.create" } }
+      ? { key: "automation", label: "첫 자동화", status: "needs", detail: queryErrorDetail(args.scenarios.error), action: { label: "자동화 초안 만들기", view: "create", requiredAction: "scenario.create" } }
       : args.scenarios.data === undefined
         ? { key: "automation", label: "첫 자동화", status: "deferred", detail: queryPendingDetail(args.scenarios) }
         : scenarios.length > 0
@@ -180,13 +180,13 @@ function buildReadinessGates(args: {
               label: "첫 자동화",
               status: "needs",
               detail: "첫 자동화 초안이 아직 없습니다.",
-              action: { label: "자동화 초안 만들기", view: "scenarioStudio", requiredAction: "scenario.create" },
+              action: { label: "자동화 초안 만들기", view: "create", requiredAction: "scenario.create" },
             },
   );
 
   gates.push(
     args.recent.isError
-      ? { key: "test-run", label: "테스트 실행", status: "needs", detail: queryErrorDetail(args.recent.error), action: { label: "테스트 실행", view: "scenarioStudio", params: { focus: "test" }, requiredAction: "run.create" } }
+      ? { key: "test-run", label: "테스트 실행", status: "needs", detail: queryErrorDetail(args.recent.error), action: { label: "테스트 실행", view: "create", params: { focus: "test" }, requiredAction: "run.create" } }
       : args.recent.data === undefined
         ? { key: "test-run", label: "테스트 실행", status: "deferred", detail: queryPendingDetail(args.recent) }
         : {
@@ -197,7 +197,7 @@ function buildReadinessGates(args: {
             action:
               testRunDecision.status === "ready"
                 ? undefined
-                : { label: "테스트 실행", view: "scenarioStudio", params: { focus: "test" }, requiredAction: "run.create" },
+                : { label: "테스트 실행", view: "create", params: { focus: "test" }, requiredAction: "run.create" },
           },
   );
 

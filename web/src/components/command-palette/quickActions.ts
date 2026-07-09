@@ -37,8 +37,8 @@ export const QUICK_ACTIONS: readonly QuickActionSpec[] = [
   {
     id: "automation-test",
     label: "테스트 실행",
-    hint: "자동화 만들기에서 계획 확인 후 시험 실행",
-    view: "scenarioStudio",
+    hint: "만들기 콘솔에서 계획 확인 후 시험 실행",
+    view: "create",
     params: { focus: "test" },
     keywords: ["test", "testing", "playground", "run test", "테스트", "시험", "실행", "계획", "자동화"],
   },
