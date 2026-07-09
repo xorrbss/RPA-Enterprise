@@ -424,7 +424,7 @@ describe("coe pipeline view", () => {
 
     expect((await screen.findAllByText("월마감 지급 확인")).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "자동화 설계안 보기" }));
-    await waitFor(() => expect(location.hash).toBe("#playground?scenario=scenario-linked"));
+    await waitFor(() => expect(location.hash).toBe("#scenarioStudio?scenario=scenario-linked&focus=test"));
 
     location.hash = "#coePipeline";
     fireEvent.click(await screen.findByRole("button", { name: "운영 예약 보기" }));

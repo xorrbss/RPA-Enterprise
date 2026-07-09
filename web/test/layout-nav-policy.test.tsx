@@ -41,12 +41,44 @@ describe("layout nav policy", () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
     expect(navItemCount(nav)).toBe(10);
-    for (const label of ["내 할 일", "RPA 운영 대시보드", "사람 확인", "작업 목록", "자동화 만들기", "테스트 실행", "실행 기록", "실행 예약·알림", "문서 자동화"]) {
+    for (const label of ["내 할 일", "RPA 운영 대시보드", "도입 증빙", "사람 확인", "작업 목록", "자동화 만들기", "실행 기록", "실행 예약·알림", "문서 자동화"]) {
       expect(within(nav).getByRole("button", { name: label })).toBeInTheDocument();
     }
     for (const hidden of ["Product-open 점검", "중복 방지", "보안/개인정보", "AI 모델 설정", "자동화 검사"]) {
       expect(within(nav).queryByRole("button", { name: hidden })).toBeNull();
     }
+  });
+
+  test("operator quick start menu exposes creation, test, schedule, and setup starts", () => {
+    renderApp();
+    fireEvent.click(screen.getByRole("button", { name: /빠른 시작/ }));
+
+    const menu = screen.getByRole("menu", { name: "빠른 시작" });
+    expect(within(menu).getByRole("menuitem", { name: /자동화 만들기/ })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: /테스트 실행/ })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: /운영 예약/ })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: /사이트\/세션 등록/ })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: /증빙 확인/ })).toBeInTheDocument();
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /테스트 실행/ }));
+
+    expect(location.hash).toBe("#scenarioStudio?focus=test");
+    expect(screen.queryByRole("menu", { name: "빠른 시작" })).toBeNull();
+  });
+
+  test("viewer quick start does not expose write actions", () => {
+    localStorage.setItem("rpa.token", jwt(["viewer"]));
+    renderApp();
+    fireEvent.click(screen.getByRole("button", { name: /빠른 시작/ }));
+
+    const menu = screen.getByRole("menu", { name: "빠른 시작" });
+    expect(within(menu).queryByRole("menuitem", { name: /자동화 만들기/ })).toBeNull();
+    expect(within(menu).queryByRole("menuitem", { name: /테스트 실행/ })).toBeNull();
+    expect(within(menu).queryByRole("menuitem", { name: /운영 예약/ })).toBeNull();
+    expect(within(menu).queryByRole("menuitem", { name: /사이트\/세션 등록/ })).toBeNull();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /증빙 확인/ }));
+
+    expect(location.hash).toBe("#adoptionEvidence");
   });
 
   test("operator advanced mode adds allowed expert tools only", () => {

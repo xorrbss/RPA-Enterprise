@@ -37,6 +37,32 @@ const RUN_PRIORITY_LABELS: Record<RunPriority, string> = {
   critical: "긴급",
 };
 
+type ParamsSummary = {
+  readonly tone: "blue" | "amber";
+  readonly title: string;
+  readonly detail: string;
+};
+
+function paramsJsonSummary(value: string): ParamsSummary {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return { tone: "amber", title: "입력값 확인 필요", detail: "실행 입력값이 비어 있습니다. 필요한 경우 고급 조정에서 값을 입력하세요." };
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { tone: "amber", title: "입력값 확인 필요", detail: "실행 입력값은 여러 항목을 담은 객체 형태여야 합니다." };
+    }
+    const keys = Object.keys(parsed);
+    if (keys.length === 0) return { tone: "blue", title: "추가 입력값 없음", detail: "자동화 기본값으로 사람 확인 실행을 요청합니다." };
+    const preview = keys.slice(0, 3).join(", ");
+    const suffix = keys.length > 3 ? ` 외 ${keys.length - 3}개` : "";
+    return { tone: "blue", title: `${keys.length}개 입력값`, detail: `${preview}${suffix} 항목을 함께 전달합니다.` };
+  } catch {
+    return { tone: "amber", title: "입력값 확인 필요", detail: "JSON 형식을 확인해야 합니다. 고급 조정에서 수정하세요." };
+  }
+}
+
 export function WebAttendedPanel({
   runRequests,
   resumeRequests,
@@ -129,6 +155,8 @@ function WebAttendedRunCreateForm({
   const [inputRefsCsv, setInputRefsCsv] = useState("artifact://web-attended/input-001");
   const [legalHold, setLegalHold] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [paramsEditorOpen, setParamsEditorOpen] = useState(false);
+  const paramsSummary = paramsJsonSummary(paramsJson);
 
   function submit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -144,6 +172,7 @@ function WebAttendedRunCreateForm({
     try {
       JSON.parse(paramsJson);
     } catch {
+      setParamsEditorOpen(true);
       setValidationError("실행 파라미터는 올바른 JSON이어야 합니다.");
       return;
     }
@@ -185,13 +214,24 @@ function WebAttendedRunCreateForm({
           <input aria-label="사람 확인 작업 ID" value={humanTaskId} onChange={(event) => setHumanTaskId(event.target.value)} />
         </label>
         <label className="field ops-webhook-summary">
-          실행 파라미터(JSON)
-          <textarea aria-label="사람 확인 실행 파라미터 JSON" rows={4} value={paramsJson} onChange={(event) => setParamsJson(event.target.value)} />
-        </label>
-        <label className="field ops-webhook-summary">
           실행 동의 요약
           <textarea aria-label="사람 확인 실행 동의 요약" rows={2} value={consentSummary} onChange={(event) => setConsentSummary(event.target.value)} />
         </label>
+        <div className="ops-webhook-summary web-attended-params-overview" role="status" aria-label="사람 확인 실행 입력값 요약">
+          <span className={`badge ${paramsSummary.tone}`}>{paramsSummary.title}</span>
+          <span className="subtle">{paramsSummary.detail}</span>
+        </div>
+        <details
+          className="developer-details ops-webhook-summary"
+          open={paramsEditorOpen}
+          onToggle={(event) => setParamsEditorOpen((event.currentTarget as HTMLDetailsElement).open)}
+        >
+          <summary>고급/원문 실행 입력값 조정</summary>
+          <label className="field">
+            실행 파라미터(JSON)
+            <textarea aria-label="사람 확인 실행 파라미터 JSON" rows={4} value={paramsJson} onChange={(event) => setParamsJson(event.target.value)} />
+          </label>
+        </details>
         <label className="field">
           동의 증빙 참조
           <input aria-label="사람 확인 실행 동의 증빙 참조" value={consentEvidenceRef} onChange={(event) => setConsentEvidenceRef(event.target.value)} />

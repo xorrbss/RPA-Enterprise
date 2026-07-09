@@ -154,7 +154,8 @@ describe("mobile drawer navigation", () => {
     expect(menu).toHaveAttribute("aria-expanded", "true");
     expect(dialog).toHaveAttribute("aria-modal", "true");
     expect(within(dialog).getByRole("navigation", { name: "모바일 주 메뉴" })).toBeInTheDocument();
-    expect(drawerNavItemCount(dialog)).toBe(10);
+    expect(drawerNavItemCount(dialog)).toBe(11);
+    expect(within(dialog).getByRole("button", { name: "도입 증빙" })).toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
     expect(within(dialog).queryByRole("button", { name: "보안/개인정보" })).toBeNull();
   });
@@ -180,7 +181,8 @@ describe("mobile drawer navigation", () => {
     const dialog = screen.getByRole("dialog", { name: "주 메뉴" });
 
     expect(within(dialog).queryByRole("button", { name: "중복 방지" })).toBeNull();
-    expect(drawerNavItemCount(dialog)).toBe(10);
+    expect(drawerNavItemCount(dialog)).toBe(11);
+    expect(within(dialog).getByRole("button", { name: "도입 증빙" })).toBeInTheDocument();
   });
 
   test("Escape closes drawer and restores focus", async () => {

@@ -8,7 +8,6 @@ import {
   blockerLabel,
   canRunGenerationWithCorrections,
   correctionGuideReady,
-  evidenceReviewActionLabel,
   generationStatusLabel,
   generationStatusTone,
   hasRequestedImageEvidence,
@@ -45,7 +44,6 @@ export function GenerationResult({
 }): JSX.Element {
   const canRunWithCorrections = canRunGenerationWithCorrections(result);
   const correctionReady = correctionGuide === null || correctionGuideReady(correctionGuide);
-  const resultActionLabel = evidenceReviewActionLabel(result.evidence_policy);
   return (
     <div className="generation-result" role="status">
       <div className="generation-result-head">
@@ -135,8 +133,8 @@ export function GenerationResult({
       )}
       {result.scenario_id !== null && (
         <div className="inline-actions" aria-label="저장된 자동화 연결">
-          <button className="btn" type="button" onClick={() => navigate("playground", { scenario: result.scenario_id! })}>
-            자동화 보기
+          <button className="btn" type="button" onClick={() => navigate("scenarioStudio", { scenario: result.scenario_id!, focus: "test" })}>
+            테스트 실행
           </button>
           <button className="btn" type="button" onClick={() => navigate("automationOps", { scenario: result.scenario_id! })}>
             운영 예약
@@ -151,7 +149,7 @@ export function GenerationResult({
           {hasRequestedImageEvidence(result.evidence_policy) && <Image size={15} aria-hidden="true" />}
           {hasRequestedVideoEvidence(result.evidence_policy) && <FileVideo size={15} aria-hidden="true" />}
           {!hasRequestedImageEvidence(result.evidence_policy) && !hasRequestedVideoEvidence(result.evidence_policy) && <Play size={15} aria-hidden="true" />}
-          {resultActionLabel}
+          실행 상태·증빙 보기
         </button>
       )}
     </div>

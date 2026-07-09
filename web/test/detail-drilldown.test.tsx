@@ -144,7 +144,7 @@ describe("작업항목·사람확인 상세 드릴다운", () => {
       }),
     );
 
-    await screen.findByText("접수번호 #ht-all-a");
+    expect((await screen.findAllByText("접수번호 #ht-all-a")).length).toBeGreaterThanOrEqual(1);
     await waitFor(() => expect(calls.some((params) => params.assignee === "u")).toBe(false));
     expect(calls).toContainEqual(expect.objectContaining({ terminal: "false", limit: 50 }));
   });
@@ -306,15 +306,15 @@ describe("작업항목·사람확인 상세 드릴다운", () => {
     location.hash = "#humanTasks";
 
     expect(await screen.findByText("검증 대기 문서")).toBeInTheDocument();
-    expect(await screen.findByText("접수번호 #ht-doc")).toBeInTheDocument();
+    expect((await screen.findAllByText("접수번호 #ht-doc")).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("접수번호 #ht-appro")).toBeInTheDocument();
     expect(screen.getAllByText("문서 검증").length).toBeGreaterThanOrEqual(1);
     fireEvent.click(screen.getByRole("button", { name: /문서 검증 업무 1/ }));
 
-    expect(screen.getByText("접수번호 #ht-doc")).toBeInTheDocument();
+    expect(screen.getAllByText("접수번호 #ht-doc").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText("접수번호 #ht-appro")).toBeNull();
     expect(screen.queryByText("ht-approval")).toBeNull();
-    expect(screen.getByText("증빙 1건")).toBeInTheDocument();
+    expect(screen.getAllByText("증빙 1건").length).toBeGreaterThanOrEqual(1);
   });
 
   // T5 — run_id 채워진 사람확인 → '원본 실행 보기' → runTrace 해시.

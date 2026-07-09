@@ -321,7 +321,7 @@ export function TriggerScheduler({
             <button className="btn primary" type="button" onClick={() => createTrigger.mutate()} disabled={!canManageTriggers || !canCreateTrigger || createTrigger.isPending}>
               {createTrigger.isPending ? "저장 중" : "예약 저장"}
             </button>
-            <button className="btn" type="button" onClick={() => navigate("playground", selectedScenario !== null ? { scenario: selectedScenario.scenario_id } : undefined)} disabled={selectedScenario === null}>
+            <button className="btn" type="button" onClick={() => navigate("scenarioStudio", selectedScenario !== null ? { scenario: selectedScenario.scenario_id, focus: "test" } : { focus: "test" })} disabled={selectedScenario === null}>
               미리보기
             </button>
             {!canManageTriggers && <span className="badge amber">예약 변경 권한 없음</span>}

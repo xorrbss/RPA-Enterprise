@@ -154,9 +154,30 @@ describe("connector catalog view", () => {
     expect(screen.getAllByText(/owner\/provider/).length).toBeGreaterThan(0);
 
     const uipathTemplateRow = screen.getByText("UiPath handoff provider profile").closest("tr") as HTMLTableRowElement;
-    expect(within(uipathTemplateRow).getByRole("button")).toBeDisabled();
+    expect(within(uipathTemplateRow).getByRole("button", { name: "관리자 활성화 필요" })).toBeDisabled();
     expect(screen.queryByText("UiPath direct connector")).not.toBeInTheDocument();
     expect(screen.queryByText("Power Automate direct connector")).not.toBeInTheDocument();
+  });
+
+  test("previews what a template can create using catalog fields before drafting", async () => {
+    renderApp();
+
+    const initialPreview = await screen.findByLabelText("선택한 템플릿 미리보기");
+    expect(within(initialPreview).getByText("SAP list extract 미리보기")).toBeInTheDocument();
+    expect(within(initialPreview).getByText("Open SAP web list, apply filters, extract visible table rows, and store redacted evidence.")).toBeInTheDocument();
+    expect(within(initialPreview).getByText("monthly vendor reconciliation")).toBeInTheDocument();
+    expect(within(initialPreview).getByText(/웹 목록 조회와 표 추출|브라우저 표 추출/)).toBeInTheDocument();
+
+    const documentRow = (await screen.findByText("Document IDP (Browser Artifacts)")).closest("tr") as HTMLTableRowElement;
+    fireEvent.click(within(documentRow).getByRole("button"));
+    const documentTemplateRow = (await screen.findByText("Document field validation")).closest("tr") as HTMLTableRowElement;
+    fireEvent.click(within(documentTemplateRow).getByRole("button", { name: "미리보기" }));
+
+    const documentPreview = screen.getByLabelText("선택한 템플릿 미리보기");
+    expect(within(documentPreview).getByText("Document field validation 미리보기")).toBeInTheDocument();
+    expect(within(documentPreview).getByText("invoice fields, contract metadata, manual correction loop")).toBeInTheDocument();
+    expect(within(documentPreview).getByText("Required fields are extracted or a business_form_v1 validation task is opened with artifact references.")).toBeInTheDocument();
+    expect(within(documentPreview).getByText(/브라우저 증빙 기반 문서 검증/)).toBeInTheDocument();
   });
 
   test("shows an error state when the connector catalog cannot load", async () => {
@@ -177,9 +198,24 @@ describe("connector catalog view", () => {
     expect(location.hash).toContain("template_id=sap-web-list-extract");
     await waitFor(() => expect(screen.getAllByDisplayValue(/SAP list extract/).length).toBeGreaterThan(0));
     expect(screen.getByDisplayValue("SAP list extract 자동화 초안")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByDisplayValue(/"company_code": "1000"/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText("company_code")).toHaveValue("TODO: [BLOCKED] 회사 코드를 입력하세요"));
     expect(screen.queryByText("승인된 API 프로필")).not.toBeInTheDocument();
     expect(screen.queryByText("응답 스키마")).not.toBeInTheDocument();
+  });
+
+  test("opens the selected connector as a scenario generator draft prefill", async () => {
+    renderApp();
+
+    const detail = await screen.findByLabelText("선택한 커넥터 상세");
+    expect(await within(detail).findByText("SAP Web / ERP Portal")).toBeInTheDocument();
+    fireEvent.click(within(detail).getByRole("button", { name: "이 커넥터로 초안 만들기" }));
+
+    await waitFor(() => expect(location.hash).toContain("#scenarioStudio"));
+    expect(location.hash).toContain("connector_id=sap-web");
+    expect(location.hash).not.toContain("template_id=");
+    await waitFor(() => expect(screen.getByDisplayValue("SAP Web / ERP Portal 자동화 초안")).toBeInTheDocument());
+    expect(screen.getByDisplayValue(/지원 동작: 웹 이동, 클릭, 데이터 추출, 다운로드/)).toBeInTheDocument();
+    expect(screen.getByDisplayValue(/TODO: \[BLOCKED\]/)).toBeInTheDocument();
   });
 
   test("document template draft uses business-friendly artifact placeholders", async () => {
@@ -194,7 +230,7 @@ describe("connector catalog view", () => {
     const query = location.hash.slice(location.hash.indexOf("?") + 1);
     const params = new URLSearchParams(query).get("params") ?? "";
     expect(params).toContain("실행 결과에서 증빙을 선택하세요");
-    expect(params).toContain('"송장번호": "텍스트"');
+    expect(params).toContain("TODO: [BLOCKED] 필드명을 입력하세요");
     expect(params).not.toContain('"source_artifact_id": "artifact_id"');
     expect(params).not.toContain('"invoice_no": "string"');
   });

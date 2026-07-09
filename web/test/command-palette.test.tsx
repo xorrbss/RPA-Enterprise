@@ -8,9 +8,15 @@ import { ApiClientProvider } from "../src/api/context";
 import type { ApiClient } from "../src/api/client";
 import { fakeClient } from "./fake-client";
 
-const POLICY_FILTERED_MESSAGE = "현재 역할/메뉴 모드에서 표시되지 않는 항목입니다.";
-const LOOKUP_FAILURE_MESSAGE = "데이터 검색을 불러오지 못했습니다. 화면 이동 결과는 계속 사용할 수 있습니다.";
+const POLICY_FILTERED_MESSAGE = "현재 역할 또는 메뉴 모드에서 숨겨진 항목입니다.";
+const LOOKUP_FAILURE_MESSAGE = "데이터 검색을 불러오지 못했습니다.";
 const NO_RESULTS_MESSAGE = "검색 결과가 없습니다.";
+const POLICY_FILTERED_DETAIL = "검색어와 일치하는 화면이나 작업이 있지만 현재 표시 정책에서는 결과에 표시되지 않습니다.";
+const POLICY_FILTERED_ADVANCED_ACTION = "다음 행동: 고급 메뉴 전환으로 확인하거나 권한 있는 담당자에게 요청하세요.";
+const POLICY_FILTERED_REQUEST_ACTION = "다음 행동: 권한 있는 담당자에게 요청하세요.";
+const LOOKUP_FAILURE_DETAIL = "화면 이동 결과는 계속 사용할 수 있습니다. 데이터 검색만 잠시 실패했습니다.";
+const NO_RESULTS_DETAIL =
+  "표시 가능한 화면과 작업에서 일치하는 항목을 찾지 못했습니다. 현재 역할/메뉴 모드에서 숨겨진 항목은 결과에 표시되지 않습니다.";
 
 function renderApp(client: ApiClient = fakeClient()): void {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -62,6 +68,8 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
     fireEvent.change(within(dialog).getByRole("combobox"), { target: { value: "중복 방지" } });
     expect(within(dialog).queryByText("중복 방지")).toBeNull();
     expect(await within(dialog).findByText(POLICY_FILTERED_MESSAGE)).toBeInTheDocument();
+    expect(within(dialog).getByText(POLICY_FILTERED_DETAIL)).toBeInTheDocument();
+    expect(within(dialog).getByText(POLICY_FILTERED_ADVANCED_ACTION)).toBeInTheDocument();
     expect(within(dialog).queryByText(LOOKUP_FAILURE_MESSAGE)).toBeNull();
   });
 
@@ -136,20 +144,68 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
     const dialog = await screen.findByRole("dialog", { name: "전역 검색 및 화면 이동" });
     const input = within(dialog).getByRole("combobox");
 
-    for (const query of ["Product-open", "중복 방지"] as const) {
-      fireEvent.change(input, { target: { value: query } });
-      expect(await within(dialog).findByText(POLICY_FILTERED_MESSAGE)).toBeInTheDocument();
-      expect(within(dialog).queryByText(NO_RESULTS_MESSAGE)).toBeNull();
-      expect(within(dialog).queryByText(LOOKUP_FAILURE_MESSAGE)).toBeNull();
-    }
+    fireEvent.change(input, { target: { value: "Product-open" } });
+    expect(await within(dialog).findByText(POLICY_FILTERED_MESSAGE)).toBeInTheDocument();
+    expect(within(dialog).getByText(POLICY_FILTERED_DETAIL)).toBeInTheDocument();
+    expect(within(dialog).getByText(POLICY_FILTERED_REQUEST_ACTION)).toBeInTheDocument();
+    expect(within(dialog).queryByText(NO_RESULTS_MESSAGE)).toBeNull();
+    expect(within(dialog).queryByText(LOOKUP_FAILURE_MESSAGE)).toBeNull();
+
+    fireEvent.change(input, { target: { value: "중복 방지" } });
+    await waitFor(() => expect(within(dialog).getByText(POLICY_FILTERED_ADVANCED_ACTION)).toBeInTheDocument());
+    expect(within(dialog).getByText(POLICY_FILTERED_DETAIL)).toBeInTheDocument();
+    expect(within(dialog).queryByText(NO_RESULTS_MESSAGE)).toBeNull();
+    expect(within(dialog).queryByText(LOOKUP_FAILURE_MESSAGE)).toBeNull();
+  });
+
+  test("standard operator는 advanced/admin 화면 검색 시 다음 행동을 구분해서 본다", async () => {
+    renderApp();
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    const dialog = await screen.findByRole("dialog", { name: "전역 검색 및 화면 이동" });
+    const input = within(dialog).getByRole("combobox");
+
+    fireEvent.change(input, { target: { value: "자동화 검사" } });
+    expect(await within(dialog).findByText(POLICY_FILTERED_MESSAGE)).toBeInTheDocument();
+    expect(within(dialog).getByText(POLICY_FILTERED_ADVANCED_ACTION)).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "AI 모델" } });
+    await waitFor(() => expect(within(dialog).getByText(POLICY_FILTERED_REQUEST_ACTION)).toBeInTheDocument());
+    expect(within(dialog).queryByText(POLICY_FILTERED_ADVANCED_ACTION)).toBeNull();
   });
 
   test("허용 범위 검색에서 결과가 없으면 일반 no-result 문구를 표시한다", async () => {
     const dialog = await openPaletteWithQuery("not-found-query");
 
     expect(await within(dialog).findByText(NO_RESULTS_MESSAGE)).toBeInTheDocument();
+    expect(within(dialog).getByText(NO_RESULTS_DETAIL)).toBeInTheDocument();
     expect(within(dialog).queryByText(POLICY_FILTERED_MESSAGE)).toBeNull();
     expect(within(dialog).queryByText(LOOKUP_FAILURE_MESSAGE)).toBeNull();
+  });
+
+  test("정책으로 필터된 통합 검색 결과도 무결과 대신 숨김 안내를 보여준다", async () => {
+    const dialog = await openPaletteWithQuery(
+      "홍길동",
+      fakeClient({
+        search: async () => ({
+          items: [
+            {
+              type: "principal",
+              id: "principal-pal-1",
+              label: "홍길동",
+              description: "보안 담당자",
+              route: "#security?principal=principal-pal-1",
+              matched_field: "display_name",
+            },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+
+    expect(await within(dialog).findByText(POLICY_FILTERED_MESSAGE)).toBeInTheDocument();
+    expect(within(dialog).getByText(POLICY_FILTERED_REQUEST_ACTION)).toBeInTheDocument();
+    expect(within(dialog).queryByText("홍길동")).toBeNull();
+    expect(within(dialog).queryByText(NO_RESULTS_MESSAGE)).toBeNull();
   });
 
   test("정책상 숨긴 화면 검색은 데이터 오류보다 역할/모드 안내를 우선 표시한다", async () => {
@@ -172,6 +228,8 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
     );
 
     expect(await within(dialog).findByText(POLICY_FILTERED_MESSAGE)).toBeInTheDocument();
+    expect(within(dialog).getByText(POLICY_FILTERED_DETAIL)).toBeInTheDocument();
+    expect(within(dialog).getByText(POLICY_FILTERED_REQUEST_ACTION)).toBeInTheDocument();
     expect(within(dialog).queryByText(NO_RESULTS_MESSAGE)).toBeNull();
     expect(within(dialog).queryByText(LOOKUP_FAILURE_MESSAGE)).toBeNull();
   });
@@ -196,6 +254,7 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
     );
 
     expect(await within(dialog).findByText(LOOKUP_FAILURE_MESSAGE)).toBeInTheDocument();
+    expect(within(dialog).getByText(LOOKUP_FAILURE_DETAIL)).toBeInTheDocument();
     expect(within(dialog).queryByText(POLICY_FILTERED_MESSAGE)).toBeNull();
     expect(within(dialog).queryByText(NO_RESULTS_MESSAGE)).toBeNull();
   });
@@ -219,7 +278,7 @@ describe("커맨드 팔레트(Ctrl/⌘+K) — 전역 검색·이동", () => {
       }),
     );
     await clickPaletteResult(dialog, "월말정산봇");
-    await waitFor(() => expect(location.hash).toBe("#playground?scenario=sc-1"));
+    await waitFor(() => expect(location.hash).toBe("#scenarioStudio?scenario=sc-1&focus=test"));
   });
 
   test("실행 결과 클릭 → 실행 기록 run 딥링크로 이동", async () => {

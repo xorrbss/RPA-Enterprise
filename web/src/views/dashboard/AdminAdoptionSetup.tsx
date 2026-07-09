@@ -215,9 +215,9 @@ function setupItems(args: {
       detail: args.recent.data === undefined || args.artifacts.data === undefined
         ? "audit, readiness, ROI, support evidence metadata packet을 확인 중입니다."
         : args.recent.data.items.length > 0 && latestArtifacts.length > 0
-          ? `최근 실행 ${args.recent.data.items.length}건과 artifact metadata ${latestArtifacts.length}건을 dashboard 증빙 패킷에서 묶습니다.`
-          : "최근 실행과 artifact metadata가 생기면 dashboard embedded evidence packet에 연결됩니다.",
-      action: { label: "증빙 패킷 보기", view: "dashboard", params: { focus: "evidence-packet" } },
+          ? `최근 실행 ${args.recent.data.items.length}건과 artifact metadata ${latestArtifacts.length}건을 도입 증빙 패킷에서 묶습니다.`
+          : "최근 실행과 artifact metadata가 생기면 도입 증빙 패킷에 연결됩니다.",
+      action: { label: "증빙 패킷 보기", view: "adoptionEvidence" },
     },
   ];
 }
@@ -244,7 +244,7 @@ export function AdminAdoptionSetup(props: {
       <div className="panel-head">
         <div>
           <h2>관리자 도입 설정</h2>
-          <p className="subtle">dashboard 안에서 SSO, RBAC, SCIM, SecretRef, 사이트·세션, 운영 증빙을 한 번에 추적합니다. 쓰기 화면은 기존 보안/운영 route로만 연결합니다.</p>
+          <p className="subtle">SSO, RBAC, SCIM, SecretRef, 사이트·세션, 운영 증빙을 한 번에 추적합니다. 쓰기 화면은 기존 보안/운영 route로만 연결합니다.</p>
         </div>
         <span className={`badge ${unresolved === 0 ? "green" : "amber"}`}>{unresolved === 0 ? "관리 준비됨" : `${unresolved}개 미해소`}</span>
       </div>

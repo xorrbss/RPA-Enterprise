@@ -7,6 +7,8 @@ import {
   KIND_LABEL,
   STATUS_LABEL,
   actionsLabel,
+  connectorDraftBlocker,
+  connectorDraftButtonLabel,
   envLabel,
   implementationLabel,
   listLabel,
@@ -20,7 +22,15 @@ import {
   statusTone,
 } from "./catalog-labels";
 
-export function ConnectorDetailPanel({ connector: selectedConnector }: { connector: ConnectorCatalogItem | null }): JSX.Element {
+export function ConnectorDetailPanel({
+  connector: selectedConnector,
+  canCreateScenario,
+  onCreateDraft,
+}: {
+  connector: ConnectorCatalogItem | null;
+  canCreateScenario: boolean;
+  onCreateDraft: (connector: ConnectorCatalogItem) => void;
+}): JSX.Element {
   const api = useApiClient();
   const [profileName, setProfileName] = useState("");
   const [profileSecretRefs, setProfileSecretRefs] = useState("");
@@ -43,6 +53,9 @@ export function ConnectorDetailPanel({ connector: selectedConnector }: { connect
     [profileQuery.data?.items, selectedConnector],
   );
   const selectedConnectorCanCreateProfile = selectedConnector?.status === "available" || selectedConnector?.status === "requires_admin";
+  const connectorCreateBlocker = selectedConnector === null ? null : connectorDraftBlocker(selectedConnector);
+  const connectorCreateDisabledReason =
+    selectedConnector === null ? null : canCreateScenario ? connectorCreateBlocker : "scenario.create 권한이 있어야 초안을 만들 수 있습니다.";
 
   const createProfileMutation = useMutation({
     mutationFn: () => {
@@ -88,6 +101,20 @@ export function ConnectorDetailPanel({ connector: selectedConnector }: { connect
               <span className="badge blue">{KIND_LABEL[selectedConnector.kind]}</span>
               <span className="badge muted">{implementationLabel(selectedConnector.implementation_state)}</span>
               <span className={`badge ${priorityTone(selectedConnector.priority)}`}>{priorityLabel(selectedConnector.priority)}</span>
+            </div>
+            <div className="inline-actions">
+              <button
+                className="btn primary"
+                type="button"
+                disabled={connectorCreateDisabledReason !== null}
+                title={connectorCreateDisabledReason ?? "생성 화면으로 커넥터 문맥을 전달합니다"}
+                onClick={() => onCreateDraft(selectedConnector)}
+              >
+                {canCreateScenario ? connectorDraftButtonLabel(selectedConnector) : "권한 필요"}
+              </button>
+              <span className="catalog-status-note" role="status">
+                {connectorCreateDisabledReason ?? "선택한 커넥터의 요약, 적합 업무, 지원 동작을 생성 화면에 전달합니다."}
+              </span>
             </div>
           </div>
           <dl className="catalog-facts">

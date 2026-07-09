@@ -32,4 +32,17 @@ describe("layout subject chip", () => {
     expect(screen.getByLabelText("현재 접속 계정 auth0|alice")).toBeInTheDocument();
     expect(screen.getByText("auth0|alice")).toBeInTheDocument();
   });
+
+  test("keeps long account identifiers available while showing a compact label", () => {
+    const subject = "00000000-0000-0000-0000-000000000000";
+    localStorage.setItem("rpa.token", jwt(subject, ["operator"]));
+    location.hash = "#dashboard";
+
+    renderApp();
+
+    const chip = screen.getByLabelText(`현재 접속 계정 ${subject}`);
+    expect(chip).toHaveAttribute("title", `현재 접속 계정 ${subject}`);
+    expect(screen.getByText("...000000000000")).toBeInTheDocument();
+    expect(screen.queryByText(subject)).toBeNull();
+  });
 });

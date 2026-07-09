@@ -7,6 +7,7 @@ describe("viewFromHash — 딥링크 쿼리 파라미터 지원", () => {
   test("플레인 해시 → 뷰 키", () => {
     expect(viewFromHash("#runTrace")).toBe("runTrace");
     expect(viewFromHash("#dashboard")).toBe("dashboard");
+    expect(viewFromHash("#adoptionEvidence")).toBe("adoptionEvidence");
     expect(viewFromHash("#automationOps")).toBe("automationOps");
     expect(viewFromHash("#coePipeline")).toBe("coePipeline");
     expect(viewFromHash("#connectorCatalog")).toBe("connectorCatalog");
@@ -35,6 +36,7 @@ describe("viewFromHash — 딥링크 쿼리 파라미터 지원", () => {
       ["#automationOps?section=queue", "automationOps"],
       ["#automationOps?section=readiness", "automationOps"],
       ["#auditExplorer", "auditExplorer"],
+      ["#adoptionEvidence", "adoptionEvidence"],
       ["#security?section=access&provider=scim-1", "security"],
       ["#security?section=sites&site=site-1", "security"],
       ["#security?section=ai", "security"],

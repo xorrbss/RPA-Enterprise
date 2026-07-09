@@ -113,11 +113,29 @@ function SecurityReadOnlySummary(props: {
   readonly sites: readonly SiteItem[];
   readonly sitesLoading: boolean;
   readonly sitesError: boolean;
+  readonly focusSiteId: string | null;
 }): JSX.Element {
   const section = securitySectionMeta(props.active);
   const pendingApprovals = props.sites.filter((site) => site.approval_status === "pending").length;
   const missingSessions = props.sites.filter((site) => site.login_capable === true && site.session_ready !== true).length;
   const openCircuits = props.sites.filter((site) => site.circuit_status === "open").length;
+  const focusSite = props.focusSiteId !== null ? props.sites.find((site) => site.site_profile_id === props.focusSiteId) ?? null : null;
+  const suggestedSite =
+    focusSite ??
+    props.sites.find((site) => site.login_capable === true && site.session_ready !== true) ??
+    props.sites.find((site) => site.approval_status === "pending") ??
+    props.sites.find((site) => site.circuit_status === "open") ??
+    null;
+  const nextRequests =
+    suggestedSite === null
+      ? []
+      : [
+          suggestedSite.approval_status === "pending" ? "approver 또는 admin 담당자에게 사이트 승인을 요청하세요." : null,
+          suggestedSite.login_capable === true && suggestedSite.session_ready !== true
+            ? "session.capture 권한 담당자에게 운영자 PC 등록 또는 서버 캡처를 요청하세요."
+            : null,
+          suggestedSite.circuit_status === "open" ? "운영 정책 담당자에게 차단 회로 상태 확인을 요청하세요." : null,
+        ].filter((item): item is string => item !== null);
 
   return (
     <div className="security-view">
@@ -144,6 +162,71 @@ function SecurityReadOnlySummary(props: {
           </p>
         )}
       </section>
+
+      {props.active === "sites" && (
+        <section className="panel security-readonly-workbench" aria-label="사이트 세션 준비 읽기 전용 안내">
+          <div className="panel-head">
+            <div>
+              <h2>사이트·세션 준비 안내</h2>
+              <p className="subtle">SecretRef 값과 세션 본문 없이 파일럿 대상 사이트의 준비 신호만 확인합니다.</p>
+            </div>
+            {props.focusSiteId !== null && <span className="badge blue">딥링크</span>}
+          </div>
+          <div className="security-readonly-body">
+            {props.sitesLoading ? (
+              <p className="subtle">사이트 준비 상태를 확인하는 중입니다.</p>
+            ) : props.sitesError ? (
+              <p className="form-alert red" role="alert">사이트 준비 상태를 불러오지 못했습니다.</p>
+            ) : suggestedSite !== null ? (
+              <div className="security-readonly-site-card">
+                <div className="security-readonly-site-head">
+                  <div>
+                    <strong>{suggestedSite.name ?? "선택한 사이트"}</strong>
+                    <p className="subtle">{focusSite !== null ? "요청한 사이트의 준비 상태입니다." : "우선 확인할 사이트 준비 항목입니다."}</p>
+                  </div>
+                  {suggestedSite.login_capable === true ? (
+                    <span className={`badge ${suggestedSite.session_ready === true ? "green" : "amber"}`}>
+                      {suggestedSite.session_ready === true ? "세션 준비됨" : "세션 미등록"}
+                    </span>
+                  ) : (
+                    <span className="badge muted">세션 불필요</span>
+                  )}
+                </div>
+                <div className="security-readonly-statuses" aria-label="사이트 준비 상태">
+                  <span>
+                    <small>위험도</small>
+                    <StatusBadge status={suggestedSite.risk} />
+                  </span>
+                  <span>
+                    <small>승인</small>
+                    <StatusBadge status={suggestedSite.approval_status} />
+                  </span>
+                  <span>
+                    <small>자동 차단</small>
+                    <StatusBadge status={suggestedSite.circuit_status} kind="circuit" />
+                  </span>
+                  <span>
+                    <small>세션 저장 암호화</small>
+                    {sessionEncryptionBadge(suggestedSite)}
+                  </span>
+                </div>
+                <div>
+                  <strong>다음 요청</strong>
+                  <ul className="security-readonly-next">
+                    {(nextRequests.length > 0 ? nextRequests : ["추가 관리 요청 없이 실행 전 준비 상태를 다시 확인하세요."]).map((request) => (
+                      <li key={request}>{request}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            ) : props.focusSiteId !== null ? (
+              <p className="subtle">요청한 사이트를 현재 목록에서 찾지 못했습니다. 권한 있는 담당자에게 사이트 등록 상태를 확인해 달라고 요청하세요.</p>
+            ) : (
+              <p className="subtle">등록된 사이트가 없습니다. 사이트 등록 권한이 있는 담당자에게 파일럿 대상 사이트 등록을 요청하세요.</p>
+            )}
+          </div>
+        </section>
+      )}
 
       <section className="panel section-access-notice" role="status" aria-label="보안 deep link 권한 안내">
         <strong>관리자 권한 필요</strong>
@@ -205,6 +288,7 @@ export function SecurityView(): JSX.Element {
         sites={sites}
         sitesLoading={lv.query.isLoading}
         sitesError={lv.query.isError}
+        focusSiteId={focusSiteId}
       />
     );
   }

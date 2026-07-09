@@ -44,7 +44,7 @@ export function AdoptionEvidencePacket(props: {
       <div className="panel-head">
         <div>
           <h2>도입 증빙 패킷</h2>
-          <p className="subtle">Dashboard embedded panel입니다. metadata-only 증빙과 기존 route 링크만 묶고 별도 evidence route는 만들지 않습니다.</p>
+          <p className="subtle">metadata-only 증빙과 기존 route 링크를 묶습니다. 원문 본문과 SecretRef 값은 포함하지 않습니다.</p>
         </div>
         <span className={`badge ${attention === 0 ? "green" : "amber"}`}>
           {attention === 0 ? "제출 가능" : `${attention}개 확인 필요`}
@@ -102,6 +102,8 @@ function buildEvidenceLines(props: {
   const secretDeniedOrBlocked = (secretAuditSummary?.outcome_counts.deny ?? 0) + (secretAuditSummary?.outcome_counts.blocked ?? 0);
   const secretErrors = secretAuditSummary?.outcome_counts.error ?? 0;
   const secretAllows = secretAuditSummary?.outcome_counts.allow ?? 0;
+  const latestRunId = props.recent.data?.items[0]?.run_id;
+  const latestRunArtifactParams = latestRunId === undefined ? undefined : { run: latestRunId, focus: "artifacts" };
 
   return [
     {
@@ -190,7 +192,7 @@ function buildEvidenceLines(props: {
         : artifacts.length === 0
           ? "최근 실행 artifact가 없어 확인 필요입니다."
           : `${artifactReady}/${artifacts.length}개 artifact가 redacted/not_required 메타 상태입니다.`,
-      action: { label: "최근 실행 열기", view: "runTrace" },
+      action: { label: latestRunId === undefined ? "실행 기록 열기" : "최근 실행 증빙 열기", view: "runTrace", params: latestRunArtifactParams },
     },
     {
       key: "scenario-certification",

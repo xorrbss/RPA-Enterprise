@@ -97,6 +97,65 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     expect(banner.textContent).toContain("완료"); // StatusBadge 라벨
   });
 
+  test("completed test run → primary CTA로 실행 결과·증빙 영역에 포커스한다", async () => {
+    localStorage.setItem("rpa.token", jwt(["operator"]));
+    renderApp(
+      fakeClient({
+        getRun: async (id) => ({
+          run_id: id,
+          status: "completed",
+          run_mode: "test",
+          worker_id: "w1",
+          attempts: 1,
+          as_of: null,
+        }),
+        listRunArtifacts: async () => ({ items: [], next_cursor: null }),
+      }),
+    );
+    await openDetail();
+
+    const statusPanel = await screen.findByRole("region", { name: "테스트 실행 상태" });
+    expect(within(statusPanel).getByRole("heading", { name: "테스트 성공" })).toBeInTheDocument();
+    expect(within(statusPanel).getByText("최근 단계")).toBeInTheDocument();
+    expect(await within(statusPanel).findByText("페이지 이동")).toBeInTheDocument();
+    expect(await within(statusPanel).findByText("데이터 추출")).toBeInTheDocument();
+    const panel = await screen.findByRole("region", { name: "실행 다음 행동" });
+    fireEvent.click(within(panel).getByRole("button", { name: "테스트 증빙 확인" }));
+
+    await waitFor(() => expect(location.hash).toContain("focus=artifacts"));
+    const artifacts = await screen.findByRole("region", {
+      name: "실행 결과·증빙",
+    });
+    await waitFor(() => expect(document.activeElement).toBe(artifacts));
+  });
+
+  test("completed + operator → 보조 CTA로 운영 예약·트리거 설정으로 이동한다", async () => {
+    localStorage.setItem("rpa.token", jwt(["operator"]));
+    renderApp(
+      fakeClient({
+        getRun: async (id) => ({
+          run_id: id,
+          status: "completed",
+          run_mode: "prod",
+          scenario_id: "00000000-0000-0000-0000-0000000000c1",
+          worker_id: "w1",
+          attempts: 1,
+          as_of: null,
+        }),
+      }),
+    );
+    await openDetail();
+
+    const panel = await screen.findByRole("region", { name: "실행 다음 행동" });
+    fireEvent.click(within(panel).getByRole("button", { name: "운영 예약·트리거 설정" }));
+
+    await waitFor(() =>
+      expect(location.hash).toBe(
+        "#automationOps?scenario=00000000-0000-0000-0000-0000000000c1",
+      ),
+    );
+  });
+
   test("completed + scenario.promote 권한 → 성공 실행을 draft 봇 버전으로 승격한다", async () => {
     localStorage.setItem("rpa.token", jwt(["admin"]));
     const calls: Array<{ scenarioId: string; runId: string; idempotencyKey: string }> = [];
@@ -328,6 +387,95 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
     expect(banner.textContent).toContain("site profile not found");
   });
 
+  test("failed_system + 페이지 열기 실패 → primary CTA로 사이트·세션 설정으로 이동한다", async () => {
+    localStorage.setItem("rpa.token", jwt(["operator"]));
+    renderApp(
+      fakeClient({
+        getRun: async (id) => ({
+          run_id: id,
+          status: "failed_system",
+          worker_id: "w1",
+          attempts: 2,
+          as_of: null,
+        }),
+        listRunSteps: async () => ({
+          items: [
+            {
+              step_id: "s-nav",
+              node_id: "open",
+              attempt: 1,
+              action: "navigate",
+              status: "failed_system",
+              cache_mode: "bypass",
+              artifact_ids: [],
+              stagehand_calls: [],
+              started_at: null,
+              ended_at: null,
+              duration_ms: 900,
+              exception: { class: "NavigationTimeout", code: "NAVIGATION_TIMEOUT" },
+            },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+    await openDetail();
+
+    const cta = await screen.findByRole("button", {
+      name: "사이트·세션 설정 확인",
+    });
+    fireEvent.click(cta);
+
+    await waitFor(() => expect(location.hash).toBe("#security?section=sites"));
+  });
+
+  test("failed_business + 일반 실패 → 재실행 컨트롤로 이동·집중한다", async () => {
+    localStorage.setItem("rpa.token", jwt(["operator"]));
+    renderApp(
+      fakeClient({
+        getRun: async (id) => ({
+          run_id: id,
+          status: "failed_business",
+          run_mode: "prod",
+          worker_id: "w1",
+          attempts: 1,
+          as_of: null,
+          params: { invoice_id: "INV-1" },
+        }),
+        listRunSteps: async () => ({
+          items: [
+            {
+              step_id: "s-extract",
+              node_id: "extract",
+              attempt: 0,
+              action: "extract",
+              status: "failed_business",
+              cache_mode: "hit",
+              artifact_ids: [],
+              stagehand_calls: [],
+              started_at: null,
+              ended_at: null,
+              duration_ms: 500,
+              exception: { class: "VerifyFailed", code: "VERIFY_FAILED" },
+            },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+    await openDetail();
+
+    const cta = await screen.findByRole("button", {
+      name: "재실행 컨트롤 확인",
+    });
+    fireEvent.click(cta);
+
+    const rerun = await screen.findByRole("region", {
+      name: "실패 실행 재실행",
+    });
+    await waitFor(() => expect(document.activeElement).toBe(rerun));
+  });
+
   // 비-터미널(running)은 도착하지 않았으므로 배너를 그리지 않는다(조용한 false 금지 가드).
   test("running → 도착 배너 미표시", async () => {
     renderApp(); // 기본 픽스처 getRun = running
@@ -337,6 +485,27 @@ describe("실행 도착 배너 — 터미널 상태(F3)", () => {
       expect(screen.getByText("시도 횟수")).toBeInTheDocument(),
     );
     expect(document.querySelector(".arrival-banner")).toBeNull();
+  });
+
+  test("running → 관찰 다음 행동 CTA를 노출하고 완료/복구 CTA는 숨긴다", async () => {
+    renderApp();
+    await openDetail();
+
+    const panel = await screen.findByRole("region", { name: "실행 상세" });
+    await waitFor(() =>
+      expect(within(panel).getByText("시도 횟수")).toBeInTheDocument(),
+    );
+    const statusPanel = within(panel).getByRole("region", { name: "테스트 실행 상태" });
+    expect(within(statusPanel).getByRole("heading", { name: "실행 중" })).toBeInTheDocument();
+    const nextAction = within(statusPanel).getByRole("region", { name: "실행 다음 행동" });
+    expect(within(nextAction).getByText("진행 상태 보기")).toBeInTheDocument();
+    expect(
+      within(nextAction).getByRole("button", { name: "단계 트레이스 확인" }),
+    ).toBeInTheDocument();
+    expect(
+      within(nextAction).getByRole("button", { name: "증빙 저장 상태 확인" }),
+    ).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: /테스트 증빙 확인|증빙·산출물 확인|재실행 컨트롤 확인/ })).toBeNull();
   });
 
   // reads.ts:203이 current_node를 영구 null로 못박음 → 목록의 '현재 노드' 컬럼은 production에서 항상 '—'(조용한 false).

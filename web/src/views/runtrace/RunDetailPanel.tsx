@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tan
 
 import { useApiClient } from "../../api/context";
 import { useCan } from "../../api/permissions";
-import { navigate } from "../../router";
+import { mergeParams, navigate } from "../../router";
 import { SlideOver } from "../../components/SlideOver";
 import { StepTrace } from "../../components/StepTrace";
 import { GenerationArtifactsPanel } from "../../components/GenerationArtifactsPanel";
@@ -14,6 +14,7 @@ import type { PromoteFromRunResult, RunDetail, ScenarioGenerationResult } from "
 import { HUMAN_TASK_TERMINAL, SUSPENDED, arrivalTone } from "./constants";
 import { RerunControls } from "./RerunControls";
 import { RunArtifactsList } from "./RunArtifactsList";
+import { TestRunStatusPanel } from "./TestRunStatusPanel";
 
 // 실행 상세 — getRun(RLS 스코프) + run_steps 단계 트레이스(GET /v1/runs/{id}/steps, api-surface §1).
 export function RunDetailPanel({
@@ -47,7 +48,10 @@ export function RunDetailPanel({
     (generation.data?.run_id === runId ? generation.data.scenario_id : null) ??
     null;
   const canPromoteFromRun = can("scenario.promote");
+  const canScheduleRuns = can("trigger.manage");
+  const canRerun = can("run.rerun");
   const promoteFromRunInFlight = useRef(false);
+  const stepTraceFocusRef = useRef<HTMLDivElement | null>(null);
   const promoteFromRun = useMutation({
     mutationFn: async () => {
       if (scenarioId === null)
@@ -78,6 +82,16 @@ export function RunDetailPanel({
       },
     });
   };
+  const focusArtifactsRegion = (): void => {
+    mergeParams({ focus: "artifacts" });
+    focusAriaRegion("실행 결과·증빙");
+  };
+  const focusStepTrace = (): void => {
+    focusTarget(stepTraceFocusRef.current);
+  };
+  const focusRerunControls = (): void => {
+    focusAriaRegion("실패 실행 재실행");
+  };
 
   return (
     <SlideOver title="실행 상세" subtitle="실행 추적 번호는 상세 분석에서만 사용합니다." onClose={onClose}>
@@ -94,6 +108,18 @@ export function RunDetailPanel({
             status={detail.data.status}
             attempts={detail.data.attempts}
             reason={detail.data.failure_reason ?? null}
+          />
+          <TestRunStatusPanel
+            runId={runId}
+            status={detail.data.status}
+            runMode={detail.data.run_mode}
+            scenarioId={scenarioId}
+            reason={detail.data.failure_reason ?? null}
+            canScheduleRuns={canScheduleRuns}
+            canRerun={canRerun}
+            onFocusArtifacts={focusArtifactsRegion}
+            onFocusStepTrace={focusStepTrace}
+            onFocusRerunControls={focusRerunControls}
           />
           <RerunControls detail={detail.data} />
           <SessionHintBanner runId={runId} status={detail.data.status} />
@@ -172,7 +198,14 @@ export function RunDetailPanel({
           title="자연어 생성 산출물"
         />
       )}
-      <StepTrace runId={runId} />
+      <div
+        ref={stepTraceFocusRef}
+        role="region"
+        aria-label="단계 트레이스 확인 위치"
+        tabIndex={-1}
+      >
+        <StepTrace runId={runId} />
+      </div>
       <RunArtifactsList
         runId={runId}
         focusOnMount={focusArtifacts}
@@ -185,6 +218,22 @@ export function RunDetailPanel({
       />
     </SlideOver>
   );
+}
+
+function focusTarget(el: HTMLElement | null): void {
+  if (el === null) return;
+  if (!el.hasAttribute("tabindex")) el.tabIndex = -1;
+  if (typeof el.scrollIntoView === "function") {
+    el.scrollIntoView({ block: "start" });
+  }
+  el.focus({ preventScroll: true });
+}
+
+function focusAriaRegion(label: string): void {
+  const target = Array.from(document.querySelectorAll<HTMLElement>("[aria-label]")).find(
+    (el) => el.getAttribute("aria-label") === label,
+  );
+  focusTarget(target ?? null);
 }
 
 function promotionSkipLabel(reason: string): string {

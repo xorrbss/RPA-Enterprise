@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "../src/App";
@@ -26,6 +26,10 @@ function renderApp(client: ApiClient): void {
 function jwt(roles: readonly string[]): string {
   const payload = btoa(JSON.stringify({ sub: "u", tenant_id: "t", roles })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   return `e30.${payload}.sig`;
+}
+
+async function getWorkbench(): Promise<HTMLElement> {
+  return screen.findByRole("region", { name: "계획·테스트 작업대" });
 }
 
 function scenarioClient(overrides: Partial<ApiClient> = {}): ApiClient {
@@ -61,10 +65,11 @@ describe("RunScenarioButton URL memory", () => {
     location.hash = "#playground";
     renderApp(scenarioClient());
 
-    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "sc1" } });
-    (await screen.findByRole("button", { name: RUN_BUTTON_LABEL })).click();
+    const workbench = await getWorkbench();
+    fireEvent.change(await within(workbench).findByRole("combobox"), { target: { value: "sc1" } });
+    (await within(workbench).findByRole("button", { name: RUN_BUTTON_LABEL })).click();
 
-    expect(await screen.findByRole("textbox")).toHaveValue(url);
+    expect(await within(workbench).findByLabelText("접속 주소 (시작 주소)")).toHaveValue(url);
   });
 
   test("remembers URL params after a successful execution without storing unrelated params", async () => {
@@ -97,16 +102,16 @@ describe("RunScenarioButton URL memory", () => {
       }),
     );
 
-    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "sc1" } });
-    (await screen.findByRole("button", { name: RUN_BUTTON_LABEL })).click();
-    const inputs = await screen.findAllByRole("textbox");
-    expect(inputs).toHaveLength(2);
-    const [urlInput, reasonInput] = inputs as [HTMLElement, HTMLElement];
+    const workbench = await getWorkbench();
+    fireEvent.change(await within(workbench).findByRole("combobox"), { target: { value: "sc1" } });
+    (await within(workbench).findByRole("button", { name: RUN_BUTTON_LABEL })).click();
+    const urlInput = await within(workbench).findByLabelText("Entry URL");
+    const reasonInput = await within(workbench).findByLabelText("Reason");
     expect(urlInput).toBeDefined();
     expect(reasonInput).toBeDefined();
     fireEvent.change(urlInput, { target: { value: url } });
     fireEvent.change(reasonInput, { target: { value: "do not persist" } });
-    (await screen.findByRole("button", { name: START_BUTTON_LABEL })).click();
+    (await within(workbench).findByRole("button", { name: START_BUTTON_LABEL })).click();
 
     await waitFor(() => expect(localStorage.getItem("rpa.run.params.sc1")).not.toBeNull());
     expect(JSON.parse(localStorage.getItem("rpa.run.params.sc1") ?? "{}")).toEqual({ entry_url: url });
@@ -132,9 +137,10 @@ describe("RunScenarioButton model memory", () => {
         },
       }),
     );
-    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "sc1" } });
-    (await screen.findByRole("button", { name: RUN_BUTTON_LABEL })).click();
-    (await screen.findByRole("button", { name: START_BUTTON_LABEL })).click();
-    expect(await screen.findByLabelText("AI 모델")).toHaveValue("gpt-4o-mini");
+    const workbench = await getWorkbench();
+    fireEvent.change(await within(workbench).findByRole("combobox"), { target: { value: "sc1" } });
+    (await within(workbench).findByRole("button", { name: RUN_BUTTON_LABEL })).click();
+    (await within(workbench).findByRole("button", { name: START_BUTTON_LABEL })).click();
+    await waitFor(() => expect(within(workbench).getByLabelText("AI 모델")).toHaveValue("gpt-4o-mini"));
   });
 });

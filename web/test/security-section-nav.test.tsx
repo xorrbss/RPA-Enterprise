@@ -4,18 +4,31 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "../src/App";
 import { ApiClientProvider } from "../src/api/context";
+import type { ApiClient } from "../src/api/client";
+import type { SiteItem } from "../src/api/types";
 import { fakeClient } from "./fake-client";
 
-function renderApp(): void {
+function renderApp(client: ApiClient = fakeClient()): void {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
-      <ApiClientProvider client={fakeClient()}>
+      <ApiClientProvider client={client}>
         <App />
       </ApiClientProvider>
     </QueryClientProvider>,
   );
 }
+
+const readOnlySiteFixture: SiteItem = {
+  site_profile_id: "site-login",
+  name: "월말 포털",
+  risk: "red",
+  approval_status: "pending",
+  circuit_status: "open",
+  login_capable: true,
+  session_ready: false,
+  enc_kid: "kms-prod",
+};
 
 function jwt(roles: readonly string[]): string {
   const payload = btoa(JSON.stringify({ sub: "u", tenant_id: "t", roles })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -86,14 +99,25 @@ describe("security-section-nav", () => {
   test("operator deep link shows only the read-only security summary", async () => {
     localStorage.setItem("rpa.token", jwt(["operator"]));
     location.hash = "#security?section=sites&site=site-login";
-    renderApp();
+    renderApp(
+      fakeClient({
+        listSites: async () => ({ items: [readOnlySiteFixture], next_cursor: null }),
+      }),
+    );
 
     expect(await screen.findByRole("heading", { name: "보안 읽기 전용 요약" })).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "보안 deep link 권한 안내" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "사이트·브라우저 세션 읽기 전용 섹션 요약" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "사이트 세션 준비 읽기 전용 안내" })).toBeInTheDocument();
+    expect(await screen.findByText("월말 포털")).toBeInTheDocument();
+    expect(screen.getByText("세션 미등록")).toBeInTheDocument();
+    expect(screen.getByText("approver 또는 admin 담당자에게 사이트 승인을 요청하세요.")).toBeInTheDocument();
+    expect(screen.getByText("session.capture 권한 담당자에게 운영자 PC 등록 또는 서버 캡처를 요청하세요.")).toBeInTheDocument();
+    expect(screen.getByText("운영 정책 담당자에게 차단 회로 상태 확인을 요청하세요.")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "사이트 접근 정책" })).toBeNull();
     expect(screen.queryByRole("button", { name: /사이트 등록|세션 등록|운영자 PC 등록|승인/ })).toBeNull();
     expect(screen.queryByRole("list", { name: "보안/개인정보 섹션" })).toBeNull();
+    expect(document.body.textContent).not.toMatch(/secret:\/\//i);
   });
 
   test("viewer credential deep link does not render admin panels or secret refs", async () => {

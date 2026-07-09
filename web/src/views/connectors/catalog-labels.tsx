@@ -259,33 +259,37 @@ export function secretRefs(values: readonly string[]): JSX.Element {
   return <span className="subtle" title={`${values.length}개 보안 연결 필요`}>보안 연결 {values.length}개</span>;
 }
 
-export function connectorStartUrl(connector: ConnectorCatalogItem | null): string {
+export function connectorStartUrl(connector: ConnectorCatalogItem | null): string | null {
   const firstAllowedDomain = connector?.allowed_domains[0];
-  if (firstAllowedDomain === undefined || firstAllowedDomain.length === 0) return "https://example.com";
+  if (firstAllowedDomain === undefined || firstAllowedDomain.length === 0) return null;
   if (/^https?:\/\//u.test(firstAllowedDomain)) return firstAllowedDomain;
   return `https://${firstAllowedDomain}`;
 }
 
+function blockedInput(label: string): string {
+  return `TODO: [BLOCKED] ${label}`;
+}
+
 function defaultTemplateParamValue(param: string, connector: ConnectorCatalogItem | null): unknown {
   const key = param.toLowerCase();
-  if (key === "entry_url" || key === "start_url" || key === "report_url") return connectorStartUrl(connector);
-  if (key === "endpoint_url") return "업무 시스템 주소를 선택하세요";
-  if (key === "endpoint_profile_id") return "운영 연동 프로필을 선택하세요";
-  if (key === "method") return "조회";
-  if (key === "max_pages" || key === "page_limit") return 3;
-  if (key === "date_range") return { from: "2026-06-01", to: "2026-06-30" };
-  if (key === "company_code") return "1000";
-  if (key === "status_path") return "응답의 상태 항목";
-  if (key === "request_schema_ref") return "승인된 응답 확인 기준을 선택하세요";
+  if (key === "entry_url" || key === "start_url" || key === "report_url") return connectorStartUrl(connector) ?? blockedInput("시작 URL을 선택하세요");
+  if (key === "endpoint_url") return blockedInput("승인된 업무 시스템 주소를 선택하세요");
+  if (key === "endpoint_profile_id") return blockedInput("운영 연동 프로필을 선택하세요");
+  if (key === "method") return blockedInput("조회/전송 방식을 선택하세요");
+  if (key === "max_pages" || key === "page_limit") return blockedInput("페이지 제한을 입력하세요");
+  if (key === "date_range") return { from: blockedInput("조회 시작일"), to: blockedInput("조회 종료일") };
+  if (key === "company_code") return blockedInput("회사 코드를 입력하세요");
+  if (key === "status_path") return blockedInput("응답의 상태 항목 위치를 지정하세요");
+  if (key === "request_schema_ref") return blockedInput("승인된 응답 확인 기준을 선택하세요");
   if (key === "source_artifact_id") return "실행 결과에서 증빙을 선택하세요";
-  if (key === "document_type") return "송장";
-  if (key === "field_schema") return { 송장번호: "텍스트", 공급사: "텍스트", 금액: "숫자" };
-  if (key === "channel") return "RPA 운영 알림";
-  if (key === "severity") return "높음";
-  if (key === "message_template") return "자동화 실행 실패 알림: 사유를 확인하세요";
-  if (key.endsWith("_id")) return "목록에서 값을 선택하세요";
-  if (key.includes("name")) return "일일 리포트";
-  if (key.includes("filter")) return "열린 건";
+  if (key === "document_type") return blockedInput("문서 유형을 선택하세요");
+  if (key === "field_schema") return { [blockedInput("필드명을 입력하세요")]: "텍스트/숫자 등 형식" };
+  if (key === "channel") return blockedInput("알림 채널을 선택하세요");
+  if (key === "severity") return blockedInput("중요도를 선택하세요");
+  if (key === "message_template") return blockedInput("알림 문구를 입력하세요");
+  if (key.endsWith("_id")) return blockedInput("목록에서 값을 선택하세요");
+  if (key.includes("name")) return blockedInput("이름을 입력하세요");
+  if (key.includes("filter")) return blockedInput("필터 조건을 입력하세요");
   return "";
 }
 
@@ -311,6 +315,41 @@ export function templatePrompt(connector: ConnectorCatalogItem | null, template:
     "브라우저 화면 기반 절차로만 구성하고, 비밀 값은 화면에 노출하지 말고 승인된 보안 연결로만 다뤄줘.",
     "브라우저 화면으로 처리하기 어려운 연동은 브라우저 화면 기반 대체 절차와 필요한 운영 검토 포인트를 명확히 표시해줘.",
   ].join("\n");
+}
+
+export function connectorPrompt(connector: ConnectorCatalogItem): string {
+  const notes = [
+    `커넥터: ${connector.name}`,
+    `분류: ${KIND_LABEL[connector.kind]} / ${categoryLabel(connector.category)}`,
+    `업무 목표: ${connector.summary}`,
+    `적합 업무: ${listLabel(connector.best_for)}`,
+    `지원 동작: ${actionsLabel(connector.supported_actions)}`,
+    `접속 허용 범위: ${listLabel(connector.allowed_domains)}`,
+    `필요 권한: ${rbacActionsLabel(connector.required_rbac_actions)}`,
+    `보안 연결: ${connector.required_secret_refs.length}개 SecretRef 필요`,
+    `구현 상태: ${implementationLabel(connector.implementation_state)}`,
+    `상태: ${STATUS_LABEL[connector.status]}, 우선순위: ${priorityLabel(connector.priority)}`,
+  ];
+  return [
+    "아래 카탈로그 커넥터를 기반으로 RPA 자동화 초안을 만들어줘.",
+    ...notes,
+    "카탈로그에 없는 ordered step, 선택자, API 계약은 만들지 말고 실제 확인이 필요한 항목은 TODO: [BLOCKED]로 표시해줘.",
+    "비밀 값은 화면에 노출하지 말고 승인된 보안 연결(SecretRef)로만 다뤄줘.",
+  ].join("\n");
+}
+
+export function connectorDraftBlocker(connector: ConnectorCatalogItem): string | null {
+  if (connector.status === "blocked") return "선택한 커넥터가 차단되어 사용할 수 없습니다.";
+  if (connector.status === "requires_admin") return "커넥터 관리자 활성화 후 초안을 만들 수 있습니다.";
+  if (connector.implementation_state === "blocked_by_executor_capability") return "승인된 실행 기능 계약이 없어 사용할 수 없습니다.";
+  if (connector.implementation_state.includes("no approved browser execution surface")) return "브라우저 실행 표면이 없어 사용할 수 없습니다.";
+  return null;
+}
+
+export function connectorDraftButtonLabel(connector: ConnectorCatalogItem): string {
+  const blocker = connectorDraftBlocker(connector);
+  if (blocker !== null) return connector.status === "blocked" ? "사용 불가" : "관리자 활성화 필요";
+  return "이 커넥터로 초안 만들기";
 }
 
 export function templateDraftBlocker(template: TemplateCatalogItem, connector: ConnectorCatalogItem | null): string | null {

@@ -98,12 +98,12 @@ function HumanTaskStreamView(): JSX.Element {
   const documentItems = useMemo(() => baseItems.filter((t) => isActiveHumanTask(t) && isDocumentValidationTask(t)), [baseItems]);
   const documentWithArtifacts = useMemo(() => documentItems.filter((t) => artifactCount(t) > 0), [documentItems]);
   const documentWithForm = useMemo(() => documentItems.filter(hasBusinessForm), [documentItems]);
-  const nextTask = useMemo(() => [...baseItems].filter(isActiveHumanTask).sort((a, b) => dueTime(a) - dueTime(b))[0], [baseItems]);
   const visibleItems = useMemo(() => {
     const base = documentOnly ? documentItems : baseItems;
     if (!dueOnly) return base;
     return base.filter((t) => isActiveHumanTask(t) && t.timeout !== null).sort((a, b) => dueTime(a) - dueTime(b));
   }, [baseItems, documentItems, documentOnly, dueOnly]);
+  const nextTask = useMemo(() => [...visibleItems].filter(isActiveHumanTask).sort((a, b) => dueTime(a) - dueTime(b))[0], [visibleItems]);
   const panelQuery: typeof lv.query = lv.query.data !== undefined
     ? ({ ...lv.query, data: { ...lv.query.data, items: visibleItems } } as typeof lv.query)
     : lv.query;
@@ -129,6 +129,36 @@ function HumanTaskStreamView(): JSX.Element {
   if (unassignedQuery.isError) pageErrors.push({ label: "미배정 업무", error: unassignedQuery.error, onRetry: () => void unassignedQuery.refetch() });
   if (principalsQuery.isError) pageErrors.push({ label: "담당자 목록", error: principalsQuery.error, onRetry: () => void principalsQuery.refetch() });
   const pageErrorKind = environmentErrorKind(pageErrors);
+  const hasListData = lv.query.data !== undefined;
+  const visibleActiveCount = visibleItems.filter(isActiveHumanTask).length;
+  const ownerScopeLabel = lv.filter.unassigned === true
+    ? "미배정 업무"
+    : lv.filter.assignee === subject
+      ? "내 업무"
+      : typeof lv.filter.assignee === "string" && lv.filter.assignee.length > 0
+        ? `담당자 ${principalLabel(lv.filter.assignee, principalOptions)}`
+        : "전체 담당자";
+  const viewFilterLabels = [
+    ownerScopeLabel,
+    activeOnly ? "미종결 업무" : null,
+    dueOnly ? "마감 임박" : null,
+    documentOnly ? "문서 검증" : null,
+    typeof lv.filter.status === "string" && lv.filter.status.length > 0 ? `상태 ${statusLabel(lv.filter.status)}` : null,
+    typeof lv.filter.kind === "string" && lv.filter.kind.length > 0 ? `종류 ${kindLabel(lv.filter.kind)}` : null,
+    runParam !== null ? `실행 ${runParam}` : null,
+  ].filter((label): label is string => label !== null);
+  const currentViewLabel = hasListData
+    ? `현재 보기 ${visibleItems.length}건 · 처리 대기 ${visibleActiveCount}건`
+    : lv.query.isError
+      ? "현재 보기 확인 실패"
+      : "현재 보기 불러오는 중";
+  const nextTaskDetails = nextTask === undefined ? [] : [
+    `종류 ${kindLabel(nextTask.kind)}`,
+    nextTask.assignee === null ? "미배정" : principalLabel(nextTask.assignee, principalOptions),
+    isDocumentValidationTask(nextTask) ? "문서 검증" : null,
+    hasBusinessForm(nextTask) ? "입력 항목 있음" : null,
+    artifactCount(nextTask) > 0 ? `증빙 ${artifactCount(nextTask)}건` : null,
+  ].filter((label): label is string => label !== null);
   return (
     <>
       {sel !== null && <HumanTaskDetailPanel api={api} humanTaskId={sel} detail={detail} principalOptions={principalOptions} onClose={() => { mergeParams({ ht: null }); }} />}
@@ -150,6 +180,35 @@ function HumanTaskStreamView(): JSX.Element {
           <span className="subtle metric-hint">입력 항목 포함</span>
         </button>
       </section>
+      <section className="panel" style={{ padding: 16, marginBottom: 12, display: "grid", gap: 12 }} aria-label="사람 확인 현재 보기 요약">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <span className="badge blue">현재 보기</span>
+            <h2 style={{ margin: "8px 0 4px", fontSize: 18 }}>{currentViewLabel}</h2>
+            <p className="subtle" style={{ margin: 0 }}>{viewFilterLabels.join(" · ")}</p>
+          </div>
+          <div className="quick-actions" aria-label="현재 보기 필터 요약">
+            {viewFilterLabels.map((label, index) => <span key={`${index}:${label}`} className="badge muted">{label}</span>)}
+          </div>
+        </div>
+        {lv.query.isError ? (
+          <p className="form-alert red" role="alert" style={{ margin: 0 }}>업무 목록을 불러오지 못해 다음 처리를 판단할 수 없습니다.</p>
+        ) : !hasListData ? (
+          <p className="subtle" role="status" style={{ margin: 0 }}>업무 목록을 불러오고 있습니다.</p>
+        ) : nextTask === undefined ? (
+          <p className="form-alert amber" role="status" style={{ margin: 0 }}>현재 보기에서 처리 대기 업무가 없습니다.</p>
+        ) : (
+          <div className="quick-actions" aria-label="다음 처리 업무 요약">
+            <strong>다음 처리</strong>
+            <span title={humanTaskRef(nextTask.human_task_id)}>{humanTaskRef(nextTask.human_task_id)}</span>
+            <span><DeadlineText value={nextTask.timeout} /></span>
+            {nextTaskDetails.map((label, index) => <span key={`${index}:${label}`} className="badge muted">{label}</span>)}
+            <button className="btn primary" type="button" onClick={() => mergeParams({ ht: nextTask.human_task_id })}>
+              다음 처리 열기
+            </button>
+          </div>
+        )}
+      </section>
       <section className="panel queue-controls" aria-label="검토 업무 목록 제어">
         <div>
           <strong>업무 목록 관리</strong>
@@ -169,13 +228,13 @@ function HumanTaskStreamView(): JSX.Element {
             {lv.filter.assignee === subject ? "전체 업무 보기" : "내 업무만 보기"}
           </button>
           {!canFilterMine && <span className="badge amber">로그인이 필요합니다.</span>}
-          <button className="btn" type="button" aria-pressed={lv.filter.unassigned === true} onClick={() => lv.setFilter({ ...lv.filter, assignee: undefined, unassigned: lv.filter.unassigned === true ? undefined : true })}>
+          <button className="btn" type="button" aria-pressed={lv.filter.unassigned === true} title="담당자가 없는 활성 업무만 봅니다." onClick={() => lv.setFilter({ ...lv.filter, assignee: undefined, unassigned: lv.filter.unassigned === true ? undefined : true })}>
             미배정 {unassignedCountLabel}건
           </button>
-          <button className="btn" type="button" aria-pressed={dueOnly} onClick={() => setDueOnly((v) => !v)}>
+          <button className="btn" type="button" aria-pressed={dueOnly} title="마감 시각이 있는 현재 보기 업무만 봅니다." onClick={() => setDueOnly((v) => !v)}>
             마감 임박 {dueItems.length}
           </button>
-          <button className="btn" type="button" aria-pressed={documentOnly} onClick={() => setDocumentOnly((v) => !v)}>
+          <button className="btn" type="button" aria-pressed={documentOnly} title="증빙 또는 입력 항목이 있는 검증 업무만 봅니다." onClick={() => setDocumentOnly((v) => !v)}>
             문서 검증 업무 {documentItems.length}
           </button>
           <button className="btn" type="button" disabled={nextTask === undefined} onClick={() => { if (nextTask !== undefined) mergeParams({ ht: nextTask.human_task_id }); }}>

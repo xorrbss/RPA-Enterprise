@@ -201,7 +201,7 @@ export function DetailSection({
             <button
               className="btn"
               type="button"
-              onClick={() => navigate("playground", selected.scenario_id !== null ? { scenario: selected.scenario_id } : undefined)}
+              onClick={() => navigate("scenarioStudio", selected.scenario_id !== null ? { scenario: selected.scenario_id, focus: "test" } : { focus: "test" })}
               disabled={selected.scenario_id === null}
             >
               자동화 설계안 보기

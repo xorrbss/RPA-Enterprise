@@ -93,7 +93,108 @@ function Plan({ ir }: { ir: unknown }): JSX.Element {
   );
 }
 
-export function PlaygroundView(): JSX.Element {
+function hasRunnablePlan(ir: unknown): boolean {
+  return isRecord(ir) && isRecord(ir.nodes) && typeof ir.start === "string";
+}
+
+function TestProgressPanel(props: {
+  readonly hasSelection: boolean;
+  readonly selectedName: string | null;
+  readonly planState: "idle" | "loading" | "ready" | "missing" | "error";
+  readonly canRun: boolean;
+  readonly canStartHere: boolean;
+  readonly onViewRuns: () => void;
+}): JSX.Element {
+  const selectionReady = props.hasSelection;
+  const planReady = props.planState === "ready";
+  const canStart = props.canRun && props.canStartHere;
+  const steps = [
+    {
+      title: "1. 자동화 선택",
+      badge: selectionReady ? "완료" : "현재",
+      tone: selectionReady ? "green" : "blue",
+      current: !selectionReady,
+      detail: selectionReady ? (props.selectedName ?? "선택한 자동화") : "목록에서 테스트할 자동화를 고릅니다.",
+    },
+    {
+      title: "2. 계획 미리보기",
+      badge:
+        props.planState === "ready"
+          ? "표시 중"
+          : props.planState === "loading"
+            ? "확인 중"
+            : props.planState === "error"
+              ? "확인 필요"
+              : "대기",
+      tone:
+        props.planState === "ready"
+          ? "green"
+          : props.planState === "loading"
+            ? "blue"
+            : props.planState === "error"
+              ? "amber"
+              : "muted",
+      current: selectionReady && !planReady,
+      detail:
+        props.planState === "ready"
+          ? "아래 단계와 흐름을 확인합니다."
+          : props.planState === "loading"
+            ? "자동화 정의를 불러오는 중입니다."
+            : props.planState === "missing"
+              ? "표시할 실행 계획이 없습니다."
+              : props.planState === "error"
+                ? "자동화 정보를 다시 불러와야 합니다."
+                : "자동화 선택 후 표시됩니다.",
+    },
+    {
+      title: "3. 테스트 시작",
+      badge: canStart ? "준비됨" : props.canRun ? "대기" : "권한 필요",
+      tone: canStart ? "green" : props.canRun ? "muted" : "amber",
+      current: planReady && !canStart,
+      detail: canStart
+        ? "실행 시작 시 테스트 run이 등록되고 해당 run 화면으로 이동합니다."
+        : props.canRun
+          ? "선택한 자동화가 현재 목록에 있을 때 실행 버튼이 표시됩니다."
+          : "run.create 권한이 있어야 테스트를 시작할 수 있습니다.",
+    },
+    {
+      title: "4. 기록/증빙 확인",
+      badge: selectionReady ? "연결됨" : "대기",
+      tone: selectionReady ? "blue" : "muted",
+      current: false,
+      detail: selectionReady ? "생성된 run은 실행 기록에서 상태와 산출물을 확인합니다." : "테스트 시작 후 실행 기록에서 확인합니다.",
+    },
+  ] as const;
+
+  return (
+    <section className="panel test-progress" aria-label="테스트 실행 준비 흐름">
+      <div className="panel-head">
+        <h2>테스트 실행 준비</h2>
+        <button className="btn" type="button" onClick={props.onViewRuns}>
+          기록/증빙 보기
+        </button>
+      </div>
+      <div className="test-progress-body">
+        <ol className="test-progress-steps">
+          {steps.map((step) => (
+            <li key={step.title} className={`test-progress-step${step.current ? " current" : ""}`}>
+              <div className="test-progress-step-head">
+                <strong>{step.title}</strong>
+                <span className={`badge ${step.tone}`}>{step.badge}</span>
+              </div>
+              <span className="subtle">{step.detail}</span>
+            </li>
+          ))}
+        </ol>
+        <p className="subtle" style={{ margin: 0 }}>
+          테스트 시작은 새 run을 만드는 실제 작업입니다. 성공하면 생성된 run의 실행 기록/증빙 화면으로 바로 이동합니다.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+export function ScenarioTestWorkbench({ embedded = false }: { readonly embedded?: boolean } = {}): JSX.Element {
   const api = useApiClient();
   const can = useCan();
   const scenarioParam = useHashIdParam("scenario");
@@ -107,6 +208,17 @@ export function PlaygroundView(): JSX.Element {
 
   const items: readonly ScenarioItem[] = list.query.data?.items ?? [];
   const selected = items.find((s) => s.scenario_id === sel);
+  const selectedName = selected?.name ?? detail.data?.name ?? null;
+  const planState =
+    sel === ""
+      ? "idle"
+      : detail.isLoading
+        ? "loading"
+        : detail.isError
+          ? "error"
+          : hasRunnablePlan(detail.data?.ir)
+            ? "ready"
+            : "missing";
 
   useEffect(() => {
     if (scenarioParam !== null && scenarioParam !== sel) setSel(scenarioParam);
@@ -118,11 +230,11 @@ export function PlaygroundView(): JSX.Element {
   }
 
   return (
-    <div>
+    <section className={embedded ? "scenario-test-workbench" : undefined} aria-label="계획·테스트 작업대">
       <p className="badge" style={{ display: "block", marginBottom: 12, whiteSpace: "normal" }}>
         실행 계획(단계·흐름)을 미리 본 뒤 그대로 실제 실행을 시작할 수 있습니다. 실제 브라우저 작업은 worker/Chrome가 연결된 환경에서 수행되며, 진행 상황은 ‘실행 기록’에서 확인합니다.
       </p>
-      {can("scenario.create") && (
+      {!embedded && can("scenario.create") && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
           <button className="btn primary" type="button" onClick={() => navigate("scenarioStudio", { creator: "ai" })}>
             자연어로 자동화 만들기
@@ -130,6 +242,14 @@ export function PlaygroundView(): JSX.Element {
           <span className="subtle">저장 후 실행까지 이어지는 자동화 생성 화면으로 이동합니다.</span>
         </div>
       )}
+      <TestProgressPanel
+        hasSelection={sel !== ""}
+        selectedName={selectedName}
+        planState={planState}
+        canRun={can("run.create")}
+        canStartHere={selected !== undefined}
+        onViewRuns={() => navigate("runTrace", sel !== "" ? { scenario: sel } : undefined)}
+      />
       {list.query.isLoading ? (
         <Loading />
       ) : list.query.isError ? (
@@ -170,7 +290,7 @@ export function PlaygroundView(): JSX.Element {
               {selected !== undefined ? (
                 <div style={{ position: "relative", display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
                   {can("run.create") && <RunScenarioButton scenario={selected} runMode="test" />}
-                  <button className="btn" type="button" onClick={() => navigate("runTrace")}>실행 기록 보기</button>
+                  <button className="btn" type="button" onClick={() => navigate("runTrace", { scenario: selected.scenario_id })}>실행 기록 보기</button>
                   {can("run.create") && <span className="subtle">실행 시작 시 실제 실행이 등록되고 진행 화면으로 바로 이동합니다.</span>}
                 </div>
               ) : (
@@ -189,6 +309,10 @@ export function PlaygroundView(): JSX.Element {
           )}
         </>
       )}
-    </div>
+    </section>
   );
+}
+
+export function PlaygroundView(): JSX.Element {
+  return <ScenarioTestWorkbench />;
 }

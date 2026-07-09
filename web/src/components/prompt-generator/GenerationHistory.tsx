@@ -8,7 +8,6 @@ import type { ScenarioGenerationResult } from "../../api/types";
 import { EvidenceStorageChip } from "./shared";
 import {
   blockerSummary,
-  evidenceReviewActionLabel,
   formatGenerationTime,
   generationStatusLabel,
   generationStatusTone,
@@ -110,7 +109,7 @@ export function GenerationHistory({
                 <span className="subtle">다음</span>
                 {runId !== null ? (
                   <button className="linklike" type="button" onClick={() => navigate("runTrace", { run: runId, generation: item.generation_id, focus: "artifacts" })}>
-                    {evidenceReviewActionLabel(item.evidence_policy)}
+                    실행 상태 보기
                   </button>
                 ) : (
                   <button className="linklike" type="button" onClick={() => onSelect(item)}>
@@ -119,6 +118,9 @@ export function GenerationHistory({
                 )}
                 {item.status === "saved" && item.run_id === null && item.scenario_id !== null && (
                   <>
+                    <button className="linklike" type="button" onClick={() => navigate("scenarioStudio", { scenario: item.scenario_id!, focus: "test" })}>
+                      테스트 실행
+                    </button>
                     <button className="linklike" type="button" onClick={() => navigate("automationOps", { scenario: item.scenario_id! })}>
                       운영 예약
                     </button>

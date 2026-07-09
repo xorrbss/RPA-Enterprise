@@ -31,6 +31,42 @@ describe("작업 항목 재처리 대기 — 사유·발생 컬럼", () => {
     localStorage.setItem("rpa.token", jwt(["viewer", "operator", "reviewer", "approver", "admin"]));
   });
 
+  test("작업 목록 상단은 복구 우선순위와 현재 페이지 기준 수량을 먼저 보여준다", async () => {
+    const workitemCalls: unknown[] = [];
+    renderApp(
+      fakeClient({
+        listWorkitems: async (params) => {
+          workitemCalls.push(params ?? {});
+          return {
+            items: [
+              { workitem_id: "wi-new", status: "new", unique_reference: "ref-new", attempts: 0, checked_out_by: null, checked_out_at: null, run_id: null },
+              { workitem_id: "wi-processing", status: "processing", unique_reference: "ref-processing", attempts: 1, checked_out_by: "worker-1", checked_out_at: null, run_id: null },
+              { workitem_id: "wi-failed", status: "failed_system", unique_reference: "ref-failed", attempts: 2, checked_out_by: null, checked_out_at: null, run_id: null },
+            ],
+            next_cursor: null,
+          };
+        },
+        listDlq: async (kind) =>
+          kind === "workitem"
+            ? { items: [{ dead_letter_id: "dl-summary-1", kind: "workitem", status: "DEAD_LETTER", source_id: "wi-failed", reason_code: "VERIFY_FAILED" }], next_cursor: "more-work" }
+            : { items: [{ dead_letter_id: "sink-summary-1", kind: "sink", status: "DEAD_LETTER", source_id: null, sink_idempotency_key: "sink-key" }], next_cursor: null },
+      }),
+    );
+    location.hash = "#workitems";
+
+    const summary = await screen.findByRole("region", { name: "작업 목록 복구 요약" });
+
+    await waitFor(() => expect(summary).toHaveTextContent("작업 항목 재처리 필요"));
+    expect(summary).toHaveTextContent("재처리 대기 1+");
+    expect(summary).toHaveTextContent("외부 전달 1");
+    expect(summary).toHaveTextContent("진행 중 2");
+    expect(summary).toHaveTextContent("실패 1");
+    expect(within(summary).getByRole("button", { name: "작업 항목 재처리 대기 표 보기" })).toBeInTheDocument();
+
+    fireEvent.click(within(summary).getByRole("button", { name: "진행 중만 보기" }));
+    await waitFor(() => expect(workitemCalls.some((params) => (params as { status?: string }).status === "processing")).toBe(true));
+  });
+
   // 매핑된 reason_code → 한국어 라벨 + created_at 로컬 포맷.
   test("reason_code 매핑 라벨 + created_at 표시", async () => {
     const createdAt = "2026-06-16T03:04:05.000Z";

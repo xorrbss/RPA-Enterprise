@@ -53,6 +53,7 @@ export function RunScenarioButton({ scenario, runMode = "prod" }: { readonly sce
   const [modelRequired, setModelRequired] = useState<{ available: number } | null>(null);
   // AI 모델 선택 검증(P0-3) — '확인'을 누른 모델 값. getGatewayPolicy 로 실제 존재하는 정책인지 확인한 뒤에만 실행 허용.
   const [checkedModel, setCheckedModel] = useState("");
+  const runModeText = runMode === "test" ? "테스트" : "운영";
   const policyCheck = useQuery({
     queryKey: ["run-model-check", checkedModel],
     queryFn: () => api.getGatewayPolicy(checkedModel),
@@ -144,7 +145,7 @@ export function RunScenarioButton({ scenario, runMode = "prod" }: { readonly sce
   if (!can("run.create")) return null;
 
   return (
-    <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+    <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap", position: "relative", minWidth: 0 }}>
       <button
         className="btn primary"
         type="button"
@@ -164,10 +165,21 @@ export function RunScenarioButton({ scenario, runMode = "prod" }: { readonly sce
         <section
           className="panel"
           aria-label={`${scenario.name} 실행`}
-          style={{ position: "absolute", zIndex: 20, marginTop: 4, padding: 12, minWidth: 320, maxWidth: 460 }}
+          style={{
+            position: "absolute",
+            zIndex: 20,
+            marginTop: 4,
+            padding: 12,
+            minWidth: "min(320px, calc(100vw - 32px))",
+            maxWidth: "min(460px, calc(100vw - 32px))",
+            boxSizing: "border-box",
+          }}
         >
-          <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <strong>{scenario.name} 실행</strong>
+          <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap", minWidth: 0 }}>
+              <strong>{scenario.name} 실행</strong>
+              <span className={`badge ${runMode === "test" ? "blue" : "muted"}`}>{runModeText}</span>
+            </span>
             <button className="btn" type="button" onClick={() => setOpen(false)} disabled={run.isPending}>
               닫기
             </button>
@@ -181,8 +193,8 @@ export function RunScenarioButton({ scenario, runMode = "prod" }: { readonly sce
             <>
               <p className="subtle" style={{ margin: "0 0 8px" }}>
                 {fields.length > 0
-                  ? "이 자동화는 실행에 아래 값이 필요합니다. 입력 후 실행하세요."
-                  : "추가 입력 없이 최신 버전으로 실행합니다."}
+                  ? `이 자동화는 ${runModeText} 실행에 아래 값이 필요합니다. 입력 후 실행하세요.`
+                  : `추가 입력 없이 최신 버전으로 ${runModeText} 실행합니다.`}
               </p>
               {fields.map((field) => (
                 <ParamFieldInput

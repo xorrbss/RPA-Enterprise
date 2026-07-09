@@ -477,6 +477,27 @@ describe("automation ops view", () => {
     expect(within(dlqRow).getByText("1")).toBeInTheDocument();
   });
 
+  test("오늘 운영 화면은 데이터 확인 실패를 0건이나 미확인 값처럼 숨기지 않는다", async () => {
+    renderApp(clientWithOpsData({
+      listHumanTasks: async () => {
+        throw new ApiError(503, "CONTROL_PLANE_INTERNAL_ERROR", { code: "CONTROL_PLANE_INTERNAL_ERROR", message: "human tasks unavailable" });
+      },
+      listDlq: async () => {
+        throw new ApiError(503, "CONTROL_PLANE_INTERNAL_ERROR", { code: "CONTROL_PLANE_INTERNAL_ERROR", message: "workitem dlq unavailable" });
+      },
+    }));
+
+    expect(await screen.findByText(/사람 확인 대기 데이터를 확인하지 못했습니다/)).toBeInTheDocument();
+    expect(screen.getByText(/2개 영역에서 확인이 필요합니다/)).toBeInTheDocument();
+    const humanRow = screen.getByText("사람 확인 대기").closest("tr") as HTMLTableRowElement;
+    const dlqRow = screen.getByText("작업 항목 재처리 대기").closest("tr") as HTMLTableRowElement;
+
+    expect(within(humanRow).getByText("연결 필요")).toBeInTheDocument();
+    expect(within(dlqRow).getByText("연결 필요")).toBeInTheDocument();
+    expect(within(humanRow).queryByText("-")).toBeNull();
+    expect(within(dlqRow).queryByText("-")).toBeNull();
+  });
+
   test("큐 행의 보기 버튼은 실행 기록 필터로 이동한다", async () => {
     renderApp(clientWithOpsData());
 
@@ -853,13 +874,19 @@ describe("automation ops view", () => {
     expect(screen.getByText("30m")).toBeInTheDocument();
     expect(await screen.findByText("Finance owner approved web-attended launch.")).toBeInTheDocument();
     expect(await screen.findByText(/business approval resolved/)).toBeInTheDocument();
+    expect(screen.getByLabelText("사람 확인 실행 입력값 요약")).toHaveTextContent("1개 입력값");
+    const paramsDetails = screen.getByText("고급/원문 실행 입력값 조정").closest("details") as HTMLDetailsElement;
+    expect(paramsDetails.open).toBe(false);
 
     fireEvent.change(screen.getByLabelText("사람 확인 실행 자동화 버전 ID"), {
       target: { value: "00000000-0000-4000-8000-000000000202" },
     });
+    fireEvent.click(screen.getByText("고급/원문 실행 입력값 조정"));
+    expect(paramsDetails.open).toBe(true);
     fireEvent.change(screen.getByLabelText("사람 확인 실행 파라미터 JSON"), {
       target: { value: "{\"as_of\":\"2026-06-30T00:00:00.000Z\",\"case_id\":\"ATT-42\"}" },
     });
+    expect(screen.getByLabelText("사람 확인 실행 입력값 요약")).toHaveTextContent("2개 입력값");
     fireEvent.change(screen.getByLabelText("사람 확인 실행 동의 요약"), {
       target: { value: "Controller approved attended launch." },
     });

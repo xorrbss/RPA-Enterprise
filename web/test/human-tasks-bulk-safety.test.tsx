@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "../src/App";
@@ -32,6 +32,34 @@ describe("HumanTasks 일괄 동작 안전성", () => {
   beforeEach(() => {
     location.hash = "";
     localStorage.setItem("rpa.token", jwt(["viewer", "operator", "reviewer", "approver", "admin"]));
+  });
+
+  test("첫 화면에 현재 보기와 다음 처리 업무를 표보다 먼저 요약한다", async () => {
+    const DUE_DOC_TASK = { ...DOC_TASK, timeout: "2026-06-18T10:00:00.000Z" };
+    renderApp(fakeClient({ listHumanTasks: async () => ({ items: [DUE_DOC_TASK, PLAIN_TASK], next_cursor: null }) }));
+    location.hash = "#humanTasks";
+
+    const summary = await screen.findByRole("region", { name: "사람 확인 현재 보기 요약" });
+    expect(await within(summary).findByRole("heading", { name: "현재 보기 2건 · 처리 대기 2건" })).toBeInTheDocument();
+    expect(within(summary).getByText("다음 처리")).toBeInTheDocument();
+    expect(within(summary).getByText("접수번호 #73000000")).toBeInTheDocument();
+    expect(within(summary).getByText("종류 문서 검증")).toBeInTheDocument();
+
+    fireEvent.click(within(summary).getByRole("button", { name: "다음 처리 열기" }));
+    await waitFor(() => expect(location.hash).toContain(`ht=${DUE_DOC_TASK.human_task_id}`));
+  });
+
+  test("현재 필터에 처리 대기 업무가 없으면 다음 업무를 지어내지 않는다", async () => {
+    renderApp(fakeClient({ listHumanTasks: async () => ({ items: [PLAIN_TASK], next_cursor: null }) }));
+    location.hash = "#humanTasks";
+
+    const controls = await screen.findByRole("region", { name: "검토 업무 목록 제어" });
+    fireEvent.click(within(controls).getByRole("button", { name: "마감 임박 0" }));
+
+    const summary = await screen.findByRole("region", { name: "사람 확인 현재 보기 요약" });
+    expect(within(summary).getByRole("heading", { name: "현재 보기 0건 · 처리 대기 0건" })).toBeInTheDocument();
+    expect(within(summary).getByText("현재 보기에서 처리 대기 업무가 없습니다.")).toBeInTheDocument();
+    expect(within(summary).queryByRole("button", { name: "다음 처리 열기" })).toBeNull();
   });
 
   test("일괄 대상이 화면 필터(문서 검증만)와 일치한다 — pageItems가 아닌 visibleItems 기준", async () => {

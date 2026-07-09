@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
 import { useCan } from "../api/permissions";
+import { DashboardEnvironmentState, type DashboardEnvironmentError } from "../components/DashboardEnvironmentState";
 import { mergeParams, navigate, useHashParam } from "../router";
 import type {
   IntegrationHandoff,
@@ -52,6 +53,18 @@ function resolveOpsSection(section: string | null, scenario: string | null, trig
   if (isOpsSection(section)) return section;
   if (scenario !== null || trigger !== null) return "schedule";
   return "today";
+}
+
+type QueryValueState<T> = {
+  readonly data: T | undefined;
+  readonly isFetching: boolean;
+  readonly isError: boolean;
+};
+
+function queryValueLabel<T>(query: QueryValueState<T>, renderValue: (data: T) => string): string {
+  if (query.isError) return "연결 필요";
+  if (query.data === undefined) return query.isFetching ? "확인 중" : "확인 필요";
+  return renderValue(query.data);
 }
 
 function OpsSectionSelector({ active }: { active: OpsSectionKey }): JSX.Element {
@@ -197,11 +210,32 @@ export function OrchestrationView(): JSX.Element {
 
   const schedulerQueueUnavailable = opsHealth.data?.queue.available === false;
   const queueRows = [
-    { label: "대기 실행", value: countLabel(summary.data?.by_status.queued), action: () => navigate("runTrace", { status: "queued" }) },
-    { label: "실행 중", value: countLabel(summary.data?.by_status.running), action: () => navigate("runTrace", { status: "running" }) },
-    { label: "사람 확인 대기", value: human.data === undefined ? "-" : String(human.data.items.length), action: () => navigate("humanTasks") },
-    { label: "작업 항목 재처리 대기", value: workDlq.data === undefined ? "-" : String(workDlq.data.items.length), action: () => navigate("workitems") },
+    { label: "대기 실행", value: queryValueLabel(summary, (data) => countLabel(data.by_status.queued)), action: () => navigate("runTrace", { status: "queued" }) },
+    { label: "실행 중", value: queryValueLabel(summary, (data) => countLabel(data.by_status.running)), action: () => navigate("runTrace", { status: "running" }) },
+    { label: "사람 확인 대기", value: queryValueLabel(human, (data) => String(data.items.length)), action: () => navigate("humanTasks") },
+    { label: "작업 항목 재처리 대기", value: queryValueLabel(workDlq, (data) => String(data.items.length)), action: () => navigate("workitems") },
   ];
+
+  const opsPageErrors: DashboardEnvironmentError[] = [];
+  if (activeSection === "today" || activeSection === "queue") {
+    if (summary.isError) opsPageErrors.push({ label: "실행 요약", error: summary.error, onRetry: () => void summary.refetch() });
+    if (human.isError) opsPageErrors.push({ label: "사람 확인 대기", error: human.error, onRetry: () => void human.refetch() });
+    if (workDlq.isError) opsPageErrors.push({ label: "작업 항목 재처리", error: workDlq.error, onRetry: () => void workDlq.refetch() });
+    if (opsHealth.isError) opsPageErrors.push({ label: "운영 헬스", error: opsHealth.error, onRetry: () => void opsHealth.refetch() });
+  }
+  if (activeSection === "queue") {
+    if (botPools.isError) opsPageErrors.push({ label: "봇 풀 용량", error: botPools.error, onRetry: () => void botPools.refetch() });
+    if (webAttendedRunRequests.isError) opsPageErrors.push({ label: "브라우저 실행 요청", error: webAttendedRunRequests.error, onRetry: () => void webAttendedRunRequests.refetch() });
+    if (runResumeRequests.isError) opsPageErrors.push({ label: "재개 요청", error: runResumeRequests.error, onRetry: () => void runResumeRequests.refetch() });
+    if (suspendedRuns.isError) opsPageErrors.push({ label: "일시 중단 실행", error: suspendedRuns.error, onRetry: () => void suspendedRuns.refetch() });
+  }
+  if (activeSection === "alerts") {
+    if (notificationConnectors.isError) opsPageErrors.push({ label: "알림 커넥터", error: notificationConnectors.error, onRetry: () => void notificationConnectors.refetch() });
+    if (notificationTemplates.isError) opsPageErrors.push({ label: "알림 템플릿", error: notificationTemplates.error, onRetry: () => void notificationTemplates.refetch() });
+  }
+  if (activeSection === "external" && integrationHandoffs.isError) {
+    opsPageErrors.push({ label: "외부 RPA 전달", error: integrationHandoffs.error, onRetry: () => void integrationHandoffs.refetch() });
+  }
 
   const suspendedRunItems = (suspendedRuns.data?.items ?? []).filter((run) => run.status === "suspended");
 
@@ -312,6 +346,7 @@ export function OrchestrationView(): JSX.Element {
       </section>
 
       <OpsSectionSelector active={activeSection} />
+      <DashboardEnvironmentState errors={opsPageErrors} />
 
       {activeSection === "today" && (
         <>

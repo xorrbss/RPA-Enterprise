@@ -173,7 +173,7 @@ function buildReadinessGates(args: {
 
   gates.push(
     args.summary.isError
-      ? { key: "test-run", label: "테스트 실행", status: "needs", detail: queryErrorDetail(args.summary.error), action: { label: "테스트 실행", view: "playground", requiredAction: "run.create" } }
+      ? { key: "test-run", label: "테스트 실행", status: "needs", detail: queryErrorDetail(args.summary.error), action: { label: "테스트 실행", view: "scenarioStudio", params: { focus: "test" }, requiredAction: "run.create" } }
       : args.summary.data === undefined
         ? { key: "test-run", label: "테스트 실행", status: "deferred", detail: queryPendingDetail(args.summary) }
         : args.summary.data.total > 0
@@ -183,7 +183,7 @@ function buildReadinessGates(args: {
               label: "테스트 실행",
               status: "deferred",
               detail: "자동화 초안 생성 후 테스트 실행을 시작합니다.",
-              action: { label: "테스트 실행", view: "playground", requiredAction: "run.create" },
+              action: { label: "테스트 실행", view: "scenarioStudio", params: { focus: "test" }, requiredAction: "run.create" },
             },
   );
 

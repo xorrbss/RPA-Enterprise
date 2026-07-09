@@ -9,6 +9,7 @@ export const VIEW_KEYS = [
   "scenarioStudio",
   "playground",
   "dashboard",
+  "adoptionEvidence",
   "automationOps",
   "documentIdp",
   "openGate",
@@ -28,7 +29,7 @@ export type ViewKey = (typeof VIEW_KEYS)[number];
 // 모든 VIEW_KEYS가 정확히 한 그룹에 속해야 한다(router.test가 강제). nav 순서는 그룹 순서를 따른다.
 export const NAV_GROUPS: readonly { readonly label: string; readonly keys: readonly ViewKey[] }[] = [
   { label: "제작", keys: ["coePipeline", "connectorCatalog", "objectRepository", "scenarioStudio", "playground", "irValidation"] },
-  { label: "운영", keys: ["myWork", "dashboard", "automationOps", "documentIdp", "runTrace", "workitems", "humanTasks", "auditExplorer"] },
+  { label: "운영", keys: ["myWork", "dashboard", "adoptionEvidence", "automationOps", "documentIdp", "runTrace", "workitems", "humanTasks", "auditExplorer"] },
   { label: "고급 설정", keys: ["llmGateway", "security", "idempotency", "openGate"] },
 ];
 
@@ -63,9 +64,20 @@ export function mergeParams(updates: Record<string, string | null>): void {
 // 은퇴한 뷰 키의 레거시 해시 → 새 목적지(북마크 보존). approvalInbox(결재 인박스)는 '사람 확인'의 결재 목록 탭으로 흡수됨.
 const LEGACY_HASH_REDIRECTS: Record<string, string> = { approvalInbox: "humanTasks?source=approvals" };
 
+function legacyPlaygroundTarget(queryPart: string | undefined): string {
+  const params = new URLSearchParams(queryPart ?? "");
+  params.set("focus", "test");
+  const qs = params.toString();
+  return `scenarioStudio${qs ? `?${qs}` : ""}`;
+}
+
 /** 레거시 해시면 새 목적지로 치환(true 반환 — 치환이 다시 hashchange 를 발화하므로 호출측은 그 이벤트에 맡긴다). */
 function normalizeLegacyHash(): boolean {
-  const key = location.hash.replace(/^#/, "").split("?")[0] ?? "";
+  const [key = "", queryPart] = location.hash.replace(/^#/, "").split("?");
+  if (key === "playground") {
+    location.hash = `#${legacyPlaygroundTarget(queryPart)}`;
+    return true;
+  }
   const target = LEGACY_HASH_REDIRECTS[key];
   if (target === undefined) return false;
   location.hash = `#${target}`;

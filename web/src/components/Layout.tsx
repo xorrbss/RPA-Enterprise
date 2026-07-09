@@ -2,13 +2,13 @@ import {
   Video, PlaySquare, LayoutDashboard, ClipboardCheck, ListChecks,
   Inbox, Route, FileCode2, Bot, ShieldCheck, DatabaseZap, Workflow,
   CalendarClock, Lightbulb, ScrollText, Plug, MousePointerClick, FileSearch,
-  HelpCircle, LogOut, Menu, Search, UserCircle, X,
+  ChevronDown, HelpCircle, LogOut, Menu, Plus, Search, UserCircle, X,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 
 import { navigate, type ViewKey } from "../router";
-import { decodeSubject, ROLE_LABELS, useRoles } from "../api/permissions";
+import { decodeSubject, ROLE_LABELS, rolesCan, useRoles } from "../api/permissions";
 import {
   getInternalNavFlags,
   getVisibleNavGroups,
@@ -144,15 +144,28 @@ function RolesChip({ roles }: { roles: readonly string[] }): JSX.Element {
   );
 }
 
+function compactSubjectLabel(subject: string): string {
+  const normalized = subject.trim();
+  if (normalized.length <= 18) return normalized;
+  const separatorIndex = Math.max(normalized.lastIndexOf("|"), normalized.lastIndexOf(":"), normalized.lastIndexOf("/"));
+  if (separatorIndex >= 0 && separatorIndex < normalized.length - 1) {
+    const localPart = normalized.slice(separatorIndex + 1);
+    if (localPart.length <= 18) return localPart;
+    return `${localPart.slice(0, 8)}...${localPart.slice(-6)}`;
+  }
+  return `...${normalized.slice(-12)}`;
+}
+
 function SubjectChip(): JSX.Element {
   const subject = useMemo(() => decodeSubject(localStorage.getItem("rpa.token")), []);
   if (subject === null) {
     return <span className="subtle" title="현재 접속 계정을 확인할 수 없습니다.">계정 미확인</span>;
   }
+  const displaySubject = compactSubjectLabel(subject);
   return (
-    <span className="subject-chip" title="현재 접속 계정" aria-label={`현재 접속 계정 ${subject}`}>
+    <span className="subject-chip" title={`현재 접속 계정 ${subject}`} aria-label={`현재 접속 계정 ${subject}`}>
       <span className="subtle">계정</span>
-      <code>{subject}</code>
+      <code>{displaySubject}</code>
     </span>
   );
 }
@@ -169,6 +182,124 @@ function SearchButton({ onClick }: { onClick: () => void }): JSX.Element {
     >
       <Search size={14} aria-hidden="true" /> <span className="topbar-action-text">검색</span>
     </button>
+  );
+}
+
+interface GlobalCreateItem {
+  readonly key: string;
+  readonly label: string;
+  readonly description: string;
+  readonly icon: LucideIcon;
+  readonly view: ViewKey;
+  readonly params?: Record<string, string>;
+}
+
+function createMenuItems(roles: readonly string[]): readonly GlobalCreateItem[] {
+  const can = (action: string): boolean => rolesCan(roles, action);
+  const items: GlobalCreateItem[] = [];
+  if (can("scenario.create")) {
+    items.push({
+      key: "scenario",
+      label: "자동화 만들기",
+      description: "말로 설명하거나 브라우저 녹화로 시작",
+      icon: Video,
+      view: "scenarioStudio",
+    });
+  }
+  if (can("run.create")) {
+    items.push({
+      key: "test",
+      label: "테스트 실행",
+      description: "저장된 자동화의 계획을 확인하고 시험 실행",
+      icon: PlaySquare,
+      view: "scenarioStudio",
+      params: { focus: "test" },
+    });
+  }
+  if (can("trigger.manage")) {
+    items.push({
+      key: "schedule",
+      label: "운영 예약",
+      description: "검증된 자동화를 일정·트리거에 연결",
+      icon: CalendarClock,
+      view: "automationOps",
+    });
+  }
+  if (can("session.capture") || can("site.create") || can("site.update")) {
+    items.push({
+      key: "site-session",
+      label: "사이트/세션 등록",
+      description: "로그인이 필요한 사이트 실행 준비",
+      icon: ShieldCheck,
+      view: "security",
+      params: { section: "sites" },
+    });
+  }
+  if (can("run.read") && can("artifact.read")) {
+    items.push({
+      key: "evidence",
+      label: "증빙 확인",
+      description: "파일럿 준비도와 실행·감사 증빙 패킷 확인",
+      icon: ClipboardCheck,
+      view: "adoptionEvidence",
+    });
+  }
+  return items;
+}
+
+function GlobalCreateMenu({ roles }: { roles: readonly string[] }): JSX.Element | null {
+  const items = useMemo(() => createMenuItems(roles), [roles]);
+  const [open, setOpen] = useState(false);
+  const menuId = useId();
+  useEffect(() => setOpen(false), [roles]);
+  if (items.length === 0) return null;
+  return (
+    <span
+      className="create-menu"
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        setOpen(false);
+      }}
+    >
+      <button
+        className="btn create-menu-button"
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Plus size={14} aria-hidden="true" />
+        <span className="topbar-action-text">빠른 시작</span>
+        <ChevronDown className="create-menu-chevron" size={13} aria-hidden="true" />
+      </button>
+      {open && (
+        <div id={menuId} className="create-menu-popover" role="menu" aria-label="빠른 시작">
+          {items.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.key}
+                className="create-menu-item"
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  navigate(item.view, item.params);
+                  setOpen(false);
+                }}
+              >
+                <Icon size={16} aria-hidden="true" />
+                <span>
+                  <strong>{item.label}</strong>
+                  <small>{item.description}</small>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </span>
   );
 }
 
@@ -343,6 +474,7 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
             {isMobileNav ? (
               <>
                 <Freshness />
+                <GlobalCreateMenu roles={roles} />
                 <SearchButton onClick={() => setPaletteOpen(true)} />
                 <span className="account-menu" onKeyDown={onAccountKeyDown}>
                   <button
@@ -369,6 +501,7 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
                 <SubjectChip />
                 <RolesChip roles={roles} />
                 <Freshness />
+                <GlobalCreateMenu roles={roles} />
                 <SearchButton onClick={() => setPaletteOpen(true)} />
                 <LogoutButton />
               </>

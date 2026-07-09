@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "../src/App";
@@ -31,6 +31,10 @@ const withScenario = (over: Partial<ApiClient> = {}): ApiClient =>
     ...over,
   });
 
+async function getWorkbench(): Promise<HTMLElement> {
+  return screen.findByRole("region", { name: "계획·테스트 작업대" });
+}
+
 describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 시작", () => {
   beforeEach(() => {
     location.hash = "";
@@ -38,29 +42,42 @@ describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 �
     localStorage.setItem("rpa.token", jwt(["operator"]));
   });
 
-  test("자연어 자동화 만들기 CTA는 생성 화면으로 이동한다", async () => {
+  test("legacy #playground hash redirects into Scenario Studio test focus", async () => {
     renderApp(fakeClient({ listScenarios: async () => ({ items: [], next_cursor: null }) }));
     location.hash = "#playground";
 
-    fireEvent.click(await screen.findByRole("button", { name: "자연어로 자동화 만들기" }));
-
-    await waitFor(() => expect(location.hash).toBe("#scenarioStudio?creator=ai"));
+    await waitFor(() => expect(location.hash).toBe("#scenarioStudio?focus=test"));
+    expect(await getWorkbench()).toBeInTheDocument();
   });
 
-  test("시나리오 목록의 계획 확인은 Playground 선택 딥링크로 이동한다", async () => {
+  test("시나리오 목록의 계획·테스트는 Studio 작업대 선택 딥링크로 이동한다", async () => {
     renderApp(withScenario());
     location.hash = "#scenarioStudio";
 
-    fireEvent.click(await screen.findByRole("button", { name: "미리보기" }));
+    fireEvent.click(await screen.findByRole("button", { name: "계획·테스트" }));
 
-    await waitFor(() => expect(location.hash).toBe("#playground?scenario=sc1"));
+    await waitFor(() => expect(location.hash).toBe("#scenarioStudio?scenario=sc1&focus=test"));
+    expect(await within(await getWorkbench()).findByRole("combobox")).toHaveValue("sc1");
+  });
+
+  test("Playground는 선택→계획→테스트→기록 흐름을 단계로 보여준다", async () => {
+    renderApp(withScenario());
+    location.hash = "#playground?scenario=sc1";
+
+    const flow = await screen.findByRole("region", { name: "테스트 실행 준비 흐름" });
+    expect(flow).toHaveTextContent("1. 자동화 선택");
+    expect(flow).toHaveTextContent("2. 계획 미리보기");
+    expect(flow).toHaveTextContent("3. 테스트 시작");
+    expect(flow).toHaveTextContent("4. 기록/증빙 확인");
+    await waitFor(() => expect(flow).toHaveTextContent("표시 중"));
+    expect(flow).toHaveTextContent("실행 시작 시 테스트 run이 등록되고 해당 run 화면으로 이동합니다.");
   });
 
   test("Playground scenario 딥링크는 선택값과 실행 계획을 복원한다", async () => {
     renderApp(withScenario());
     location.hash = "#playground?scenario=sc1";
 
-    await waitFor(() => expect(screen.getByRole("combobox")).toHaveValue("sc1"));
+    expect(await within(await getWorkbench()).findByRole("combobox")).toHaveValue("sc1");
     await waitFor(() => expect(screen.getByText(/open★/)).toBeInTheDocument());
   });
 
@@ -82,9 +99,9 @@ describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 �
     );
     location.hash = "#playground";
 
-    fireEvent.click(await screen.findByRole("button", { name: "다음" }));
+    fireEvent.click(await within(await getWorkbench()).findByRole("button", { name: "다음" }));
     await waitFor(() => expect(calls.some((c) => c.cursor === "cursor-2")).toBe(true));
-    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "sc1" } });
+    fireEvent.change(await within(await getWorkbench()).findByRole("combobox"), { target: { value: "sc1" } });
 
     await waitFor(() => expect(screen.getByText(/open/)).toBeInTheDocument());
   });
@@ -94,9 +111,10 @@ describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 �
     const calls: Array<{ sver: string; key: string; runMode: string | undefined }> = [];
     renderApp(withScenario({ createRun: async (body, key) => { calls.push({ sver: body.scenario_version_id, key, runMode: body.run_mode }); return { run_id: "r1", status: "queued", run_mode: "test" }; } }));
     location.hash = "#playground";
-    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "sc1" } });
-    (await screen.findByRole("button", { name: "실행" })).click(); // RunScenarioButton 패널 열기
-    (await screen.findByRole("button", { name: "실행 시작" })).click(); // url_ref 키 없음 → 바로 실행
+    const workbench = await getWorkbench();
+    fireEvent.change(await within(workbench).findByRole("combobox"), { target: { value: "sc1" } });
+    fireEvent.click(await within(workbench).findByRole("button", { name: "실행" })); // RunScenarioButton 패널 열기
+    fireEvent.click(await within(workbench).findByRole("button", { name: "실행 시작" })); // url_ref 키 없음 → 바로 실행
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.sver).toBe("ver-9"); // latest_version_id
     expect(calls[0]?.runMode).toBe("test");
@@ -107,7 +125,7 @@ describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 �
   test("자동화 선택 → 실행 계획(단계) 표시", async () => {
     renderApp(withScenario());
     location.hash = "#playground";
-    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "sc1" } });
+    fireEvent.change(await within(await getWorkbench()).findByRole("combobox"), { target: { value: "sc1" } });
     await waitFor(() => expect(screen.getByText(/open/)).toBeInTheDocument()); // start 노드 표시
   });
 
@@ -134,7 +152,7 @@ describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 �
       }),
     );
     location.hash = "#playground";
-    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "sc1" } });
+    fireEvent.change(await within(await getWorkbench()).findByRole("combobox"), { target: { value: "sc1" } });
     // 계약-미러 라벨(badges.actionLabel)로 표시.
     await waitFor(() => expect(screen.getByText(/화면 확인/)).toBeInTheDocument()); // observe
     expect(screen.getByText(/화면 조작/)).toBeInTheDocument(); // act
@@ -162,19 +180,20 @@ describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 �
       }),
     );
     location.hash = "#playground";
-    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "sc1" } });
+    fireEvent.change(await within(await getWorkbench()).findByRole("combobox"), { target: { value: "sc1" } });
     await waitFor(() => expect(screen.getByText(/주문 페이지 주소/)).toBeInTheDocument());
     expect(screen.getByText(/출력 형식 리뷰/)).toBeInTheDocument();
     expect(screen.queryByText(/orders_url/)).toBeNull();
   });
 
   // 가치 루프: '실행 기록 보기'로 진행 확인 화면 이동.
-  test("'실행 기록 보기' → #runTrace 이동", async () => {
+  test("'실행 기록 보기' → 선택 자동화의 #runTrace 필터로 이동", async () => {
     renderApp(withScenario());
     location.hash = "#playground";
-    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "sc1" } });
-    (await screen.findByRole("button", { name: "실행 기록 보기" })).click();
-    await waitFor(() => expect(location.hash).toBe("#runTrace"));
+    const workbench = await getWorkbench();
+    fireEvent.change(await within(workbench).findByRole("combobox"), { target: { value: "sc1" } });
+    fireEvent.click(await within(workbench).findByRole("button", { name: "실행 기록 보기" }));
+    await waitFor(() => expect(location.hash).toBe("#runTrace?scenario=sc1"));
   });
 
   // RBAC: viewer는 실행 버튼 미노출(읽기 전용), 미리보기·기록 링크는 가능.
@@ -182,18 +201,20 @@ describe("테스트 실행(Playground) — 계획 미리보기 + 실제 실행 �
     localStorage.setItem("rpa.token", jwt(["viewer"]));
     renderApp(withScenario());
     location.hash = "#playground";
-    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "sc1" } });
-    expect(await screen.findByRole("button", { name: "실행 기록 보기" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "실행" })).toBeNull(); // run.create 미보유
+    const workbench = await getWorkbench();
+    fireEvent.change(await within(workbench).findByRole("combobox"), { target: { value: "sc1" } });
+    expect(await within(workbench).findByRole("button", { name: "실행 기록 보기" })).toBeInTheDocument();
+    expect(within(workbench).queryByRole("button", { name: "실행" })).toBeNull(); // run.create 미보유
   });
 
   // P0-1 "시작 → 관찰 직행": 실행 시작 성공 시 그 run의 산출물 중심 라이브 트레이스로 자동 드릴다운(수동 이동·UUID 복붙 제거).
   test("실행 시작 성공 → #runTrace?run=<생성된 run_id>&focus=artifacts 자동 드릴다운", async () => {
     renderApp(withScenario({ createRun: async () => ({ run_id: "run-xyz", status: "queued", run_mode: "test" }) }));
     location.hash = "#playground";
-    fireEvent.change(await screen.findByRole("combobox"), { target: { value: "sc1" } });
-    (await screen.findByRole("button", { name: "실행" })).click();
-    (await screen.findByRole("button", { name: "실행 시작" })).click();
+    const workbench = await getWorkbench();
+    fireEvent.change(await within(workbench).findByRole("combobox"), { target: { value: "sc1" } });
+    fireEvent.click(await within(workbench).findByRole("button", { name: "실행" }));
+    fireEvent.click(await within(workbench).findByRole("button", { name: "실행 시작" }));
     await waitFor(() => expect(location.hash).toBe("#runTrace?run=run-xyz&focus=artifacts"));
   });
 });

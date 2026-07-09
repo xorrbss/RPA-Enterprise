@@ -374,6 +374,7 @@ describe("D7 운영 콘솔 shell", () => {
     renderApp();
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
     expect(nav.querySelectorAll(".nav-item")).toHaveLength(17);
+    expect(within(nav).getByRole("button", { name: "도입 증빙" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: "보안/개인정보" })).toBeInTheDocument();
     expect(within(nav).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
   });
@@ -1367,7 +1368,7 @@ describe("D7 운영 콘솔 shell", () => {
       await screen.findByText("이미지·동영상 저장 요청됨"),
     ).toBeInTheDocument();
     fireEvent.click(
-      await screen.findByRole("button", { name: "이미지·동영상 결과 확인" }),
+      await screen.findByRole("button", { name: "실행 상태 보기" }),
     );
 
     await waitFor(() =>
@@ -1414,7 +1415,7 @@ describe("D7 운영 콘솔 shell", () => {
     expect(screen.getByText("이미지·동영상 저장 요청됨")).toBeInTheDocument();
     expect(screen.getByText("실행 기록 산출물에서 확인")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "이미지·동영상 결과 확인" }),
+      screen.getByRole("button", { name: "실행 상태·증빙 보기" }),
     ).toBeInTheDocument();
     await waitFor(() =>
       expect(location.hash).toBe(
@@ -1831,6 +1832,15 @@ describe("D7 운영 콘솔 shell", () => {
     expect(
       screen.getAllByRole("button", { name: "운영 예약" }).length,
     ).toBeGreaterThan(0);
+    const historyTestAction = screen
+      .getAllByRole("button", { name: "테스트 실행" })
+      .find((button) => button.classList.contains("linklike"));
+    if (historyTestAction === undefined) throw new Error("history test action not found");
+    fireEvent.click(historyTestAction);
+    expect(location.hash).toBe(
+      "#scenarioStudio?scenario=00000000-0000-0000-0000-0000000000c1&focus=test",
+    );
+    location.hash = "#scenarioStudio";
     fireEvent.click(screen.getAllByRole("button", { name: "CoE 연결" })[0]!);
     expect(location.hash).toBe(
       "#coePipeline?scenario=00000000-0000-0000-0000-0000000000c1",

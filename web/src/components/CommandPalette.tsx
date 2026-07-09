@@ -14,9 +14,50 @@ const LOOKUP_LIMIT = 50;
 const SEARCH_STALE_MS = 30_000;
 const MIN_ENTITY_QUERY_LENGTH = 2;
 const GROUP_LIMIT = 6;
-const POLICY_FILTERED_EMPTY_MESSAGE = "현재 역할/메뉴 모드에서 표시되지 않는 항목입니다.";
-const LOOKUP_FAILURE_EMPTY_MESSAGE = "데이터 검색을 불러오지 못했습니다. 화면 이동 결과는 계속 사용할 수 있습니다.";
-const NO_RESULTS_EMPTY_MESSAGE = "검색 결과가 없습니다.";
+const POLICY_FILTERED_EMPTY_TITLE = "현재 역할 또는 메뉴 모드에서 숨겨진 항목입니다.";
+const POLICY_FILTERED_EMPTY_DETAIL = "검색어와 일치하는 화면이나 작업이 있지만 현재 표시 정책에서는 결과에 표시되지 않습니다.";
+const POLICY_FILTERED_ADVANCED_ACTION = "다음 행동: 고급 메뉴 전환으로 확인하거나 권한 있는 담당자에게 요청하세요.";
+const POLICY_FILTERED_REQUEST_ACTION = "다음 행동: 권한 있는 담당자에게 요청하세요.";
+const LOOKUP_FAILURE_EMPTY_TITLE = "데이터 검색을 불러오지 못했습니다.";
+const LOOKUP_FAILURE_EMPTY_DETAIL = "화면 이동 결과는 계속 사용할 수 있습니다. 데이터 검색만 잠시 실패했습니다.";
+const NO_RESULTS_EMPTY_TITLE = "검색 결과가 없습니다.";
+const NO_RESULTS_EMPTY_DETAIL =
+  "표시 가능한 화면과 작업에서 일치하는 항목을 찾지 못했습니다. 현재 역할/메뉴 모드에서 숨겨진 항목은 결과에 표시되지 않습니다.";
+
+type PaletteEmptyKind = "policy" | "searching" | "lookup-error" | "short-query" | "none";
+
+interface PaletteEmptyCopy {
+  readonly title: string;
+  readonly detail: string;
+  readonly action?: string;
+}
+
+interface HiddenPolicyMatch {
+  readonly canRevealInAdvancedMode: boolean;
+}
+
+const EMPTY_STATE_COPY: Record<PaletteEmptyKind, PaletteEmptyCopy> = {
+  policy: {
+    title: POLICY_FILTERED_EMPTY_TITLE,
+    detail: POLICY_FILTERED_EMPTY_DETAIL,
+  },
+  searching: {
+    title: "검색 중...",
+    detail: "최근 실행, 사람 확인, 자동화, 담당자 정보를 함께 확인하고 있습니다.",
+  },
+  "lookup-error": {
+    title: LOOKUP_FAILURE_EMPTY_TITLE,
+    detail: LOOKUP_FAILURE_EMPTY_DETAIL,
+  },
+  "short-query": {
+    title: "조금 더 입력해 주세요.",
+    detail: "두 글자 이상 입력하면 화면과 운영 데이터를 함께 검색합니다.",
+  },
+  none: {
+    title: NO_RESULTS_EMPTY_TITLE,
+    detail: NO_RESULTS_EMPTY_DETAIL,
+  },
+};
 
 interface PaletteItem {
   readonly id: string;
@@ -61,6 +102,14 @@ const QUICK_ACTIONS: readonly QuickActionSpec[] = [
     keywords: ["queued", "queue", "waiting", "pending", "대기", "큐", "실행", "run"],
   },
   {
+    id: "automation-test",
+    label: "테스트 실행",
+    hint: "자동화 만들기에서 계획 확인 후 시험 실행",
+    view: "scenarioStudio",
+    params: { focus: "test" },
+    keywords: ["test", "testing", "playground", "run test", "테스트", "시험", "실행", "계획", "자동화"],
+  },
+  {
     id: "human-task-inbox",
     label: "사람확인 인박스 열기",
     hint: "사람 확인 업무 목록으로 이동",
@@ -90,6 +139,13 @@ const QUICK_ACTIONS: readonly QuickActionSpec[] = [
     view: "dashboard",
     params: { focus: "automation-report" },
     keywords: ["automation report", "performance report", "report", "metrics", "성과", "리포트", "보고서", "자동화"],
+  },
+  {
+    id: "adoption-evidence",
+    label: "도입 증빙 열기",
+    hint: "파일럿 준비도와 감사·보안 증빙 패킷 확인",
+    view: "adoptionEvidence",
+    keywords: ["adoption", "evidence", "readiness", "audit packet", "pilot", "도입", "증빙", "준비", "심사", "파일럿"],
   },
 ];
 
@@ -122,7 +178,7 @@ function credentialLabel(policy: ConcurrencyPolicy): string {
 
 function navigateSearchItem(item: GlobalSearchItem): void {
   if (item.type === "run") navigate("runTrace", { run: item.id });
-  else if (item.type === "scenario") navigate("playground", { scenario: item.id });
+  else if (item.type === "scenario") navigate("scenarioStudio", { scenario: item.id, focus: "test" });
   else if (item.type === "human_task") navigate("humanTasks", { ht: item.id });
   else if (item.type === "principal") navigate("security", { section: "access", principal: item.id });
   else if (item.type === "credential") {
@@ -134,7 +190,7 @@ function navigateSearchItem(item: GlobalSearchItem): void {
 
 function searchItemView(item: GlobalSearchItem): ViewKey {
   if (item.type === "run") return "runTrace";
-  if (item.type === "scenario") return "playground";
+  if (item.type === "scenario") return "scenarioStudio";
   if (item.type === "human_task") return "humanTasks";
   return "security";
 }
@@ -163,20 +219,13 @@ export function CommandPalette({
   const lookupEnabled = open && q.length >= MIN_ENTITY_QUERY_LENGTH;
   const visibleViews = useMemo(() => getVisibleViews({ roles, mode: navMode, flags }), [roles, navMode, flags]);
   const visibleViewSet = useMemo(() => new Set<ViewKey>(visibleViews), [visibleViews]);
-  const hiddenPolicyMatch = useMemo(() => {
-    if (q.length < MIN_ENTITY_QUERY_LENGTH) return false;
-    const hiddenViewMatch = Object.keys(VIEW_META).some((key) => {
-      const viewKey = key as ViewKey;
-      const meta = VIEW_META[viewKey];
-      return !visibleViewSet.has(viewKey) && includesQuery(q, [meta.title, meta.subtitle]);
-    });
-    const hiddenQuickActionMatch = QUICK_ACTIONS.some((action) =>
-      !visibleViewSet.has(action.view) && includesQuery(q, [action.label, action.hint, ...action.keywords]),
-    );
-    return hiddenViewMatch || hiddenQuickActionMatch;
-  }, [q, visibleViewSet]);
+  const advancedVisibleViews = useMemo(
+    () => (navMode === "standard" ? getVisibleViews({ roles, mode: "advanced", flags }) : visibleViews),
+    [flags, navMode, roles, visibleViews],
+  );
+  const advancedVisibleViewSet = useMemo(() => new Set<ViewKey>(advancedVisibleViews), [advancedVisibleViews]);
   const securityVisible = visibleViewSet.has("security");
-  const playgroundVisible = visibleViewSet.has("playground");
+  const scenarioStudioVisible = visibleViewSet.has("scenarioStudio");
 
   const globalSearch = useQuery({
     queryKey: ["palette-global-search", q],
@@ -209,7 +258,7 @@ export function CommandPalette({
   const scenarios = useQuery({
     queryKey: ["palette-scenarios"],
     queryFn: () => listPaletteScenarios(api),
-    enabled: lookupEnabled && playgroundVisible,
+    enabled: lookupEnabled && scenarioStudioVisible,
     staleTime: SEARCH_STALE_MS,
   });
 
@@ -219,6 +268,31 @@ export function CommandPalette({
     enabled: lookupEnabled && securityVisible,
     staleTime: SEARCH_STALE_MS,
   });
+
+  const hiddenPolicyMatch = useMemo<HiddenPolicyMatch | null>(() => {
+    if (q.length < MIN_ENTITY_QUERY_LENGTH) return null;
+    let matched = false;
+    let canRevealInAdvancedMode = false;
+    const registerHiddenView = (viewKey: ViewKey): void => {
+      if (visibleViewSet.has(viewKey)) return;
+      matched = true;
+      if (navMode === "standard" && advancedVisibleViewSet.has(viewKey)) {
+        canRevealInAdvancedMode = true;
+      }
+    };
+    for (const key of Object.keys(VIEW_META)) {
+      const viewKey = key as ViewKey;
+      const meta = VIEW_META[viewKey];
+      if (includesQuery(q, [meta.title, meta.subtitle])) registerHiddenView(viewKey);
+    }
+    for (const action of QUICK_ACTIONS) {
+      if (includesQuery(q, [action.label, action.hint, ...action.keywords])) registerHiddenView(action.view);
+    }
+    for (const item of globalSearch.data ?? []) {
+      registerHiddenView(searchItemView(item));
+    }
+    return matched ? { canRevealInAdvancedMode } : null;
+  }, [advancedVisibleViewSet, globalSearch.data, navMode, q, visibleViewSet]);
 
   useEffect(() => {
     if (!open) return;
@@ -333,7 +407,7 @@ export function CommandPalette({
               label: s.name,
               hint: `테스트 실행으로 이동 · 변경 ${s.version}`,
               run: () => {
-                navigate("playground", { scenario: s.scenario_id });
+                navigate("scenarioStudio", { scenario: s.scenario_id, focus: "test" });
                 onClose();
               },
             }));
@@ -393,16 +467,23 @@ export function CommandPalette({
     (globalSearch.isFetching || runs.isFetching || humanTasks.isFetching || principals.isFetching || scenarios.isFetching || credentials.isFetching);
   const hasLookupError =
     lookupEnabled && (globalSearch.isError || runs.isError || humanTasks.isError || principals.isError || scenarios.isError || credentials.isError);
-  let emptyMessage = NO_RESULTS_EMPTY_MESSAGE;
-  if (hiddenPolicyMatch) {
-    emptyMessage = POLICY_FILTERED_EMPTY_MESSAGE;
+  let emptyKind: PaletteEmptyKind = "none";
+  if (hiddenPolicyMatch !== null) {
+    emptyKind = "policy";
   } else if (isSearching) {
-    emptyMessage = "검색 중...";
+    emptyKind = "searching";
   } else if (hasLookupError) {
-    emptyMessage = LOOKUP_FAILURE_EMPTY_MESSAGE;
+    emptyKind = "lookup-error";
   } else if (q.length > 0 && q.length < MIN_ENTITY_QUERY_LENGTH) {
-    emptyMessage = "조금 더 입력해 주세요.";
+    emptyKind = "short-query";
   }
+  const emptyState: PaletteEmptyCopy =
+    emptyKind === "policy" && hiddenPolicyMatch !== null
+      ? {
+          ...EMPTY_STATE_COPY.policy,
+          action: hiddenPolicyMatch.canRevealInAdvancedMode ? POLICY_FILTERED_ADVANCED_ACTION : POLICY_FILTERED_REQUEST_ACTION,
+        }
+      : EMPTY_STATE_COPY[emptyKind];
 
   return (
     <div
@@ -430,7 +511,11 @@ export function CommandPalette({
         />
         <ul className="palette-list" id="palette-list" role="listbox" aria-label="검색 결과">
           {items.length === 0 ? (
-            <li className="palette-empty">{emptyMessage}</li>
+            <li className={`palette-empty palette-empty-${emptyKind}`}>
+              <strong>{emptyState.title}</strong>
+              <span>{emptyState.detail}</span>
+              {emptyState.action !== undefined && <span className="palette-empty-action">{emptyState.action}</span>}
+            </li>
           ) : (
             items.map((item, i) => (
               <li

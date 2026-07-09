@@ -23,14 +23,14 @@ function visible(roles: readonly string[], mode: "standard" | "advanced" = "stan
 describe("Phase 15 nav policy", () => {
   test("viewer standard nav is read-only and compact", () => {
     // 생명주기 그룹 순서: 내 업무(myWork/humanTasks/workitems) → 자동화(runTrace) → 현황(dashboard).
-    expect(visible(["viewer"])).toEqual(["myWork", "humanTasks", "workitems", "runTrace", "dashboard", "auditExplorer"]);
+    expect(visible(["viewer"])).toEqual(["myWork", "humanTasks", "workitems", "runTrace", "dashboard", "adoptionEvidence", "auditExplorer"]);
   });
 
   test("operator standard nav exposes the lifecycle IA (내 업무→자동화→현황)", () => {
     expect(getVisibleNavGroups(ctx(["operator"]))).toEqual([
       { label: "내 업무", keys: ["myWork", "humanTasks", "workitems"] },
-      { label: "자동화", keys: ["scenarioStudio", "playground", "runTrace", "automationOps", "documentIdp"] },
-      { label: "현황", keys: ["dashboard"] },
+      { label: "자동화", keys: ["scenarioStudio", "runTrace", "automationOps", "documentIdp"] },
+      { label: "현황", keys: ["dashboard", "adoptionEvidence"] },
       { label: "설정·점검", keys: ["auditExplorer"] },
     ]);
   });
@@ -42,9 +42,9 @@ describe("Phase 15 nav policy", () => {
       "humanTasks",
       "workitems",
       "scenarioStudio",
-      "playground",
       "runTrace",
       "dashboard",
+      "adoptionEvidence",
       "auditExplorer",
     ]);
     expect(visible(["approver"])).toEqual([
@@ -52,9 +52,9 @@ describe("Phase 15 nav policy", () => {
       "humanTasks",
       "workitems",
       "scenarioStudio",
-      "playground",
       "runTrace",
       "dashboard",
+      "adoptionEvidence",
       "auditExplorer",
     ]);
   });
@@ -65,11 +65,11 @@ describe("Phase 15 nav policy", () => {
       "humanTasks",
       "workitems",
       "scenarioStudio",
-      "playground",
       "runTrace",
       "automationOps",
       "documentIdp",
       "dashboard",
+      "adoptionEvidence",
       "coePipeline",
       "connectorCatalog",
       "objectRepository",
@@ -111,11 +111,11 @@ describe("Phase 15 nav policy", () => {
       "humanTasks",
       "workitems",
       "scenarioStudio",
-      "playground",
       "runTrace",
       "automationOps",
       "documentIdp",
       "dashboard",
+      "adoptionEvidence",
       "coePipeline",
       "connectorCatalog",
       "objectRepository",

@@ -26,6 +26,7 @@ import {
   cloneFields,
   documentTypeLabel,
   fieldSchemaValidationMessage,
+  fieldTypeLabel,
   isDocumentSourceArtifact,
   listRecentRunsForPicker,
   listRunArtifactsForPicker,
@@ -49,7 +50,7 @@ export function DocumentIdpView(): JSX.Element {
   const [preset, setPreset] = useState<FieldPreset>("invoice");
   const [fields, setFields] = useState<DocumentFieldSchema[]>(() => cloneFields(FIELD_PRESETS.invoice));
   const [message, setMessage] = useState<string | null>(null);
-  const [templateMode, setTemplateMode] = useState(false);
+  const [fieldEditorOpen, setFieldEditorOpen] = useState(false);
 
   const recentRuns = useQuery({
     queryKey: ["document-idp", "runs"],
@@ -144,7 +145,26 @@ export function DocumentIdpView(): JSX.Element {
     && sourceArtifactId.trim().length > 0
     && !runArtifacts.isError
     && fieldValidation === null;
-  const fieldEditorVisible = templateMode || sourceArtifactId.trim().length > 0;
+  const fieldEditorVisible = fieldEditorOpen;
+  const sourceFlowTone = runArtifacts.isError ? "red" : runArtifacts.isLoading ? "blue" : sourceArtifactId.trim().length > 0 ? "green" : "amber";
+  const sourceFlowLabel = runArtifacts.isError
+    ? "산출물 로드 실패"
+    : runArtifacts.isLoading
+      ? "산출물 확인 중"
+      : sourceArtifactId.trim().length > 0
+        ? "소스 선택됨"
+        : sourceRunId.trim().length > 0
+          ? "증빙 자료 필요"
+          : "실행 기록 필요";
+  const sourceFlowMessage = runArtifacts.isError
+    ? "실행 산출물을 확인하지 못했습니다. 다시 시도하거나 다른 실행을 선택하세요."
+    : runArtifacts.isLoading
+      ? "선택한 실행에서 문서 산출물을 확인하고 있습니다."
+      : sourceArtifactId.trim().length > 0
+        ? "선택한 실행 산출물과 현재 필드 요약으로 작업을 만들 수 있습니다."
+        : sourceRunId.trim().length > 0
+          ? "redacted 처리된 JSON, CSV, 텍스트 산출물을 선택하세요."
+          : "문서가 내려받힌 실행 기록을 먼저 선택하세요.";
 
   const extractJob = useMutation({
     mutationFn: (jobId: string) => api.extractDocumentJob(jobId, crypto.randomUUID()),
@@ -185,9 +205,6 @@ export function DocumentIdpView(): JSX.Element {
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="btn" type="button" onClick={() => navigate("connectorCatalog")}>템플릿 보기</button>
-            <button className="btn" type="button" onClick={() => setTemplateMode((value) => !value)}>
-              {templateMode ? "템플릿 편집 닫기" : "템플릿 편집"}
-            </button>
             <button className="btn" type="button" onClick={() => navigate("humanTasks")}>검증 큐</button>
           </div>
         </div>
@@ -255,30 +272,64 @@ export function DocumentIdpView(): JSX.Element {
             </div>
           </div>
           <div className="document-source-flow" aria-label="문서 소스 기반 추출 설정">
-            <span className={`badge ${sourceArtifactId.trim().length > 0 ? "green" : "amber"}`}>
-              {sourceArtifactId.trim().length > 0 ? "소스 선택됨" : "소스 필요"}
-            </span>
-            <span className="subtle">
-              {sourceArtifactId.trim().length > 0
-                ? "선택한 실행 산출물 기준으로 필드 템플릿을 조정합니다."
-                : "실행 산출물을 선택하면 필드 편집기가 열립니다."}
-            </span>
+            <span className={`badge ${sourceFlowTone}`}>{sourceFlowLabel}</span>
+            <span className="subtle">{sourceFlowMessage}</span>
           </div>
-          {fieldEditorVisible ? (
-            <>
-              <FieldSchemaEditor fields={fields} onChange={setFields} />
-              {fieldValidation !== null && <p className="notice warning" role="alert">{fieldValidation}</p>}
-            </>
-          ) : (
-            <EmptyState
-              title="설정 필요"
-              message="문서 소스 산출물을 먼저 선택하세요. 기존 템플릿만 수정하려면 템플릿 편집을 여세요."
-              action={
-                <button className="btn" type="button" onClick={() => navigate("runTrace")}>
-                  실행 산출물 찾기
-                </button>
-              }
+          {runArtifacts.isError && (
+            <ClassifiedErrorState
+              error={runArtifacts.error}
+              message="실행 산출물을 확인하지 못했습니다."
+              onRetry={() => void runArtifacts.refetch()}
             />
+          )}
+          <div className="document-field-summary" aria-label="추출 필드 요약">
+            <div className="document-field-summary-head">
+              <div>
+                <strong>{documentTypeLabel(preset)} 필드 템플릿</strong>
+                <span className="subtle">{requiredFieldCount(fields)}개 필수 · {fields.length}개 전체</span>
+              </div>
+              <button
+                aria-controls="document-field-editor"
+                aria-expanded={fieldEditorVisible}
+                className="btn"
+                type="button"
+                onClick={() => setFieldEditorOpen((value) => !value)}
+              >
+                {fieldEditorVisible ? "필드 편집 닫기" : "필드 편집"}
+              </button>
+            </div>
+            {fields.length === 0 ? (
+              <p className="subtle">추출 필드가 없습니다. 필드 편집을 열어 1개 이상 추가하세요.</p>
+            ) : (
+              <ul className="document-field-summary-list">
+                {fields.map((field, index) => (
+                  <li key={`${field.key}-${index}`}>
+                    <strong>{field.label?.trim() ? field.label.trim() : `표시 이름 미입력 ${index + 1}`}</strong>
+                    <span className="subtle">
+                      {fieldTypeLabel(field.type ?? "text")} · {field.required === true ? "필수" : "선택"} · {confidenceSummaryLabel(field.min_confidence)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          {fieldValidation !== null && <p className="notice warning" role="alert">{fieldValidation}</p>}
+          {fieldEditorVisible ? (
+            <div id="document-field-editor">
+              <FieldSchemaEditor fields={fields} onChange={setFields} />
+            </div>
+          ) : (
+            sourceArtifactId.trim().length === 0 && !runArtifacts.isError && (
+              <EmptyState
+                title="소스 선택 필요"
+                message="문서 소스 산출물을 선택해야 작업을 만들 수 있습니다. 필드 템플릿은 위 요약에서 별도로 확인하거나 수정할 수 있습니다."
+                action={
+                  <button className="btn" type="button" onClick={() => navigate("runTrace")}>
+                    실행 산출물 찾기
+                  </button>
+                }
+              />
+            )
           )}
           {message !== null && <p className="notice success" role="status">{message}</p>}
           {createJob.isError && <ClassifiedErrorState error={createJob.error} message="문서 추출 작업을 만들지 못했습니다." />}
@@ -359,4 +410,10 @@ export function DocumentIdpView(): JSX.Element {
       />
     </div>
   );
+}
+
+function confidenceSummaryLabel(value: number | undefined): string {
+  const confidence = value ?? 0.8;
+  if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) return "신뢰도 기준 확인 필요";
+  return `신뢰도 ${Math.round(confidence * 100)}% 이상`;
 }

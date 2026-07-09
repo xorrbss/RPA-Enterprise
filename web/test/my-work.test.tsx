@@ -19,8 +19,8 @@ function renderApp(client: ApiClient): void {
   );
 }
 
-function jwt(): string {
-  const payload = btoa(JSON.stringify({ sub: "u-me", tenant_id: "t", roles: ["operator", "reviewer", "approver"] })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+function jwt(roles: readonly string[] = ["operator", "reviewer", "approver"]): string {
+  const payload = btoa(JSON.stringify({ sub: "u-me", tenant_id: "t", roles })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   return `e30.${payload}.sig`;
 }
 
@@ -74,7 +74,7 @@ describe("MyWork human-task landing queue", () => {
 });
 
 // U1-1: 랜딩(myWork)이 빈 테넌트 첫 사용자를 도입 여정으로 잇지 않던 회귀 가드 —
-// 자동화 0건이면 파일럿 준비 상태(대시보드 체크리스트)로 가는 진입점이 빈 상태에 보여야 한다.
+// 자동화 0건이면 파일럿 준비 상태(도입 증빙 체크리스트)로 가는 진입점이 빈 상태에 보여야 한다.
 describe("MyWork onboarding entry (U1-1)", () => {
   beforeEach(() => {
     location.hash = "#myWork";
@@ -91,7 +91,22 @@ describe("MyWork onboarding entry (U1-1)", () => {
 
     const link = await screen.findByRole("button", { name: /파일럿 준비 상태 보기/ });
     link.click();
-    await waitFor(() => expect(location.hash.startsWith("#dashboard")).toBe(true));
+    await waitFor(() => expect(location.hash).toBe("#adoptionEvidence"));
+  });
+
+  test("생성 권한이 없으면 첫 자동화 쓰기 CTA는 숨기고 준비 상태만 안내한다", async () => {
+    localStorage.setItem("rpa.token", jwt(["viewer"]));
+    renderApp(
+      fakeClient({
+        listScenarios: async () => ({ items: [], next_cursor: null }),
+        listHumanTasks: async () => ({ items: [], next_cursor: null }),
+      }),
+    );
+
+    expect(await screen.findByText("첫 자동화 준비")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "자동화 초안 만들기" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "사이트/세션 준비" })).toBeNull();
+    expect(screen.getByRole("button", { name: "파일럿 준비 상태 보기" })).toBeInTheDocument();
   });
 
   test("자동화가 있으면 온보딩 링크를 그리지 않는다", async () => {
@@ -103,5 +118,31 @@ describe("MyWork onboarding entry (U1-1)", () => {
 
     await screen.findByRole("heading", { name: "자동화" });
     await waitFor(() => expect(screen.queryByRole("button", { name: /파일럿 준비 상태 보기/ })).toBeNull());
+  });
+
+  test("자동화 목록은 좁은 화면 카드 전환용 행 라벨을 가진다", async () => {
+    renderApp(
+      fakeClient({
+        listHumanTasks: async () => ({ items: [], next_cursor: null }),
+        listScenarios: async () => ({
+          items: [
+            {
+              scenario_id: "sc-mobile",
+              name: "모바일 테스트 자동화",
+              version: 1,
+              latest_version_id: "sv-mobile",
+            },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+
+    await screen.findByText("모바일 테스트 자동화");
+    const table = await screen.findByRole("table");
+    expect(table).toHaveClass("my-work-automation-table");
+    expect(table.querySelectorAll("tbody td[data-label='자동화']").length).toBeGreaterThan(0);
+    expect(table.querySelectorAll("tbody td[data-label='실행']").length).toBeGreaterThan(0);
+    expect(table.querySelectorAll("tbody td[data-label='실행 기록']").length).toBeGreaterThan(0);
   });
 });

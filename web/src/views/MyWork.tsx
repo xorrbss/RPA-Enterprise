@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "../api/context";
-import { useSubject } from "../api/permissions";
+import { useCan, useSubject } from "../api/permissions";
 import { navigate, mergeParams } from "../router";
 import { StatusBadge, kindLabel } from "../components/badges";
 import { Loading, ErrorState, EmptyState } from "../components/states";
@@ -32,6 +32,7 @@ function isSimpleGate(kind: string): boolean {
 export function MyWorkView(): JSX.Element {
   const api = useApiClient();
   const subject = useSubject();
+  const can = useCan();
 
   // 개입 큐 = 내게 배정된 미종결 사람-확인 업무(내 업무 먼저). sub 부재(미로그인)면 필터 없음.
   const assignedTasksQuery = useQuery({
@@ -100,7 +101,9 @@ export function MyWorkView(): JSX.Element {
       <section className="panel" aria-label="내 자동화">
         <div className="panel-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h2>자동화</h2>
-          <button className="btn primary" type="button" onClick={() => navigate("scenarioStudio")}>자동화 만들기</button>
+          {can("scenario.create") && (
+            <button className="btn primary" type="button" onClick={() => navigate("scenarioStudio")}>자동화 만들기</button>
+          )}
         </div>
         <div className="panel-body">
           <p className="subtle" style={{ marginTop: 0 }}>등록한 자동화는 배경에서 실행되고, 사람이 확인할 일이 생기면 위 목록에 뜹니다.</p>
@@ -112,25 +115,42 @@ export function MyWorkView(): JSX.Element {
             // U1-1: 랜딩이 myWork 라 빈 테넌트 첫 사용자가 사이트→세션→첫 자동화 준비 순서를 볼 곳이 없었다
             // (도입 체크리스트는 대시보드에만 렌더). 첫 사용자를 파일럿 준비 상태로 잇는 진입점을 빈 상태에 연결.
             <EmptyState
-              message="아직 만든 자동화가 없습니다. ‘자동화 만들기’로 시작하세요."
+              title="첫 자동화 준비"
+              message={
+                can("scenario.create")
+                  ? "아직 만든 자동화가 없습니다. 초안을 만들고, 테스트 실행과 증빙 확인까지 이어가세요."
+                  : "아직 만든 자동화가 없습니다. 권한 있는 담당자에게 초안 생성을 요청하거나 파일럿 준비 상태를 확인하세요."
+              }
               action={
-                <button className="linklike" type="button" onClick={() => navigate("dashboard")}>
-                  처음이신가요? 파일럿 준비 상태 보기 →
-                </button>
+                <div className="inline-actions" style={{ justifyContent: "center" }}>
+                  {can("scenario.create") && (
+                    <button className="btn primary" type="button" onClick={() => navigate("scenarioStudio")}>
+                      자동화 초안 만들기
+                    </button>
+                  )}
+                  <button className="btn" type="button" onClick={() => navigate("adoptionEvidence")}>
+                    파일럿 준비 상태 보기
+                  </button>
+                  {(can("session.capture") || can("site.create") || can("site.update")) && (
+                    <button className="btn" type="button" onClick={() => navigate("security", { section: "sites" })}>
+                      사이트/세션 준비
+                    </button>
+                  )}
+                </div>
               }
             />
           ) : (
             <div className="table-wrap">
-              <table>
+              <table className="my-work-automation-table">
                 <thead>
                   <tr><th>자동화</th><th>실행</th><th>실행 기록</th></tr>
                 </thead>
                 <tbody>
                   {scenarios.map((s: ScenarioItem) => (
                     <tr key={s.scenario_id}>
-                      <td>{s.name}</td>
-                      <td><RunScenarioButton scenario={s} /></td>
-                      <td><button className="linklike" type="button" onClick={() => navigate("runTrace", { scenario: s.scenario_id })}>실행 기록 보기 →</button></td>
+                      <td data-label="자동화">{s.name}</td>
+                      <td data-label="실행"><RunScenarioButton scenario={s} /></td>
+                      <td data-label="실행 기록"><button className="linklike" type="button" onClick={() => navigate("runTrace", { scenario: s.scenario_id })}>실행 기록 보기 →</button></td>
                     </tr>
                   ))}
                 </tbody>

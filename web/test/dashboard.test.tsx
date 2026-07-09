@@ -385,7 +385,7 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     }));
 
     const panel = await screen.findByRole("region", { name: "도입 증빙 패킷" });
-    expect(within(panel).getByText(/Dashboard embedded panel/)).toBeInTheDocument();
+    expect(within(panel).getByText(/metadata-only 증빙/)).toBeInTheDocument();
     expect(within(panel).getByText(/Negative proof/)).toBeInTheDocument();
     expect(within(panel).getByText(/automationOps\?section=readiness/)).toBeInTheDocument();
     expect(within(panel).getByText("세션 저장 암호화")).toBeInTheDocument();
@@ -404,6 +404,10 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     expect(panel).not.toHaveTextContent("payload");
     fireEvent.click(within(panel).getByRole("button", { name: "AI 증거 열기" }));
     await waitFor(() => expect(location.hash).toBe("#security?section=ai"));
+    location.hash = "#dashboard";
+    const refreshedPanel = await screen.findByRole("region", { name: "도입 증빙 패킷" });
+    fireEvent.click(within(refreshedPanel).getByRole("button", { name: "최근 실행 증빙 열기" }));
+    await waitFor(() => expect(location.hash).toBe("#runTrace?run=11111111-aaaa-bbbb-cccc-000000000001&focus=artifacts"));
   });
 
   test("dashboard focus hash targets evidence packet and automation report anchors", async () => {

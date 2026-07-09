@@ -16,6 +16,7 @@ const RunTraceView = lazy(() => import("./views/RunTrace").then((module) => ({ d
 const WorkitemsView = lazy(() => import("./views/Workitems").then((module) => ({ default: module.WorkitemsView })));
 const HumanTasksView = lazy(() => import("./views/HumanTasks").then((module) => ({ default: module.HumanTasksView })));
 const MyWorkView = lazy(() => import("./views/MyWork").then((module) => ({ default: module.MyWorkView })));
+const AdoptionEvidenceView = lazy(() => import("./views/AdoptionEvidence").then((module) => ({ default: module.AdoptionEvidenceView })));
 const AuditExplorerView = lazy(() => import("./views/AuditExplorer").then((module) => ({ default: module.AuditExplorerView })));
 const SecurityView = lazy(() => import("./views/Security").then((module) => ({ default: module.SecurityView })));
 const GatewayView = lazy(() => import("./views/Gateway").then((module) => ({ default: module.GatewayView })));
@@ -38,6 +39,8 @@ function renderView(view: ViewKey): JSX.Element {
       return <SiteElementsView />;
     case "dashboard":
       return <DashboardView />;
+    case "adoptionEvidence":
+      return <AdoptionEvidenceView />;
     case "automationOps":
       return <OrchestrationView />;
     case "documentIdp":

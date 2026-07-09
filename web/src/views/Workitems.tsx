@@ -15,6 +15,8 @@ import { WORKITEM_STATES } from "./filters";
 import type { DeadLetterItem, WorkitemItem } from "../api/types";
 
 const POLL_MS = 5_000;
+const WORKITEM_DLQ_PANEL_ID = "workitem-dlq-panel";
+const SINK_DLQ_PANEL_ID = "sink-dlq-panel";
 const DLQ_REASON_LABELS: Record<string, string> = {
   VERIFY_FAILED: "검증 실패",
 };
@@ -38,6 +40,17 @@ function dlqReasonLabel(code: string | null | undefined): string {
   return DLQ_REASON_LABELS[code] ?? errorCodeLabel(code);
 }
 
+function queryCountLabel(query: { readonly isLoading: boolean; readonly isError: boolean; readonly data?: { readonly items: readonly unknown[]; readonly next_cursor: string | null } }): string {
+  if (query.isLoading) return "확인 중";
+  if (query.isError) return "연결 필요";
+  if (query.data === undefined) return "확인 중";
+  return `${query.data.items.length}${query.data.next_cursor !== null ? "+" : ""}`;
+}
+
+function scrollToPanel(id: string): void {
+  document.getElementById(id)?.scrollIntoView({ block: "start" });
+}
+
 export function WorkitemsView(): JSX.Element {
   const api = useApiClient();
   const wi = useListView<WorkitemItem>(["workitems"], (p) => api.listWorkitems(p), { refetchInterval: POLL_MS });
@@ -54,11 +67,46 @@ export function WorkitemsView(): JSX.Element {
   if (wiDlq.query.isError) pageErrors.push({ label: "작업 항목 재처리", error: wiDlq.query.error, onRetry: () => void wiDlq.query.refetch() });
   if (sinkDlq.query.isError) pageErrors.push({ label: "외부 전달 재처리", error: sinkDlq.query.error, onRetry: () => void sinkDlq.query.refetch() });
   const pageErrorKind = environmentErrorKind(pageErrors);
+  const workitems = wi.query.data?.items ?? [];
+  const processingCount = workitems.filter((item) => item.status === "new" || item.status === "processing" || item.status === "retry").length;
+  const failedCount = workitems.filter((item) => item.status === "failed_business" || item.status === "failed_system" || item.status === "abandoned").length;
+  const primaryRecovery =
+    wiDlqItems.length > 0
+      ? { tone: "red" as const, title: "작업 항목 재처리 필요", message: `현재 로드된 작업 항목 재처리 대기 ${queryCountLabel(wiDlq.query)}건을 먼저 확인하세요.`, panelId: WORKITEM_DLQ_PANEL_ID, label: "작업 항목 재처리 대기 표 보기" }
+      : sinkDlqItems.length > 0
+        ? { tone: "red" as const, title: "외부 전달 재처리 필요", message: `현재 로드된 외부 전달 실패 ${queryCountLabel(sinkDlq.query)}건을 먼저 확인하세요.`, panelId: SINK_DLQ_PANEL_ID, label: "외부 전달 재처리 표 보기" }
+        : wiDlq.query.isError || sinkDlq.query.isError
+          ? { tone: "amber" as const, title: "재처리 상태 확인 필요", message: "재처리 대기 데이터를 확인하지 못했습니다. 위 오류 요약을 먼저 확인하세요.", panelId: null, label: null }
+          : wiDlq.query.data === undefined || sinkDlq.query.data === undefined
+            ? { tone: "blue" as const, title: "재처리 상태 확인 중", message: "작업 항목과 외부 전달 재처리 대기를 불러오는 중입니다.", panelId: null, label: null }
+        : { tone: "green" as const, title: "즉시 재처리 대기 없음", message: "재처리 대기함은 비어 있습니다. 진행 중 작업과 실패 작업만 확인하면 됩니다.", panelId: null, label: null };
 
   return (
     <>
       {sel !== null && <WorkitemDetailPanel detail={detail} onClose={() => { mergeParams({ wi: null }); }} />}
       <DashboardEnvironmentState errors={pageErrors} />
+      <section className="panel queue-controls" aria-label="작업 목록 복구 요약">
+        <div>
+          <strong>{primaryRecovery.title}</strong>
+          <p className="subtle">
+            {primaryRecovery.message} 작업 수는 현재 로드된 페이지 기준이며, <strong>+</strong>는 더 있음을 뜻합니다.
+          </p>
+        </div>
+        <div className="quick-actions" aria-label="작업 목록 빠른 필터">
+          <span className={`badge ${primaryRecovery.tone}`}>재처리 대기 {queryCountLabel(wiDlq.query)}</span>
+          <span className={sinkDlqItems.length > 0 ? "badge red" : "badge muted"}>외부 전달 {queryCountLabel(sinkDlq.query)}</span>
+          <span className="badge blue">진행 중 {processingCount}</span>
+          <span className={failedCount > 0 ? "badge amber" : "badge muted"}>실패 {failedCount}</span>
+          {primaryRecovery.panelId !== null && primaryRecovery.label !== null && (
+            <button className="btn primary" type="button" onClick={() => scrollToPanel(primaryRecovery.panelId)}>
+              {primaryRecovery.label}
+            </button>
+          )}
+          <button className="btn" type="button" onClick={() => wi.setFilter({ status: wi.filter.status === "processing" ? undefined : "processing" })}>
+            {wi.filter.status === "processing" ? "전체 작업 보기" : "진행 중만 보기"}
+          </button>
+        </div>
+      </section>
       <QueryPanel<WorkitemItem>
         title="작업 목록"
         query={wi.query}
@@ -81,96 +129,100 @@ export function WorkitemsView(): JSX.Element {
           },
         ]}
       />
-      <QueryPanel<DeadLetterItem>
-        title="작업 항목 재처리 대기"
-        query={wiDlq.query}
-        pager={wiDlq.pager}
-        collapsedErrorKind={pageErrorKind}
-        actions={
-          wiDlqItems.length > 0 ? (
-            <ActionButton
-              label="전체 일괄 재처리"
-              action="dlq.replay"
-              confirmText="재처리 대기 중인 작업 항목을 다시 처리 대기로 되돌릴까요? (현재 페이지 너머 적격 전체)"
-              run={async (key) => {
-                // 서버측 일괄(현재 페이지 50건 한도 없이 적격 전체, 캡 500). 충돌(이미 처리/진행)·절단은 표면화(조용한 실패 금지).
-                const r = await api.replayAllDlq("workitem", key);
-                const parts = [`${r.replayed}건 재처리됨`];
-                if (r.conflicts > 0) parts.push(`${r.conflicts}건은 이미 처리/진행 중`);
-                if (r.truncated) parts.push("500건 초과분은 다시 눌러 계속");
-                if (r.conflicts > 0 || r.truncated) throw new Error(parts.join(" · "));
-              }}
-              successText="전체 재처리 요청됨"
-              invalidateKeys={[["dlq", "workitem"], ["workitems"]]}
-            />
-          ) : undefined
-        }
-        rowKey={(r) => r.dead_letter_id}
-        emptyMessage="재처리 대기 중인 작업 항목이 없습니다."
-        columns={[
-          { header: "실패 항목", render: (r) => <span title={trackingTitle(r.dead_letter_id)}>작업 항목 재처리 대기 <code>{shortRef(r.dead_letter_id)}</code></span> },
-          { header: "상태", render: (r) => <StatusBadge status={r.status} /> },
-          { header: "원본 작업", render: (r) => (r.source_id ? <span title={trackingTitle(r.source_id)}>원본 작업 연결됨</span> : "—") },
-          // reason_code는 운영자 라벨 우선 표시, 원문 코드는 title로 보존한다. 부재 시 "—"(조용한 공백 금지).
-          { header: "사유", render: (r) => <span title={r.reason_code ?? undefined}>{dlqReasonLabel(r.reason_code)}</span> },
-          { header: "발생", render: (r) => (r.created_at ? formatDateTime(r.created_at) : "—") },
-          {
-            header: "작업",
-            render: (r) => (
+      <div id={WORKITEM_DLQ_PANEL_ID}>
+        <QueryPanel<DeadLetterItem>
+          title="작업 항목 재처리 대기"
+          query={wiDlq.query}
+          pager={wiDlq.pager}
+          collapsedErrorKind={pageErrorKind}
+          actions={
+            wiDlqItems.length > 0 ? (
               <ActionButton
-                label="재처리"
+                label="전체 일괄 재처리"
                 action="dlq.replay"
-                confirmText="이 작업을 다시 처리 대기로 되돌릴까요?"
-                run={(key) => api.replayDeadLetter(r.dead_letter_id, key, "workitem")}
+                confirmText="재처리 대기 중인 작업 항목을 다시 처리 대기로 되돌릴까요? (현재 페이지 너머 적격 전체)"
+                run={async (key) => {
+                  // 서버측 일괄(현재 페이지 50건 한도 없이 적격 전체, 캡 500). 충돌(이미 처리/진행)·절단은 표면화(조용한 실패 금지).
+                  const r = await api.replayAllDlq("workitem", key);
+                  const parts = [`${r.replayed}건 재처리됨`];
+                  if (r.conflicts > 0) parts.push(`${r.conflicts}건은 이미 처리/진행 중`);
+                  if (r.truncated) parts.push("500건 초과분은 다시 눌러 계속");
+                  if (r.conflicts > 0 || r.truncated) throw new Error(parts.join(" · "));
+                }}
+                successText="전체 재처리 요청됨"
                 invalidateKeys={[["dlq", "workitem"], ["workitems"]]}
               />
-            ),
-          },
-        ]}
-      />
-      <QueryPanel<DeadLetterItem>
-        title="외부 전달 재시도 대상"
-        query={sinkDlq.query}
-        pager={sinkDlq.pager}
-        collapsedErrorKind={pageErrorKind}
-        actions={
-          sinkDlqItems.length > 0 ? (
-            <ActionButton
-              label="전체 일괄 재처리"
-              action="sink_dlq.replay"
-              confirmText="재처리 대기 중인 외부 전달 실패를 재시도할까요? (현재 페이지 너머 적격 전체)"
-              run={async (key) => {
-                const r = await api.replayAllDlq("sink", key);
-                const parts = [`${r.replayed}건 재시도 요청됨`];
-                if (r.conflicts > 0) parts.push(`${r.conflicts}건은 이미 처리됨`);
-                if (r.truncated) parts.push("500건 초과분은 다시 눌러 계속");
-                if (r.conflicts > 0 || r.truncated) throw new Error(parts.join(" · "));
-              }}
-              successText="전체 재시도 요청됨"
-              invalidateKeys={[["dlq", "sink"]]}
-            />
-          ) : undefined
-        }
-        rowKey={(r) => r.dead_letter_id}
-        emptyMessage="재처리 대기 중인 외부 전달 실패가 없습니다."
-        columns={[
-          { header: "전달 실패", render: (r) => <span title={trackingTitle(r.dead_letter_id)}>외부 전달 재시도 대상 <code>{shortRef(r.dead_letter_id)}</code></span> },
-          { header: "상태", render: (r) => <StatusBadge status={r.status} /> },
-          { header: "중복 방지", render: (r) => (r.sink_idempotency_key ? <span title={dedupeTrackingTitle(r.sink_idempotency_key)}>중복 방지 적용됨</span> : "적용되지 않음") },
-          {
-            header: "작업",
-            render: (r) => (
+            ) : undefined
+          }
+          rowKey={(r) => r.dead_letter_id}
+          emptyMessage="재처리 대기 중인 작업 항목이 없습니다."
+          columns={[
+            { header: "실패 항목", render: (r) => <span title={trackingTitle(r.dead_letter_id)}>작업 항목 재처리 대기 <code>{shortRef(r.dead_letter_id)}</code></span> },
+            { header: "상태", render: (r) => <StatusBadge status={r.status} /> },
+            { header: "원본 작업", render: (r) => (r.source_id ? <span title={trackingTitle(r.source_id)}>원본 작업 연결됨</span> : "—") },
+            // reason_code는 운영자 라벨 우선 표시, 원문 코드는 title로 보존한다. 부재 시 "—"(조용한 공백 금지).
+            { header: "사유", render: (r) => <span title={r.reason_code ?? undefined}>{dlqReasonLabel(r.reason_code)}</span> },
+            { header: "발생", render: (r) => (r.created_at ? formatDateTime(r.created_at) : "—") },
+            {
+              header: "작업",
+              render: (r) => (
+                <ActionButton
+                  label="재처리"
+                  action="dlq.replay"
+                  confirmText="이 작업을 다시 처리 대기로 되돌릴까요?"
+                  run={(key) => api.replayDeadLetter(r.dead_letter_id, key, "workitem")}
+                  invalidateKeys={[["dlq", "workitem"], ["workitems"]]}
+                />
+              ),
+            },
+          ]}
+        />
+      </div>
+      <div id={SINK_DLQ_PANEL_ID}>
+        <QueryPanel<DeadLetterItem>
+          title="외부 전달 재시도 대상"
+          query={sinkDlq.query}
+          pager={sinkDlq.pager}
+          collapsedErrorKind={pageErrorKind}
+          actions={
+            sinkDlqItems.length > 0 ? (
               <ActionButton
-                label="재처리"
+                label="전체 일괄 재처리"
                 action="sink_dlq.replay"
-                confirmText="이 외부 전달 실패를 재시도할까요?"
-                run={(key) => api.replayDeadLetter(r.dead_letter_id, key, "sink")}
+                confirmText="재처리 대기 중인 외부 전달 실패를 재시도할까요? (현재 페이지 너머 적격 전체)"
+                run={async (key) => {
+                  const r = await api.replayAllDlq("sink", key);
+                  const parts = [`${r.replayed}건 재시도 요청됨`];
+                  if (r.conflicts > 0) parts.push(`${r.conflicts}건은 이미 처리됨`);
+                  if (r.truncated) parts.push("500건 초과분은 다시 눌러 계속");
+                  if (r.conflicts > 0 || r.truncated) throw new Error(parts.join(" · "));
+                }}
+                successText="전체 재시도 요청됨"
                 invalidateKeys={[["dlq", "sink"]]}
               />
-            ),
-          },
-        ]}
-      />
+            ) : undefined
+          }
+          rowKey={(r) => r.dead_letter_id}
+          emptyMessage="재처리 대기 중인 외부 전달 실패가 없습니다."
+          columns={[
+            { header: "전달 실패", render: (r) => <span title={trackingTitle(r.dead_letter_id)}>외부 전달 재시도 대상 <code>{shortRef(r.dead_letter_id)}</code></span> },
+            { header: "상태", render: (r) => <StatusBadge status={r.status} /> },
+            { header: "중복 방지", render: (r) => (r.sink_idempotency_key ? <span title={dedupeTrackingTitle(r.sink_idempotency_key)}>중복 방지 적용됨</span> : "적용되지 않음") },
+            {
+              header: "작업",
+              render: (r) => (
+                <ActionButton
+                  label="재처리"
+                  action="sink_dlq.replay"
+                  confirmText="이 외부 전달 실패를 재시도할까요?"
+                  run={(key) => api.replayDeadLetter(r.dead_letter_id, key, "sink")}
+                  invalidateKeys={[["dlq", "sink"]]}
+                />
+              ),
+            },
+          ]}
+        />
+      </div>
     </>
   );
 }

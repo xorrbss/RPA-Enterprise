@@ -70,6 +70,8 @@ describe("document IDP view", () => {
     }));
 
     expect((await screen.findAllByText("invoice-data.json")).length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("추출 필드 요약")).toHaveTextContent("송장 필드 템플릿");
+    expect(screen.queryByLabelText("추출 필드 편집")).toBeNull();
     expect(screen.queryByText("screen.png")).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "추출 작업 만들기" }));
 
@@ -82,22 +84,38 @@ describe("document IDP view", () => {
     expect(await screen.findByText("문서 추출 작업을 만들었습니다.")).toBeInTheDocument();
   });
 
-  test("document-idp-desktop-workflow keeps field editor hidden until a source or template edit is chosen", async () => {
+  test("document-idp-desktop-workflow keeps field editor hidden until explicit field edit intent", async () => {
     renderApp(fakeClient({
       listRuns: async () => ({ items: [], next_cursor: null }),
     }));
 
     expect((await screen.findAllByRole("heading", { name: "문서 자동화" })).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("소스 필요")).toBeInTheDocument();
-    expect(screen.getByText("설정 필요")).toBeInTheDocument();
+    expect(screen.getByText("실행 기록 필요")).toBeInTheDocument();
+    expect(screen.getByText("소스 선택 필요")).toBeInTheDocument();
+    expect(screen.getByLabelText("추출 필드 요약")).toHaveTextContent("송장 필드 템플릿");
+    expect(screen.getByLabelText("추출 필드 요약")).toHaveTextContent("송장 번호");
     expect(screen.getByRole("button", { name: "실행 산출물 찾기" })).toBeInTheDocument();
     expect(screen.queryByLabelText("추출 필드 편집")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "템플릿 편집" }));
+    fireEvent.click(screen.getByRole("button", { name: "필드 편집" }));
 
     expect(await screen.findByLabelText("추출 필드 편집")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "필드 추가" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "템플릿 편집 닫기" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "필드 편집 닫기" })).toBeInTheDocument();
+  });
+
+  test("shows source artifact load failures separately from missing source state", async () => {
+    renderApp(fakeClient({
+      listRunArtifacts: async () => {
+        throw new ApiError(500, "CONTROL_PLANE_INTERNAL_ERROR", { code: "CONTROL_PLANE_INTERNAL_ERROR" });
+      },
+    }));
+
+    expect(await screen.findByText("산출물 로드 실패")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("실행 산출물을 확인하지 못했습니다.");
+    expect(screen.queryByText("소스 선택 필요")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("추출 필드 요약")).toHaveTextContent("송장 필드 템플릿");
+    expect(screen.queryByLabelText("추출 필드 편집")).toBeNull();
   });
 
   test("edits extraction fields as business form rows before creating a job", async () => {
@@ -120,6 +138,8 @@ describe("document IDP view", () => {
     }));
 
     expect((await screen.findAllByText("invoice-data.json")).length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText("추출 필드 편집")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "필드 편집" }));
     fireEvent.click(screen.getByRole("button", { name: "필드 추가" }));
     fireEvent.change(screen.getByLabelText("필드 키 4"), { target: { value: "due_date" } });
     fireEvent.change(screen.getByLabelText("표시 이름 4"), { target: { value: "지급 예정일" } });
