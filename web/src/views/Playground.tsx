@@ -254,6 +254,3 @@ export function ScenarioTestWorkbench({
   );
 }
 
-export function PlaygroundView(): JSX.Element {
-  return <ScenarioTestWorkbench />;
-}

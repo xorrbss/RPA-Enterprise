@@ -44,7 +44,6 @@ const VIEW_VISIBILITY: Record<ViewKey, ViewVisibilityPolicy> = {
   documentIdp: { standardRoles: ["operator", "admin"] },
 
   scenarioStudio: { standardRoles: [], advancedRoles: CREATOR_ROLES }, // 전문가 경로 — 관리 콘솔 소속
-  playground: { standardRoles: [], advancedRoles: [] },
   adoptionEvidence: { standardRoles: [], advancedRoles: ALL_ROLES },
   auditExplorer: { standardRoles: [], advancedRoles: ALL_ROLES },
 

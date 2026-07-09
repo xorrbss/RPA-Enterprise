@@ -44,8 +44,8 @@ PR → CI green → 머지 → main green 확인 후 다음. 문서 file:line은
 | R4 myWork 은퇴 | ✅머지 | #434 | web 988·e2e 10/10·CI 12/12 | 뷰 삭제·5곳 해제·#myWork→#create·확인 큐는 E1 스트립이 흡수 |
 | E2 번역기+StepCards | ✅머지 | #435 | web 1010·CI 12/12 | step-sentences(§5 전수 22케이스)+StepCards. 소비면 2곳 배선: 초안 미리보기(GenerationResult)·계획 미리보기(workbench Plan 대체=T7 절반). url_ref는 기존 urlRefLabel 공유. 위저드 셸·useEasyGeneration은 E3/E4로 |
 | E3 PRECHECK 인라인 | 대기 | — | — | — |
-| E4 인라인 테스트 진행 | 진행 | — | — | TestProgress(getRun/steps 폴링+SSE, 배너 §4.7, 9상태 오버레이)·RunScenarioButton onStarted·워크벤치 인라인(run 해시 보존, 화면 튕김 제거) |
-| R1 playground 은퇴 | 대기 | — | — | E4 후 |
+| E4 인라인 테스트 진행 | ✅머지 | #436 | web 1014·CI 12/12 | TestProgress(getRun/steps 폴링+SSE, 배너 §4.7, 9상태 오버레이)·RunScenarioButton onStarted·워크벤치 인라인(run 해시 보존, 화면 튕김 제거) |
+| R1 playground 은퇴 | 진행 | — | — | 뷰키 5곳 해제(리다이렉트·워크벤치·테스트는 기존 유지) |
 | E5′ edit 모드 | 대기 | — | — | — |
 | E6 템플릿 갤러리+easy-labels | 대기 | — | — | — |
 | E7+T7 관리 콘솔 정리+스튜디오 액션 | 대기 | — | — | E2 후 |

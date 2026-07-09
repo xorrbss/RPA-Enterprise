@@ -21,7 +21,6 @@ const AuditExplorerView = lazy(() => import("./views/AuditExplorer").then((modul
 const SecurityView = lazy(() => import("./views/Security").then((module) => ({ default: module.SecurityView })));
 const GatewayView = lazy(() => import("./views/Gateway").then((module) => ({ default: module.GatewayView })));
 const ScenariosView = lazy(() => import("./views/Scenarios").then((module) => ({ default: module.ScenariosView })));
-const PlaygroundView = lazy(() => import("./views/Playground").then((module) => ({ default: module.PlaygroundView })));
 const OpenGateView = lazy(() => import("./views/OpenGate").then((module) => ({ default: module.OpenGateView })));
 
 // 라우트 → 뷰. read 백엔드가 있는 뷰는 실 연결, 그 외는 정직한 placeholder(D7.2+ 워크플로우 대상).
@@ -57,8 +56,6 @@ function renderView(view: ViewKey): JSX.Element {
       return <GatewayView />;
     case "scenarioStudio":
       return <ScenariosView />;
-    case "playground":
-      return <PlaygroundView />;
     case "openGate":
       return <OpenGateView />;
     default:
