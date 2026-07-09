@@ -85,6 +85,8 @@ function drawerNavItemCount(dialog: HTMLElement): number {
   return dialog.querySelectorAll(".nav-item").length;
 }
 
+const OPERATOR_STANDARD_NAV_ITEM_COUNT = 10;
+
 describe("mobile drawer navigation", () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
@@ -154,7 +156,7 @@ describe("mobile drawer navigation", () => {
     expect(menu).toHaveAttribute("aria-expanded", "true");
     expect(dialog).toHaveAttribute("aria-modal", "true");
     expect(within(dialog).getByRole("navigation", { name: "모바일 주 메뉴" })).toBeInTheDocument();
-    expect(drawerNavItemCount(dialog)).toBe(11);
+    expect(drawerNavItemCount(dialog)).toBe(OPERATOR_STANDARD_NAV_ITEM_COUNT);
     expect(within(dialog).getByRole("button", { name: "도입 증빙" })).toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: "Product-open 점검" })).toBeNull();
     expect(within(dialog).queryByRole("button", { name: "보안/개인정보" })).toBeNull();
@@ -181,7 +183,7 @@ describe("mobile drawer navigation", () => {
     const dialog = screen.getByRole("dialog", { name: "주 메뉴" });
 
     expect(within(dialog).queryByRole("button", { name: "중복 방지" })).toBeNull();
-    expect(drawerNavItemCount(dialog)).toBe(11);
+    expect(drawerNavItemCount(dialog)).toBe(OPERATOR_STANDARD_NAV_ITEM_COUNT);
     expect(within(dialog).getByRole("button", { name: "도입 증빙" })).toBeInTheDocument();
   });
 

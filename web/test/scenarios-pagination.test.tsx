@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "../src/App";
@@ -55,7 +55,8 @@ describe("Scenario studio pagination", () => {
     location.hash = "#scenarioStudio";
 
     expect(await screen.findByText("first page scenario")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "다음" }));
+    const scenarioPager = screen.getByRole("navigation", { name: "자동화 목록 페이지 이동" });
+    fireEvent.click(within(scenarioPager).getByRole("button", { name: "다음" }));
 
     await waitFor(() => expect(calls.some((c) => c.cursor === "scenario-cursor-2")).toBe(true));
     expect(await screen.findByText("second page scenario")).toBeInTheDocument();

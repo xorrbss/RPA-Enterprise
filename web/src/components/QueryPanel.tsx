@@ -74,7 +74,10 @@ export function QueryPanel<T>(props: {
           </div>
         )}
         {pager !== undefined && (pager.hasPrev || pager.hasNext) && (
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "10px 16px", alignItems: "center" }}>
+          <nav
+            aria-label={`${title} 페이지 이동`}
+            style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "10px 16px", alignItems: "center" }}
+          >
             <button className="btn" type="button" onClick={pager.onPrev} disabled={!pager.hasPrev}>
               이전
             </button>
@@ -82,7 +85,7 @@ export function QueryPanel<T>(props: {
             <button className="btn" type="button" onClick={pager.onNext} disabled={!pager.hasNext}>
               다음
             </button>
-          </div>
+          </nav>
         )}
       </div>
     </section>
