@@ -368,7 +368,7 @@ describe("document IDP view", () => {
       { key: "approved", value: true, confidence: 0.7 },
     ]);
     expect(JSON.stringify(calls[0]?.body).toLowerCase()).not.toMatch(/raw_ocr|provider_response|token|secret|document_bytes/);
-    expect(await screen.findByText("외부 IDP normalized 결과를 metadata-only로 등록했습니다.")).toBeInTheDocument();
+    expect(await screen.findByText("외부 IDP 정규화 결과를 메타데이터 전용으로 등록했습니다.")).toBeInTheDocument();
     expect(screen.getByText("external-idp-prod")).toBeInTheDocument();
     expect(screen.getByText("receipt-20260630-001")).toBeInTheDocument();
   });

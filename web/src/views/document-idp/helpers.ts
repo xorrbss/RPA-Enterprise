@@ -205,7 +205,7 @@ export function artifactPickerHint(runId: string, loading: boolean, failed: bool
   if (runId.trim().length === 0) return "먼저 실행 기록을 선택하세요.";
   if (loading) return "실행 산출물을 불러오는 중입니다.";
   if (failed) return "실행 산출물을 불러오지 못했습니다.";
-  if (count === 0) return "redacted 처리된 JSON, CSV, 텍스트 산출물이 있는 실행을 선택하세요.";
+  if (count === 0) return "마스킹 처리된 JSON, CSV, 텍스트 산출물이 있는 실행을 선택하세요.";
   if (truncated) return "문서 후보 1000건 기준입니다. 필요한 산출물이 없으면 실행 기록에서 직접 열어 확인하세요.";
-  return "redacted 처리된 JSON, CSV, 텍스트 산출물만 표시합니다.";
+  return "마스킹 처리된 JSON, CSV, 텍스트 산출물만 표시합니다.";
 }

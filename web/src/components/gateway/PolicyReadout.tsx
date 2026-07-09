@@ -87,7 +87,8 @@ export function PolicyReadout({
       <div className="metric">
         <div className="label">데이터 반출 경계</div>
         <p className="subtle" style={{ margin: "6px 0 0" }}>
-          Gateway 전송 전 마스킹 경계를 적용합니다. 시크릿 값은 LLM으로 보내지 않고 CDP 주입 경로를 사용합니다. 실행별 redaction proof는 S11에서 다룹니다.
+          {/* T4: 내부 하드닝 스트림 참조("S11")·영문 용어를 운영자 문장으로 재작성(감사 P2). */}
+          Gateway 전송 전 마스킹 경계를 적용합니다. 시크릿 값은 AI 모델로 보내지 않고 별도 주입 경로를 사용합니다. 실행별 마스킹 증빙은 실행 기록의 증빙 목록에서 확인합니다.
         </p>
       </div>
     </dl>

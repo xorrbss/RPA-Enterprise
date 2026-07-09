@@ -49,9 +49,11 @@ const STATUS_LABELS: Record<string, string> = {
 // STATUS_LABELS 공유.
 const CIRCUIT_LABELS: Record<string, string> = { open: "차단" };
 // enum → 비기술 한국어 라벨(StatusBadge·필터 드롭다운 공용 접근자). kind 지정 시 도메인별 라벨 우선. 미매핑은 raw 폴백.
+// T4: 대소문자 변형(DLQ의 "DEAD_LETTER" 등)은 소문자 정규화로 라벨을 찾는다 — tone(RED set)은 양쪽 케이스를 이미
+// 알지만 라벨 지도는 소문자 키만 있어 raw 원문이 화면에 노출됐다(감사 P2). 미매핑만 raw 폴백(조용한 공백 금지 유지).
 export function statusLabel(status: string, kind?: "circuit"): string {
   if (kind === "circuit") return CIRCUIT_LABELS[status] ?? STATUS_LABELS[status] ?? status;
-  return STATUS_LABELS[status] ?? status;
+  return STATUS_LABELS[status] ?? STATUS_LABELS[status.toLowerCase()] ?? status;
 }
 
 export function StatusBadge({ status, kind }: { status: string; kind?: "circuit" }): JSX.Element {
@@ -228,7 +230,7 @@ const ERROR_OPERATOR_ACTION_LABELS: Record<string, string> = {
   LLM_BUDGET_EXCEEDED: "토큰 예산을 늘리거나 시나리오 단계를 줄이세요.",
   LLM_CAPABILITY_MISMATCH: "모델 정책과 지원 기능(capabilities)을 확인하세요.",
   LLM_STREAM_TIMEOUT: "모델 백엔드 상태를 확인하세요.",
-  LLM_STREAM_IDLE_TIMEOUT: "대체 모델(fallback) 동작을 확인하세요.",
+  LLM_STREAM_IDLE_TIMEOUT: "대체 모델 동작을 확인하세요.",
   LLM_MALFORMED_OUTPUT: "반복되면 프롬프트와 출력 스키마를 점검하세요.",
   LLM_CONTENT_FILTERED: "입력 내용을 검토하세요.",
   LLM_RATE_LIMITED: "모델 호출 제한입니다. 백오프, 동시성, 예산을 확인하세요.",

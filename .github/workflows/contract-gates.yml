@@ -442,6 +442,9 @@ jobs:
       - name: Run console tests
         run: npm --prefix web run test
 
+      - name: Copy gate (user-facing terminology)
+        run: npm --prefix web run lint:copy
+
       - name: Build console
         run: npm --prefix web run build
 

@@ -44,7 +44,7 @@ export function AdoptionEvidencePacket(props: {
       <div className="panel-head">
         <div>
           <h2>도입 증빙 패킷</h2>
-          <p className="subtle">metadata-only 증빙과 기존 route 링크를 묶습니다. 원문 본문과 SecretRef 값은 포함하지 않습니다.</p>
+          <p className="subtle">메타데이터 전용 증빙과 기존 화면 링크를 묶습니다. 원문 본문과 SecretRef 값은 포함하지 않습니다.</p>
         </div>
         <span className={`badge ${attention === 0 ? "green" : "amber"}`}>
           {attention === 0 ? "제출 가능" : `${attention}개 확인 필요`}
@@ -191,7 +191,7 @@ function buildEvidenceLines(props: {
         ? "확인 중입니다."
         : artifacts.length === 0
           ? "최근 실행 artifact가 없어 확인 필요입니다."
-          : `${artifactReady}/${artifacts.length}개 artifact가 redacted/not_required 메타 상태입니다.`,
+          : `${artifactReady}/${artifacts.length}개 증빙이 마스킹 완료 또는 마스킹 불필요 상태입니다.`,
       action: { label: latestRunId === undefined ? "실행 기록 열기" : "최근 실행 증빙 열기", view: "runTrace", params: latestRunArtifactParams },
     },
     {
@@ -235,7 +235,7 @@ function buildEvidenceLines(props: {
         ? "AI governance evidence metadata를 확인 중입니다."
         : aiEvidenceSummary.total_count === 0
           ? "AI governance evidence: 0 metadata rows. model/prompt/eval/cost/human override 증거가 필요합니다."
-          : `AI governance evidence: valid ${aiEvidenceSummary.status_counts.valid}, deferred ${aiEvidenceSummary.status_counts.deferred}, failed ${aiEvidenceSummary.status_counts.failed}, expired-valid ${aiEvidenceSummary.expired_valid_count}. Gateway와 S11 redaction proof 범위만 연결하고 prompt/body 원문은 표시하지 않습니다.`,
+          : `AI governance evidence: valid ${aiEvidenceSummary.status_counts.valid}, deferred ${aiEvidenceSummary.status_counts.deferred}, failed ${aiEvidenceSummary.status_counts.failed}, expired-valid ${aiEvidenceSummary.expired_valid_count}. Gateway 마스킹 증빙 범위만 연결하고 prompt/body 원문은 표시하지 않습니다.`,
       action: { label: "AI 증거 열기", view: "security", params: { section: "ai" } },
     },
     {
