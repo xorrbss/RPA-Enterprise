@@ -233,6 +233,10 @@ intake contract. It does not choose or operate a real OCR provider/engine, does
 not perform image/PDF OCR, and does not permit raw OCR text, raw endpoint URLs,
 tokens, signed URLs, provider response bodies, or resolved SecretRef material in
 release evidence.
+Owner-facing evidence collection for controlled-prod readiness, external sink
+delivery, and external IDP/OCR scope is tracked in
+`docs/controlled-prod-open-evidence-worklist-2026-07-09.md`. That worklist is
+not release approval and must not be cited as proof that owner evidence exists.
 
 ## Manual Release Review
 

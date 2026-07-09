@@ -724,12 +724,17 @@ endpoint URLs, webhook URLs, tokens, or resolved secret material.
 The owner-facing controlled-prod readiness packet is documented in
 `docs/controlled-prod-readiness-packet-template.md` and is validated with
 `npm --prefix codegen run prod-readiness-packet:validate -- --file <packet.md>`.
+The current owner evidence collection worklist is
+`docs/controlled-prod-open-evidence-worklist-2026-07-09.md`; it also records
+that external sink delivery and external IDP/OCR are not production claims
+without their owner evidence.
 
 ## Next 24h Actions
 
-1. Attach current `main` `Contract Gates` run `28234600652`, the required job
-   URLs, DB migration smoke job, and UI smoke note to the external release review
-   packet.
+1. Attach the latest successful `main` `Contract Gates` run for the final
+   intended commit, the required job URLs, DB migration smoke job, and UI smoke
+   note to the external release review packet. Cancelled or superseded runs,
+   including `29018141965`, must not be cited as passing evidence.
 2. Keep the row 43 packet validated with
    `npm --prefix codegen run release-packet:fixtures` and
    `npm --prefix codegen run release-packet:validate -- --file <packet.md>`;
