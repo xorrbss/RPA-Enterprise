@@ -11,7 +11,7 @@ import { FilterSelect } from "../components/FilterSelect";
 import { RunModeBadge, StatusBadge, statusLabel, errorCodeLabel, runModeLabel } from "../components/badges";
 import { RUN_STATES } from "./filters";
 import { mergeParams, useHashIdParam, useHashParam } from "../router";
-import { formatDateTime } from "../util/time";
+import { formatDateTime, formatRunDuration } from "../util/time";
 import type { RunItem, RunMode, RunPriority, ScenarioGenerationResult } from "../api/types";
 import { POLL_MS, TERMINAL, runDetailRefetchInterval } from "./runtrace/constants";
 import { RunDetailPanel } from "./runtrace/RunDetailPanel";
@@ -205,6 +205,16 @@ export function RunTraceView(): JSX.Element {
             render: (r) => (
               <span title={r.updated_at !== null && r.updated_at !== undefined ? `마지막 갱신 ${formatDateTime(r.updated_at)}` : undefined}>
                 {formatDateTime(r.as_of)}
+              </span>
+            ),
+          },
+          {
+            // F5: 종결 run(ended_at 존재)만 소요를 표기 — 진행 중·미시작은 "—"(상태는 상태 열이 말한다;
+            // 클라이언트 시계로 경과를 추정 표기하지 않는다, 날조 금지).
+            header: "소요",
+            render: (r) => (
+              <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                {formatRunDuration(r.started_at, r.ended_at) ?? "—"}
               </span>
             ),
           },

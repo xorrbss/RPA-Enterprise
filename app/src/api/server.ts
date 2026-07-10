@@ -93,6 +93,8 @@ interface RunRow {
   as_of: Date | null;
   params: Record<string, unknown> | null;
   failure_reason: unknown;
+  started_at: Date | null; // runs.started_at(R2 run.started) — 미시작이면 null
+  ended_at: Date | null; // runs.ended_at(terminal 진입) — 종결 전이면 null
   updated_at: Date;
 }
 
@@ -226,7 +228,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
     const run = await withTenantTx(deps.pool, principal.tenantId, async (client) => {
       const result = await client.query<RunRow>(
         `SELECT r.id, r.status, r.priority, r.run_mode, sv.scenario_id, s.name AS scenario_name, r.scenario_version_id,
-                r.worker_id, r.attempts, r.as_of, r.params, r.failure_reason, r.updated_at
+                r.worker_id, r.attempts, r.as_of, r.params, r.failure_reason, r.started_at, r.ended_at, r.updated_at
            FROM runs r
            JOIN scenario_versions sv ON sv.tenant_id = r.tenant_id AND sv.id = r.scenario_version_id
            JOIN scenarios s ON s.tenant_id = sv.tenant_id AND s.id = sv.scenario_id
@@ -255,6 +257,9 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
       params: run.params,
       failure_reason: normalizeFailureReason(run.failure_reason),
       current_node: null,
+      // 소요 시간 표면화(F5) — 미시작/미종결은 null(클라이언트가 경과를 추정하지 않는다).
+      started_at: run.started_at !== null ? run.started_at.toISOString() : null,
+      ended_at: run.ended_at !== null ? run.ended_at.toISOString() : null,
       updated_at: run.updated_at.toISOString(),
     };
   });

@@ -23,6 +23,8 @@ interface RunListRow {
   as_of: Date | null;
   workitem_id: string | null;
   failure_reason: unknown;
+  started_at: Date | null; // runs.started_at(R2 run.started) — 표시 전용 투영, 커서 무관
+  ended_at: Date | null; // runs.ended_at(terminal 진입) — 표시 전용 투영, 커서 무관
   created_at: Date;
   cursor_at: string; // created_at::text(전정밀도) — keyset 커서 전용(PAG-01)
   updated_at: Date;
@@ -65,7 +67,7 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
     const rows = await withTenantTx(deps.pool, principal.tenantId, async (c) => {
       const result = await c.query<RunListRow>(
         `SELECT r.id, r.status, r.priority, r.run_mode, sv.scenario_id, s.name AS scenario_name, r.scenario_version_id,
-                r.worker_id, r.attempts, r.as_of, r.workitem_id, r.failure_reason, r.created_at,
+                r.worker_id, r.attempts, r.as_of, r.workitem_id, r.failure_reason, r.started_at, r.ended_at, r.created_at,
                 r.created_at::text AS cursor_at, r.updated_at
            FROM runs r
            JOIN scenario_versions sv ON sv.tenant_id = r.tenant_id AND sv.id = r.scenario_version_id
@@ -110,6 +112,9 @@ export function registerRunReadRoutes(app: FastifyInstance, deps: ApiServerDeps)
           as_of: r.as_of !== null ? r.as_of.toISOString() : null,
           workitem_id: r.workitem_id,
           failure_reason: normalizeFailureReason(r.failure_reason),
+          // 소요 시간 표면화(F5) — 미시작/미종결은 null(클라이언트가 경과를 추정하지 않는다).
+          started_at: r.started_at !== null ? r.started_at.toISOString() : null,
+          ended_at: r.ended_at !== null ? r.ended_at.toISOString() : null,
           updated_at: r.updated_at.toISOString(),
           // runs에 진행-노드 컬럼 없음(계약 미약속) → null. 과다 렌더 금지.
           current_node: null,

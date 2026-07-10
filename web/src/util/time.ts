@@ -84,6 +84,33 @@ function formatDeadlineAbsolute(date: Date, now: Date): string {
   return formatShortDateTime(date.toISOString());
 }
 
+// run 소요 시간(F5) — 관측된 started_at/ended_at 두 값이 모두 있을 때만 산출한다(둘 중 하나라도 없으면 null;
+// 진행 중 run의 경과를 클라이언트 시계로 추정하지 않는다 — 날조 금지). 1초 미만은 "1초 미만", 이후 초/분/시간 한국어 단위.
+export function formatRunDuration(
+  startedAt: string | null | undefined,
+  endedAt: string | null | undefined,
+): string | null {
+  if (startedAt === null || startedAt === undefined) return null;
+  if (endedAt === null || endedAt === undefined) return null;
+  const startMs = Date.parse(startedAt);
+  const endMs = Date.parse(endedAt);
+  if (Number.isNaN(startMs) || Number.isNaN(endMs)) return null;
+  const ms = endMs - startMs;
+  if (ms < 0) return null; // 역전 타임스탬프는 소요를 단정하지 않는다.
+  if (ms < 1000) return "1초 미만";
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts: string[] = [];
+  if (hours > 0) parts.push(`${hours}시간`);
+  if (minutes > 0) parts.push(`${minutes}분`);
+  // 시간 단위부터는 초를 생략해 가독성을 유지한다(분 단위 정밀도).
+  if (hours === 0 && seconds > 0) parts.push(`${seconds}초`);
+  // ms >= 1000이면 시간/분/초 중 최소 하나는 존재한다(totalSeconds >= 1).
+  return parts.join(" ");
+}
+
 function formatRelativeDuration(ms: number, direction: "future" | "past"): string {
   const minuteMs = 60_000;
   const hourMs = 60 * minuteMs;

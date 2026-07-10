@@ -1641,6 +1641,108 @@ describe("실행 상세 상태 패널 — 터미널 상태(F3)", () => {
   });
 });
 
+// F5 — run 소요 시간 표면화: 목록 "소요" 열은 종결 run(ended_at 존재)만 값, 진행 중은 "—"(경과 추정 금지).
+describe("실행 소요 시간 (F5)", () => {
+  beforeEach(() => {
+    location.hash = "";
+    localStorage.setItem("rpa.token", "test-token");
+  });
+
+  test("목록: 종결 run은 소요 값을, 진행 중 run은 '—'를 표기한다", async () => {
+    renderApp(
+      fakeClient({
+        listRuns: async () => ({
+          items: [
+            {
+              run_id: "11111111-aaaa-bbbb-cccc-000000000001",
+              status: "completed",
+              run_mode: "prod",
+              current_node: null,
+              as_of: "2026-07-01T00:00:00.000Z",
+              started_at: "2026-07-01T00:00:00.000Z",
+              ended_at: "2026-07-01T00:01:15.000Z",
+              failure_reason: null,
+            },
+            {
+              run_id: "22222222-aaaa-bbbb-cccc-000000000002",
+              status: "running",
+              run_mode: "prod",
+              current_node: null,
+              as_of: "2026-07-01T00:00:00.000Z",
+              started_at: "2026-07-01T00:00:00.000Z",
+              ended_at: null,
+              failure_reason: null,
+            },
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+    location.hash = "#runTrace";
+
+    expect(
+      await screen.findByRole("columnheader", { name: "소요" }),
+    ).toBeInTheDocument();
+    const completedRow = (await screen.findByText("#11111111")).closest("tr");
+    expect(completedRow?.textContent).toContain("1분 15초");
+    // 진행 중 행은 소요 대신 "—" — 클라이언트 경과 추정 금지.
+    const runningRow = screen.getByText("#22222222").closest("tr");
+    expect(runningRow?.textContent).toContain("—");
+    expect(runningRow?.textContent).not.toContain("1분 15초");
+  });
+
+  test("상세: 시작/종료/소요 3항목 — 종결 run은 값, null은 '—'", async () => {
+    renderApp(
+      fakeClient({
+        getRun: async (id) => ({
+          run_id: id,
+          status: "completed",
+          worker_id: "w1",
+          attempts: 1,
+          as_of: null,
+          started_at: "2026-07-01T00:00:00.000Z",
+          ended_at: "2026-07-01T02:05:00.000Z",
+        }),
+      }),
+    );
+    await openDetail();
+
+    const panel = await screen.findByRole("region", { name: "실행 상세" });
+    await waitFor(() =>
+      expect(within(panel).getByText("시작 시각")).toBeInTheDocument(),
+    );
+    expect(within(panel).getByText("종료 시각")).toBeInTheDocument();
+    expect(within(panel).getByText("소요")).toBeInTheDocument();
+    expect(within(panel).getByText("2시간 5분")).toBeInTheDocument();
+  });
+
+  test("상세: 미시작 run(두 시각 null)은 시작/종료/소요 모두 '—'", async () => {
+    renderApp(
+      fakeClient({
+        getRun: async (id) => ({
+          run_id: id,
+          status: "queued",
+          worker_id: null,
+          attempts: 0,
+          as_of: null,
+          started_at: null,
+          ended_at: null,
+        }),
+      }),
+    );
+    await openDetail();
+
+    const panel = await screen.findByRole("region", { name: "실행 상세" });
+    await waitFor(() =>
+      expect(within(panel).getByText("소요")).toBeInTheDocument(),
+    );
+    const dl = within(panel).getByText("소요").closest("dl") as HTMLElement;
+    const dds = Array.from(dl.querySelectorAll("dd")).map((dd) => dd.textContent);
+    // 시작 시각/종료 시각/소요는 dl의 마지막 3개 dd — 전부 "—"(날조 금지).
+    expect(dds.slice(-3)).toEqual(["—", "—", "—"]);
+  });
+});
+
 describe("실행 취소 즉시 피드백", () => {
   beforeEach(() => {
     location.hash = "";

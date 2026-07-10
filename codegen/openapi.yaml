@@ -9353,6 +9353,14 @@ components:
           properties:
             code: { type: string }
             message: { type: string }
+        started_at:
+          type: [string, "null"]
+          format: date-time
+          description: runs.started_at(R2 run.started 진입 시각). 미시작이면 null — 클라이언트가 경과를 추정하지 않는다.
+        ended_at:
+          type: [string, "null"]
+          format: date-time
+          description: runs.ended_at(terminal 진입 시각). 종결 전이면 null. 소요 시간 = ended_at - started_at(둘 다 있을 때만).
         updated_at:
           type: string
           format: date-time
