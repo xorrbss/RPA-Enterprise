@@ -14,6 +14,7 @@ import { isHttpUrl } from "./scenario-generation-url";
 import type {
   EvidencePolicy,
   GenerationRequest,
+  GenerationReviseRequest,
   GenerationRunRequest,
   GenerationStatus,
   ScenarioPlannerId,
@@ -67,6 +68,13 @@ export function parseRunIdFilter(value: string | undefined): string | undefined 
   if (value === undefined || value.length === 0) return undefined;
   if (UUID_RE.test(value)) return value;
   throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_run_id" });
+}
+
+/** 목록 scenario_id 필터(F1/v2.37): 저장된 자동화의 generation 이력 역조회 — run_id 필터와 동형. */
+export function parseScenarioIdFilter(value: string | undefined): string | undefined {
+  if (value === undefined || value.length === 0) return undefined;
+  if (UUID_RE.test(value)) return value;
+  throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_scenario_id" });
 }
 
 // ===== generation 요청 body 파서(scenario-generations.ts 분해 — 동작 무변경 이동) =====
@@ -131,6 +139,29 @@ export function parseGenerationRequest(body: unknown, defaultEvidence: EvidenceP
     ...(model !== undefined ? { model } : {}),
     evidence: parseEvidencePolicy(body.evidence, defaultEvidence),
   };
+}
+
+/** revise body 파서(F1/v2.37): instruction 1..2000자, base_version 은 1 이상 정수(현재 head 와의 대조는 store 가 권위). */
+export function parseGenerationReviseRequest(body: unknown): GenerationReviseRequest {
+  if (!isRecord(body)) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "request_body_object_required" });
+  }
+  const allowed = new Set(["instruction", "base_version"]);
+  for (const key of Object.keys(body)) {
+    if (!allowed.has(key)) {
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "unknown_field", field: key });
+    }
+  }
+  if (typeof body.instruction !== "string" || body.instruction.trim().length === 0) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "instruction_required" });
+  }
+  if (body.instruction.length > 2000) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "instruction_too_long", max: 2000 });
+  }
+  if (typeof body.base_version !== "number" || !Number.isInteger(body.base_version) || body.base_version < 1) {
+    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_base_version" });
+  }
+  return { instruction: body.instruction.trim(), baseVersion: body.base_version };
 }
 
 export function parseGenerationRunRequest(body: unknown): GenerationRunRequest {
@@ -233,7 +264,7 @@ export function parseEvidencePolicy(value: unknown, defaultEvidence: EvidencePol
   return { screenshot, video };
 }
 
-function parseScenarioPlannerId(value: unknown): ScenarioPlannerId | undefined {
+export function parseScenarioPlannerId(value: unknown): ScenarioPlannerId | undefined {
   if (value === undefined || value === null) return undefined;
   if (value === "deterministic_mvp" || value === "llm_v1") return value;
   throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "invalid_scenario_planner" });

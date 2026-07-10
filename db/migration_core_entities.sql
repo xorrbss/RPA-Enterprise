@@ -1118,8 +1118,9 @@ CREATE INDEX idx_run_trigger_fires_run ON run_trigger_fires (tenant_id, run_id)
 
 -- ============================================================
 -- 4b. scenario_generations
---    자연어 프롬프트 → IR 초안 → 저장/실행 자동화 원장. prompt 원문은 저장하지 않고 hash/ref만 둔다.
---    실제 실행은 기존 scenario_versions + runs 계약을 재사용한다.
+--    자연어 프롬프트 → IR 초안 → 저장/실행 자동화 원장. prompt 원문은 저장하지 않는다
+--    (hash + 게이트웨이 결정형 redaction 통과본만 — v2.37 revise 입력). 실제 실행은
+--    기존 scenario_versions + runs 계약을 재사용한다.
 -- ============================================================
 
 CREATE TABLE scenario_generations (
@@ -1130,7 +1131,8 @@ CREATE TABLE scenario_generations (
   status              text        NOT NULL
                         CHECK (status IN ('drafted','saved','run_queued','blocked','failed')),
   prompt_hash         text        NOT NULL CHECK (length(prompt_hash) > 0),
-  prompt_redacted_ref text,                                  -- optional redacted prompt artifact/ref. 원문 저장 금지.
+  prompt_redacted_ref text,                                  -- optional redacted prompt artifact/ref(대형 첨부 확장용 예약). 원문 저장 금지.
+  prompt_redacted     text,                                  -- 게이트웨이 결정형 redaction 통과본(revise 재수정 입력, v2.37). NULL=구세대(미보존). 원문 저장 금지.
   planner             text        NOT NULL DEFAULT 'deterministic_mvp',
   model               text,                                  -- LLM planner 사용 시 모델 스냅샷. deterministic MVP는 NULL 가능.
   params_context      jsonb       NOT NULL DEFAULT '{}'::jsonb,

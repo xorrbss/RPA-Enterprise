@@ -33,6 +33,7 @@ import { registerSiteRoutes } from "./sites";
 import { registerSessionRoutes } from "./sessions";
 import { registerApprovalRoutes } from "./approvals";
 import { registerScenarioGenerationRoutes } from "./scenario-generations";
+import { registerScenarioGenerationReviseRoute } from "./scenario-generation-revise";
 import { registerScenarioReleaseRoutes } from "./scenario-releases";
 import { registerScenarioRoutes } from "./scenarios";
 import { registerAuditLogRoutes } from "./audit-log";
@@ -321,6 +322,7 @@ export function buildServer(deps: ApiServerDeps): FastifyInstance {
   );
 
   registerScenarioGenerationRoutes(app, deps);
+  registerScenarioGenerationReviseRoute(app, deps);
   registerScenarioReleaseRoutes(app, deps);
   registerScenarioRoutes(app, deps);
   registerAutomationIdeaRoutes(app, deps);

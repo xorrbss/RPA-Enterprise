@@ -53,6 +53,12 @@ export interface GenerationRunRequest {
   evidence?: EvidencePolicy;
 }
 
+/** POST /v1/scenario-generations/{id}/revise body (F1/v2.37). base_version 은 PUT If-Match 규율과 동형. */
+export interface GenerationReviseRequest {
+  instruction: string;
+  baseVersion: number;
+}
+
 export interface GenerationPlan {
   planner: ScenarioPlannerId;
   request: GenerationRequest;

@@ -1,9 +1,10 @@
 /**
  * 자연어 generation 영속·ledger 저장소 (scenario-generations.ts 분해 — 동작 무변경 이동).
  *
- * scenario_generations/scenarios/scenario_versions DB read/write: load(FOR UPDATE)·생성(persistGeneration)·
- * 실행 보정(persistGenerationRun)·실패 ledger(upsertFailedGenerationLedger)·row→응답 매핑(mapGenerationRow)·
- * 커서(encodeListCursor). route/orchestration(잔류)이 본 모듈 export를 호출(단방향, back-cycle 없음). 내부
+ * scenario_generations/scenarios/scenario_versions DB read/write: load(FOR UPDATE)·생성(persistGeneration —
+ * F1 revise 분기: 기존 scenario 에 version=head+1 draft INSERT + prompt_redacted 영속)·실행 보정(persistGenerationRun)·
+ * 실패 ledger(upsertFailedGenerationLedger)·row→응답 매핑(mapGenerationRow)·커서(encodeListCursor).
+ * route/orchestration(잔류)이 본 모듈 export를 호출(단방향, back-cycle 없음). 내부
  * failed-ledger 헬퍼·RUN_REPAIRABLE_BLOCKERS는 비-export. compile/run-create/redaction/parse/planner/target leaf 의존.
  */
 import { createHash, randomUUID } from "node:crypto";
@@ -17,7 +18,8 @@ import { ApiResponseError } from "../runtime/errors";
 import { cloneJsonRecord, parseEvidencePolicy, parseGenerationBlockers, parseParamsContext, parseTarget } from "./scenario-generation-parse";
 import { recordingPolicy } from "./scenario-generation-policy";
 import { prepareGenerationRunIr, startUrlFromParams, uniqueStrings } from "./scenario-generation-planner";
-import { containsRedactedParamsMarker, redactGenerationDraftIr, redactGenerationFailureDetails, redactParamsContext } from "./scenario-generation-redaction";
+import { containsRedactedParamsMarker, redactGenerationDraftIr, redactGenerationFailureDetails, redactGenerationPrompt, redactParamsContext } from "./scenario-generation-redaction";
+import { cloneIrWithVersion } from "./scenarios-support";
 import { inferRuntimeTargetForStartUrl, type RuntimeTargetInference, runtimeTargetBlocker } from "./scenario-generation-target";
 import type {
   GenerationMode,
@@ -249,6 +251,13 @@ export async function persistGenerationRun(
   };
 }
 
+/** F1(D3): revise 저장 대상 — 기존 시나리오에 version=head+1 draft INSERT (base_version 은 PUT If-Match 규율과 동형). */
+export interface GenerationReviseTarget {
+  scenarioId: string;
+  baseVersion: number;
+  signedCommandRefs: readonly string[] | undefined;
+}
+
 export async function persistGeneration(
   client: PoolClient,
   deps: ApiServerDeps,
@@ -257,24 +266,74 @@ export async function persistGeneration(
   generationId: string,
   plan: GenerationPlan,
   compiled: Extract<ReturnType<typeof compileScenario>, { ok: true }>,
+  revise?: GenerationReviseTarget,
 ): Promise<CommandResponse> {
+  let persisted = compiled;
   let scenarioId: string | null = null;
   let scenarioVersionId: string | null = null;
   let runId: string | null = null;
   let status: GenerationStatus = plan.request.mode === "draft_only" ? "drafted" : "saved";
   const blockers = [...plan.blockers];
 
-  if (plan.request.mode !== "draft_only") {
+  if (revise !== undefined) {
+    // F1(D3): 말로 고치기 = 신규 scenario 를 만들지 않고 기존 scenario 의 새 draft 버전(단일 쓰기 경로 내 분기).
+    scenarioId = revise.scenarioId;
+    const current = await client.query<{ name: string; version: number }>(
+      `SELECT s.name, sv.version
+         FROM scenarios s
+         JOIN scenario_versions sv ON sv.tenant_id=s.tenant_id AND sv.scenario_id=s.id
+        WHERE s.tenant_id=$1::uuid AND s.id=$2::uuid AND s.archived_at IS NULL
+        ORDER BY sv.version DESC
+        LIMIT 1`,
+      [principal.tenantId, scenarioId],
+    );
+    const head = current.rows[0];
+    if (head === undefined) {
+      throw new ApiResponseError("RESOURCE_NOT_FOUND");
+    }
+    if (head.version !== revise.baseVersion) {
+      throw new ApiResponseError("SCENARIO_VERSION_CONFLICT", { reason: "base_version_mismatch", currentVersion: head.version });
+    }
+    // compiledAst 가 meta.version 을 내장하므로(static-validation) 스탬프 후 재컴파일 — rollback 경로와 동형.
+    const outcome = compileScenario(cloneIrWithVersion(compiled.ir, head.name, head.version + 1), {
+      signedCommandRefs: revise.signedCommandRefs,
+    });
+    if (!outcome.ok) {
+      throw new ApiResponseError(outcome.code, outcome.details);
+    }
+    persisted = outcome;
+    scenarioVersionId = randomUUID();
+    const insertedVersion = await client.query(
+      `INSERT INTO scenario_versions
+         (id, tenant_id, scenario_id, version, promotion_status, ir, compiled_ast, params_schema)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'draft', $5::jsonb, $6, $7::jsonb)
+       ON CONFLICT (tenant_id, scenario_id, version) DO NOTHING
+       RETURNING id`,
+      [
+        scenarioVersionId,
+        principal.tenantId,
+        scenarioId,
+        persisted.ir.meta.version,
+        JSON.stringify(persisted.ir),
+        persisted.compiledAst,
+        persisted.ir.params_schema !== undefined ? JSON.stringify(persisted.ir.params_schema) : null,
+      ],
+    );
+    if (insertedVersion.rowCount !== 1) {
+      // IFM-2 동형: 동시 작성자의 같은 version 선점(UNIQUE 경합) — raw 23505 대신 계약 코드로 환원. tx 롤백이라 부분상태 없음.
+      throw new ApiResponseError("SCENARIO_VERSION_CONFLICT", { reason: "concurrent_version_insert", version: persisted.ir.meta.version });
+    }
+  } else if (plan.request.mode !== "draft_only") {
     scenarioId = randomUUID();
     const scenario = await client.query<{ id: string }>(
       `INSERT INTO scenarios (id, tenant_id, name)
        VALUES ($1::uuid, $2::uuid, $3)
        ON CONFLICT (tenant_id, name) WHERE archived_at IS NULL DO NOTHING
        RETURNING id`,
-      [scenarioId, principal.tenantId, compiled.ir.meta.name],
+      [scenarioId, principal.tenantId, persisted.ir.meta.name],
     );
     if (scenario.rowCount === 0) {
-      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "scenario_name_in_use", name: compiled.ir.meta.name });
+      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "scenario_name_in_use", name: persisted.ir.meta.name });
     }
 
     scenarioVersionId = randomUUID();
@@ -286,10 +345,10 @@ export async function persistGeneration(
         scenarioVersionId,
         principal.tenantId,
         scenarioId,
-        compiled.ir.meta.version,
-        JSON.stringify(compiled.ir),
-        compiled.compiledAst,
-        compiled.ir.params_schema !== undefined ? JSON.stringify(compiled.ir.params_schema) : null,
+        persisted.ir.meta.version,
+        JSON.stringify(persisted.ir),
+        persisted.compiledAst,
+        persisted.ir.params_schema !== undefined ? JSON.stringify(persisted.ir.params_schema) : null,
       ],
     );
   }
@@ -324,14 +383,16 @@ export async function persistGeneration(
     status = "blocked";
   }
 
-  const ledgerDraftIr = redactGenerationDraftIr(compiled.ir);
+  const ledgerDraftIr = redactGenerationDraftIr(persisted.ir);
   const paramsContext = redactParamsContext(plan.request.params);
+  // F1(D1): 원문 저장 금지 유지 — 플래너 종류와 무관하게 결정형 redaction 통과본만 영속(다음 revise 의 입력).
+  const promptRedacted = redactGenerationPrompt(plan.request.prompt);
   const inserted = await client.query<Pick<ScenarioGenerationRow, "created_by" | "created_at">>(
     `INSERT INTO scenario_generations
-       (id, tenant_id, mode, status, prompt_hash, planner, model, params_context, draft_ir, validation_report,
+       (id, tenant_id, mode, status, prompt_hash, prompt_redacted, planner, model, params_context, draft_ir, validation_report,
         evidence_policy, blockers, scenario_id, scenario_version_id, run_id, created_by)
-     VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb,
-             $11::jsonb, $12::jsonb, $13::uuid, $14::uuid, $15::uuid, $16)
+     VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb,
+             $12::jsonb, $13::jsonb, $14::uuid, $15::uuid, $16::uuid, $17)
      RETURNING created_by, created_at::text AS created_at`,
     [
       generationId,
@@ -339,11 +400,12 @@ export async function persistGeneration(
       plan.request.mode,
       status,
       plan.promptHash,
+      promptRedacted,
       plan.planner,
       plan.request.model ?? null,
       JSON.stringify(paramsContext),
       JSON.stringify(ledgerDraftIr),
-      JSON.stringify(compiled.report),
+      JSON.stringify(persisted.report),
       JSON.stringify(plan.request.evidence),
       JSON.stringify(blockers),
       scenarioId,
@@ -374,7 +436,8 @@ export async function persistGeneration(
   }
 
   return {
-    status: plan.request.mode === "draft_only" ? 200 : 201,
+    // revise 는 기존 자동화 리소스에 버전을 얹는 수정이라 200(설계 §1.3), 신규 저장/실행은 기존과 동일 201.
+    status: plan.request.mode === "draft_only" || revise !== undefined ? 200 : 201,
     body: {
       generation_id: generationId,
       status,
@@ -390,7 +453,7 @@ export async function persistGeneration(
       blockers,
       created_by: created.created_by,
       created_at: created.created_at,
-      validation_report: compiled.report,
+      validation_report: persisted.report,
       draft_ir: ledgerDraftIr,
     },
   };

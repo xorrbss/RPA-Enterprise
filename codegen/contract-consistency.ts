@@ -156,6 +156,7 @@ assertControlPlanePath("/v1/automation-ideas/{idea_id}/adoption-evidence");
 assertControlPlanePath("/v1/scenarios/{scenario_id}/versions/{version}/governance-stage");
 assertControlPlanePath("/v1/scenarios/{scenario_id}/promote-from-run");
 assertControlPlanePath("/v1/scenario-generations/{generation_id}/run");
+assertControlPlanePath("/v1/scenario-generations/{generation_id}/revise");
 assertControlPlanePath("/v1/scenario-generations/{generation_id}/artifacts");
 assertControlPlanePath("/v1/scenario-generations/{generation_id}/artifacts/{artifact_id}");
 assertControlPlanePath("/v1/scenario-generations/capabilities");
