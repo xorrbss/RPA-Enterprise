@@ -435,6 +435,7 @@ export function PromptScenarioGenerator({
             runPending={actions.runPending}
             modelConfirmationRequired={needModel}
             onRunWithCorrections={actions.runWithCorrections}
+            onRevised={actions.selectGeneration}
             onFocusStartUrl={() => focusField(startUrlInputRef.current)}
             onFocusTarget={() => focusField(siteSelectRef.current)}
             onOpenSiteCreate={openInlineSiteCreate}

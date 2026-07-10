@@ -1519,6 +1519,22 @@ describe("HttpApiClient 계약", () => {
     expect(calls[0]?.url).toBe("http://api.test/v1/sites/site-1/session/capture");
   });
 
+  test("reviseScenarioGeneration → POST /v1/scenario-generations/{id}/revise + Idempotency-Key + body(instruction, base_version)", async () => {
+    const { calls, client } = harness({ body: { generation_id: "gen-1" } });
+    await client.reviseScenarioGeneration("gen-1", { instruction: "단계를 하나 더 넣어줘", base_version: 3 }, "idem-revise");
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.url).toBe("http://api.test/v1/scenario-generations/gen-1/revise");
+    expect(calls[0]?.headers.get("idempotency-key")).toBe("idem-revise");
+    expect(calls[0]?.body).toEqual({ instruction: "단계를 하나 더 넣어줘", base_version: 3 });
+  });
+
+  test("listScenarioGenerations scenario_id 필터 → 쿼리스트링 직렬화", async () => {
+    const { calls, client } = harness({ body: { items: [], next_cursor: null } });
+    await client.listScenarioGenerations({ scenario_id: "sc-1", limit: 1 });
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("http://api.test/v1/scenario-generations?scenario_id=sc-1&limit=1");
+  });
+
   test("updateSitePageState → PATCH /v1/sites/{id}/page-state + Idempotency-Key", async () => {
     const { calls, client } = harness({ body: { site_profile_id: "site-1", page_state_selectors: { flags: {} } } });
     await client.updateSitePageState("site-1", { flags: {} }, "idem-page-state");

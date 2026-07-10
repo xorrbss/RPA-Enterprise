@@ -295,6 +295,7 @@ export function createHttpApiClient(opts: HttpApiClientOptions): ApiClient {
       send("PUT", `/v1/scenarios/${scenarioId}`, ir, { "If-Match": String(version) }),
     generateScenario: (body, key) => post(`/v1/scenario-generations`, key, body),
     runScenarioGeneration: (generationId, body, key) => post(`/v1/scenario-generations/${generationId}/run`, key, body),
+    reviseScenarioGeneration: (generationId, body, key) => post(`/v1/scenario-generations/${generationId}/revise`, key, body),
     getScenarioGenerationCapabilities: () => get(`/v1/scenario-generations/capabilities`),
     listScenarioGenerations: (p) => get(`/v1/scenario-generations${queryString(p)}`),
     getScenarioGeneration: (generationId) => get(`/v1/scenario-generations/${generationId}`),
