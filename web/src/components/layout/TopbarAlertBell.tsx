@@ -116,29 +116,34 @@ export function TopbarAlertBell(): JSX.Element | null {
               운영 알림 확인 중…
             </div>
           )}
-          {topGroups.map(({ representative, count }) => (
-            <button
-              key={representative.alert_id}
-              type="button"
-              role="menuitem"
-              className="alert-bell-item"
-              onClick={() =>
-                goTo(() => {
-                  const route = representative.route;
-                  if (route !== null && route.trim().length > 0) navigateAlertRoute(route);
-                  else navigate("automationOps", { section: "alerts" });
-                })
-              }
-            >
-              <span className="alert-bell-item-copy">
-                <strong>
-                  {representative.title}
-                  {count > 1 && <span className="badge muted">외 {count - 1}건</span>}
-                </strong>
-                <small>{opsAlertSourceLabel(representative.source)}</small>
-              </span>
-            </button>
-          ))}
+          {topGroups.map(({ representative, count }) => {
+            // N4: 제목이 소스 라벨을 이미 담고 있으면(예: 제목 "재처리 대기 DLQ" vs 라벨 "재처리 대기")
+            // 부제를 생략한다 — 같은 말 반복 제거. 담고 있지 않을 때만 부제로 출처를 보탠다.
+            const sourceLabel = opsAlertSourceLabel(representative.source);
+            return (
+              <button
+                key={representative.alert_id}
+                type="button"
+                role="menuitem"
+                className="alert-bell-item"
+                onClick={() =>
+                  goTo(() => {
+                    const route = representative.route;
+                    if (route !== null && route.trim().length > 0) navigateAlertRoute(route);
+                    else navigate("automationOps", { section: "alerts" });
+                  })
+                }
+              >
+                <span className="alert-bell-item-copy">
+                  <strong>
+                    {representative.title}
+                    {count > 1 && <span className="badge muted">외 {count - 1}건</span>}
+                  </strong>
+                  {!representative.title.includes(sourceLabel) && <small>{sourceLabel}</small>}
+                </span>
+              </button>
+            );
+          })}
           {alerts.data !== undefined && topGroups.length === 0 && blockerCount === 0 && (
             <div role="menuitem" aria-disabled="true" className="alert-bell-note">
               새 알림이 없습니다.

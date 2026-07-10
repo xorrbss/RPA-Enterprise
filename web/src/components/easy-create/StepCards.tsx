@@ -115,7 +115,9 @@ function StepCard({
       </span>
       <span className="step-card-badges">
         {changeMeta !== null && <span className={`badge ${changeMeta.tone}`}>{changeMeta.label}</span>}
-        {step.flow !== undefined && <span className="badge blue">{step.flow.label}</span>}
+        {/* N4: 동작 없는 흐름 노드(terminal 등)는 흐름 라벨이 곧 문장(step-sentences) — 배지가 같은 말을
+            반복하므로 문장과 동일한 라벨의 배지는 억제한다. */}
+        {step.flow !== undefined && step.flow.label !== step.sentence && <span className="badge blue">{step.flow.label}</span>}
         {step.fallback && <span className="badge amber">원문 확인 필요</span>}
         {stateMeta !== null && <span className={`badge ${stateMeta.tone}`}>{stateMeta.label}</span>}
       </span>

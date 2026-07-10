@@ -38,10 +38,19 @@ function str(v: unknown): string | null {
   return typeof v === "string" && v.length > 0 ? v : null;
 }
 
+// N1: redaction 토큰 번역 안전망 — draft_only 응답 draft_ir(instruction 전체 마스킹)이나 redaction 통과
+// 프롬프트가 흘러든 instruction 문장에 남는 "[REDACTED:…]"/"[REDACTED]" 토큰을 표시 계층에서만 한국어로
+// 치환한다. 데이터(IR 원문)는 건드리지 않는다 — [정의 보기 (전문가)] 원문에는 토큰이 그대로 남는다(정직 표기).
+const REDACTION_TOKEN_RE = /\[REDACTED(?::[a-z0-9_]+)?\]/g;
+
+function displayInstruction(v: string | null): string | null {
+  return v === null ? null : v.replace(REDACTION_TOKEN_RE, "보호된 요청 내용");
+}
+
 // §5 action 문장표 — 필드는 ir.schema.json what[] 실측(instruction/url_ref/schema_ref/args/cmd_ref/assignee_role).
 function actionSentence(what: Rec): { sentence: string; detail?: string; fallback: boolean } {
   const action = str(what.action);
-  const instruction = str(what.instruction);
+  const instruction = displayInstruction(str(what.instruction));
   switch (action) {
     case "navigate": {
       // url_ref 는 심볼릭 키(E§12-① 확정) — 알려진 키는 urlRefLabel 로 업무 라벨 해석, 미매핑은 키 원문 폴백.

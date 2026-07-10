@@ -32,8 +32,8 @@ export function opsAlertSourceLabel(source: OpsAlertItem["source"]): string {
   if (source === "session_expiry") return "로그인 세션 만료";
   if (source === "artifact_redaction") return "증빙 보호 실패";
   if (source === "security_abort") return "보안 차단 중단";
-  if (source === "bot_pool") return "Bot Pool";
-  if (source === "scim_secret_rotation") return "SCIM SecretRef";
+  if (source === "bot_pool") return "봇 풀";
+  if (source === "scim_secret_rotation") return "SCIM 서명 비밀";
   if (source === "readiness_evidence") return "운영 전환 준비";
   if (source === "audit_verifier") return "감사 체인";
   return "재처리 대기";

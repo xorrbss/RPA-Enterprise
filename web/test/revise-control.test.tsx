@@ -250,6 +250,30 @@ describe("StepCards 변경 표시 오버레이 (F2)", () => {
   });
 });
 
+describe("StepCards 종결 카드 배지 중복 억제 (N4)", () => {
+  test("terminal 전용 카드는 문장과 배지가 같은 말('완료합니다')을 반복하지 않는다", () => {
+    render(
+      <StepCards
+        ir={{
+          start: "open",
+          nodes: {
+            open: { what: [{ action: "act", instruction: "화면을 연다" }], next: "done" },
+            done: { terminal: "success" },
+          },
+        }}
+      />,
+    );
+    // 흐름 전용 노드는 흐름 라벨이 곧 문장 — 배지까지 겹치면 같은 말 2회. 문장 1회만 남아야 한다.
+    expect(screen.getAllByText("완료합니다")).toHaveLength(1);
+  });
+
+  test("동작 있는 노드의 흐름 배지는 유지된다(문장≠배지, 과억제 금지)", () => {
+    render(<StepCards ir={IR} />);
+    expect(screen.getByText("리뷰를 읽는다")).toBeInTheDocument();
+    expect(screen.getByText("완료합니다")).toBeInTheDocument(); // grab 카드의 종결 흐름 배지
+  });
+});
+
 const STUDIO_SCENARIO = { scenario_id: "sc-1", name: "리뷰 수집", version: 2, latest_version_id: "ver-1" };
 
 function renderStudio(client: ApiClient): void {
@@ -289,25 +313,52 @@ describe("FocusedScenarioStudio 설계 탭 말로 고치기 (F2)", () => {
     expect(screen.queryByRole("textbox", { name: "수정 요청 입력" })).toBeNull();
   });
 
-  test("최신 generation으로 revise하면 카드에 변경 표시가 겹친다", async () => {
+  test("revise 변경 표시는 저장본끼리(v1 vs v2) 비교한다 — 마스킹 차이로 인한 가짜 changed 없음(N1)", async () => {
+    // 저장본 v2: open·grab 은 v1 과 내용 동일(instruction 원문 유지), save 만 추가.
+    // 응답 draft_ir 은 instruction 이 redaction 토큰으로 마스킹돼 있어, 예전처럼 저장본 v1 과 응답을
+    // 비교하면 grab 이 마스킹 차이만으로 "달라진 단계"가 된다(가짜 변경). 저장본끼리 비교가 정답.
+    const SAVED_V2 = {
+      start: "open",
+      nodes: {
+        ...IR.nodes,
+        save: { what: [{ action: "act", instruction: "화면을 저장한다" }], terminal: "success" },
+      },
+    };
+    const REDACTED_RESPONSE_IR = {
+      start: "open",
+      nodes: {
+        open: IR.nodes.open,
+        grab: { what: [{ action: "extract", instruction: "[REDACTED:scenario_generation_instruction]" }], terminal: "success" },
+        save: { what: [{ action: "act", instruction: "[REDACTED:scenario_generation_instruction]" }], terminal: "success" },
+      },
+    };
+    let savedIr: unknown = IR;
+    let savedVersion = 2;
     const client = fakeClient({
-      getScenario: async (id) => ({ scenario_id: id, name: "리뷰 수집", version: 2, promotion_status: "draft", ir: IR }),
+      getScenario: async (id) => ({ scenario_id: id, name: "리뷰 수집", version: savedVersion, promotion_status: "draft", ir: savedIr }),
       listScenarioGenerations: async (p) => ({
         items:
           p?.scenario_id === undefined || p.scenario_id === "sc-1"
-            ? [revisedResult({ generation_id: "gen-base", scenario_id: "sc-1", draft_ir: IR })]
+            ? [revisedResult({ generation_id: "gen-base", scenario_id: "sc-1", draft_ir: REDACTED_RESPONSE_IR })]
             : [],
         next_cursor: null,
       }),
-      reviseScenarioGeneration: async () => revisedResult({ scenario_id: "sc-1" }),
+      reviseScenarioGeneration: async () => {
+        savedIr = SAVED_V2;
+        savedVersion = 3;
+        return revisedResult({ scenario_id: "sc-1", draft_ir: REDACTED_RESPONSE_IR });
+      },
     });
     renderStudio(client);
 
     await waitFor(() => expect(screen.getByRole("button", { name: "말로 고치기" })).toBeInTheDocument());
-    submitInstruction("로그인한 다음 화면을 저장하는 단계도 넣어줘");
+    submitInstruction("화면을 저장하는 단계도 넣어줘");
 
-    // 새 draft: open(변경)·save(추가), grab 은 빠짐 → 표시 중인 카드(open·grab)에는 changed 배지 + 요약 행.
-    expect(await screen.findByText("달라진 단계")).toBeInTheDocument();
-    expect(screen.getByText("이전 초안에서 빠진 단계 1개")).toBeInTheDocument();
+    // 저장본 v2 refetch 후: save 만 "새 단계", 카드 문장은 저장본(비마스킹) 원문.
+    expect(await screen.findByText("새 단계")).toBeInTheDocument();
+    expect(screen.getByText("화면을 저장한다")).toBeInTheDocument();
+    // 동일 노드(open·grab)는 무표시 — 응답 마스킹과 비교했다면 생겼을 가짜 changed 가 없다.
+    expect(screen.queryByText("달라진 단계")).toBeNull();
+    expect(screen.queryByText(/이전 초안에서 빠진 단계/)).toBeNull();
   });
 });

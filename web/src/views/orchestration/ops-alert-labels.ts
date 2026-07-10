@@ -14,8 +14,8 @@ export const ALERT_SOURCE_FILTER_OPTIONS: ReadonlyArray<{ readonly value: AlertS
   { value: "artifact_redaction", label: "증빙 보호 실패" },
   { value: "security_abort", label: "보안 차단 중단" },
   { value: "dlq", label: "재처리 대기" },
-  { value: "bot_pool", label: "Bot Pool" },
-  { value: "scim_secret_rotation", label: "SCIM SecretRef" },
+  { value: "bot_pool", label: "봇 풀" },
+  { value: "scim_secret_rotation", label: "SCIM 서명 비밀" },
   { value: "readiness_evidence", label: "운영 전환 준비" },
   { value: "audit_verifier", label: "감사 체인" },
 ];
@@ -91,7 +91,7 @@ export function opsAlertActionLabel(alert: OpsAlertItem): string {
     case "dlq":
       return "재처리 대기 보기";
     case "bot_pool":
-      return "Bot Pool 보기";
+      return "봇 풀 보기";
     case "scim_provider":
       return "SCIM 설정 보기";
     case "readiness_evidence":

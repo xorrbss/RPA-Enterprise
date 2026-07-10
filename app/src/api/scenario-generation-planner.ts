@@ -17,6 +17,7 @@ import {
   recordingPolicy,
   type RecordingPolicy,
 } from "./scenario-generation-policy";
+import { redactGenerationPrompt } from "./scenario-generation-redaction";
 import type { ApiServerDeps } from "./server-shared";
 import type {
   EvidencePolicy,
@@ -45,6 +46,29 @@ const deterministicMvpScenarioPlanner: ScenarioPlanner = {
   id: "deterministic_mvp",
   plan: buildDeterministicMvpGenerationPlan,
 };
+
+/**
+ * N3: 이름 미지정 생성의 기본 시나리오 이름 — 목록에 의미 없는 "prompt-{hash}" 대신 프롬프트 한국어 요약.
+ * 원문 유래 평문을 늘리지 않도록 F1 prompt_redacted(v2.37)와 동일한 redaction 통과본에서 요약하고,
+ * redaction 토큰([REDACTED]/[REDACTED:...])은 제거한다(이름에 토큰 노출 금지). 공백 정규화 후 앞 24자
+ * + " 자동화", 제거 후 비면 날짜 폴백. 이름 충돌 처리는 기존 그대로: scenarios UNIQUE(tenant_id,name)
+ * 위반 시 scenario_name_in_use 거절 — 동일 프롬프트 재생성은 종전 해시 이름도 동일해 충돌하던 동작(정책 무변경).
+ */
+const REDACTION_TOKEN_RE = /\[REDACTED(?::[a-z0-9_]+)?\]/g;
+const DEFAULT_NAME_SUMMARY_LENGTH = 24;
+
+export function defaultGenerationScenarioName(prompt: string, now: Date = new Date()): string {
+  const summary = redactGenerationPrompt(prompt)
+    .replace(REDACTION_TOKEN_RE, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, DEFAULT_NAME_SUMMARY_LENGTH)
+    .trim();
+  if (summary.length === 0) {
+    return `말로 만든 자동화 ${now.toISOString().slice(0, 10)}`;
+  }
+  return `${summary} 자동화`;
+}
 
 export function finalizeDraftIrEvidence(
   draftIr: Record<string, unknown>,
@@ -198,7 +222,7 @@ function buildDeterministicMvpGenerationPlan(request: GenerationRequest, capabil
 
   const draftIr: Record<string, unknown> = {
     meta: {
-      name: request.name ?? `prompt-${promptHash.slice(0, 12)}`,
+      name: request.name ?? defaultGenerationScenarioName(request.prompt),
       version: 1,
       ir_version: "1.x",
       studio_mode: "easy",

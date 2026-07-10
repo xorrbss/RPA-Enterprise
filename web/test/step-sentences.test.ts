@@ -184,6 +184,28 @@ describe("step-sentences — 폴백 정밀화(F6)", () => {
   });
 });
 
+describe("step-sentences — redaction 토큰 번역(N1)", () => {
+  test("act instruction 전체가 토큰이면 '보호된 요청 내용'으로 표시(데이터 아닌 표시 계층 치환)", () => {
+    const step = firstStep(
+      ir({ n1: { what: [{ action: "act", instruction: "[REDACTED:scenario_generation_instruction]" }], terminal: "success" } }),
+    );
+    expect(step.sentence).toBe("보호된 요청 내용");
+    expect(step.fallback).toBe(false);
+  });
+
+  test("observe/extract 문장 속 토큰([REDACTED] 무접미 포함)도 치환", () => {
+    const steps = renderIrSentences(
+      ir({
+        n1: { what: [{ action: "observe", instruction: "다음 계정 확인: [REDACTED]" }], next: "n2" },
+        n2: { what: [{ action: "extract", instruction: "[REDACTED:scenario_generation_instruction]" }], terminal: "success" },
+      }),
+    );
+    expect(steps[0]!.sentence).toBe("화면을 확인합니다 — 다음 계정 확인: 보호된 요청 내용");
+    expect(steps[1]!.sentence).toBe("보호된 요청 내용");
+    expect(steps.map((s) => s.sentence).join(" ")).not.toContain("REDACTED");
+  });
+});
+
 describe("step-sentences — 순회 규칙", () => {
   test("주 경로 미포함 노드는 '기타 경로'(offMainPath)로 뒤에 나열 — 누락 은폐 금지", () => {
     const steps = renderIrSentences(

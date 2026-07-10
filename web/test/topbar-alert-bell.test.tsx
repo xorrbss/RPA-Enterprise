@@ -127,6 +127,29 @@ describe("topbar alert bell", () => {
     expect(screen.queryByRole("menu", { name: "알림 미리보기" })).toBeNull();
   });
 
+  test("항목 부제(소스 라벨)는 제목에 이미 포함되면 생략한다 — 중복 표기 제거(N4)", async () => {
+    renderApp(
+      fakeClient({
+        getProductionReadiness: async () => READY_READINESS,
+        listOpsAlerts: async () => ({
+          items: [
+            // 제목 "재처리 대기 DLQ"가 소스 라벨 "재처리 대기"를 이미 포함 → 부제 생략.
+            alert({ alert_id: "d1", source: "dlq", subject_type: "dlq", title: "재처리 대기 DLQ" }),
+            // 제목 "장시간 실행 위험"은 라벨 "실행 SLA"를 담지 않음 → 부제 유지.
+            alert({ alert_id: "w1" }),
+          ],
+          next_cursor: null,
+        }),
+      }),
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /알림 — 운영 알림 2건/ }));
+    const duplicated = screen.getByRole("menuitem", { name: /재처리 대기 DLQ/ });
+    expect(duplicated.querySelector("small")).toBeNull();
+    const kept = screen.getByRole("menuitem", { name: /장시간 실행 위험/ });
+    expect(kept.querySelector("small")).toHaveTextContent("실행 SLA");
+  });
+
   test("a group row without a route falls back to the alert center section", async () => {
     renderApp(
       fakeClient({

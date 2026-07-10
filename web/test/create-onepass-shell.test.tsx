@@ -178,15 +178,22 @@ describe("create one-pass shell (F3)", () => {
       created_by: "operator",
       validation_report: {},
     };
+    // N1: 저장 완료 결과의 카드는 저장본 IR(getScenario) 렌더 — revise 성공 시 저장본이 v2 로 바뀌는
+    // 흐름을 상태 있는 fake 로 재현한다(응답 draft_ir 은 diff 계산에만 쓰인다).
+    let savedIr: unknown = baseIr;
     const qc = renderApp(
       fakeClient({
         generateScenario: async () => ({ ...generation, draft_ir: baseIr }),
-        reviseScenarioGeneration: async () => ({
-          ...generation,
-          generation_id: "00000000-0000-0000-0000-0000000000a2",
-          scenario_version_id: "00000000-0000-0000-0000-0000000000c3",
-          draft_ir: revisedIr,
-        }),
+        getScenario: async (id) => ({ scenario_id: id, name: "s", version: 1, promotion_status: "draft", ir: savedIr }),
+        reviseScenarioGeneration: async () => {
+          savedIr = revisedIr;
+          return {
+            ...generation,
+            generation_id: "00000000-0000-0000-0000-0000000000a2",
+            scenario_version_id: "00000000-0000-0000-0000-0000000000c3",
+            draft_ir: revisedIr,
+          };
+        },
       }),
     );
 

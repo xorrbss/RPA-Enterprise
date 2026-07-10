@@ -1,10 +1,12 @@
 import { useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { FileVideo, Image, Play } from "lucide-react";
 import { StepCards } from "../easy-create/StepCards";
 import { ReviseControl } from "../easy-create/ReviseControl";
 import { diffDraftIr, type StepDiff } from "../easy-create/step-diff";
 
 import { navigate } from "../../router";
+import { useApiClient } from "../../api/context";
 import type { ScenarioGenerationResult } from "../../api/types";
 import { GenerationArtifactsPanel } from "../GenerationArtifactsPanel";
 import { EvidenceStorageChip, ReadinessBadge } from "./shared";
@@ -52,9 +54,21 @@ export function GenerationResult({
   // undefined 면 기존 워크벤치 딥링크 버튼 유지(비-원패스 소비처 보존), null 은 CTA 미노출.
   testAction?: ReactNode;
 }): JSX.Element {
+  const api = useApiClient();
   const canRunWithCorrections = canRunGenerationWithCorrections(result);
   const correctionReady = correctionGuide === null || correctionGuideReady(correctionGuide);
+  // N1: 저장 완료(scenario_id 있음) 결과의 단계 카드는 저장본 IR 로 렌더한다 — 응답 draft_ir 은 서버가
+  // instruction 을 redaction 해 "[REDACTED:…]" 토큰이 그대로 보인다(저장본 GET 은 비마스킹, 실측).
+  // 쿼리키는 기존 scenario-detail 관례 공유(ReviseControl·스튜디오 설계 탭과 캐시 공유 — 추가 요청 없음).
+  // draft_only·저장 실패(scenario_id null)는 현행 draft_ir 렌더 유지(step-sentences 토큰 번역이 안전망).
+  const savedDetail = useQuery({
+    queryKey: ["scenario-detail", result.scenario_id],
+    queryFn: () => api.getScenario(result.scenario_id as string),
+    enabled: result.scenario_id !== null,
+  });
+  const savedPreview = result.scenario_id !== null;
   // F2: 말로 고치기 diff — 마지막 revise 가 만든 generation 에만 표시(이력 선택 등 다른 result 로 바뀌면 소멸).
+  // diff 는 응답 draft_ir 끼리 비교한다 — 양쪽 다 같은 redaction 을 통과해 마스킹 차이로 인한 가짜 변경이 없다(N1 점검).
   const [reviseDiff, setReviseDiff] = useState<{ readonly generationId: string; readonly diff: StepDiff } | null>(null);
   const activeDiff = reviseDiff !== null && reviseDiff.generationId === result.generation_id ? reviseDiff.diff : null;
   return (
@@ -78,13 +92,21 @@ export function GenerationResult({
       {result.draft_ir !== null && result.draft_ir !== undefined && (
         <section className="generation-draft-preview" aria-label="초안 미리보기">
           <strong>초안 미리보기</strong>
-          <StepCards
-            ir={result.draft_ir}
-            changeMarks={activeDiff?.marks}
-            removedCount={activeDiff?.removedCount}
-            fullReplacement={activeDiff?.fullReplacement}
-            emptyMessage="초안 단계를 표시할 수 없습니다. 아래 원문에서 확인하세요."
-          />
+          {savedPreview && savedDetail.data === undefined ? (
+            savedDetail.isError ? (
+              <p className="subtle" role="note">저장된 자동화 단계를 불러오지 못했습니다 — 새로고침 후 다시 확인해 주세요.</p>
+            ) : (
+              <p className="subtle">저장된 자동화 단계를 불러오는 중입니다.</p>
+            )
+          ) : (
+            <StepCards
+              ir={savedPreview ? savedDetail.data?.ir : result.draft_ir}
+              changeMarks={activeDiff?.marks}
+              removedCount={activeDiff?.removedCount}
+              fullReplacement={activeDiff?.fullReplacement}
+              emptyMessage="초안 단계를 표시할 수 없습니다. 아래 원문에서 확인하세요."
+            />
+          )}
         </section>
       )}
       {/* F2: 말로 고치기 — 성공 시 result 교체(onRevised) + 위 카드에 변경 표시를 겹친다. */}
