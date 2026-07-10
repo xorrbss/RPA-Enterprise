@@ -12,10 +12,8 @@ import type { PoolClient } from "pg";
 
 import { ERROR_CATALOG } from "../../../ts/error-catalog";
 import type {
-  AuthenticatedPrincipal,
   CanonicalRequestHash,
   IdempotencyKey,
-  SignedCommandRegistryPurpose,
 } from "../../../ts/security-middleware-contract";
 import { withTenantTx } from "../db/pool";
 import { compileScenario, type CompileOutcome } from "./compile-pipeline";
@@ -23,7 +21,8 @@ import { ApiResponseError } from "../runtime/errors";
 import { canonicalRequestHash, completeIdempotencyInTx, idempotencyRecordRowId } from "./idempotency";
 import { apiErrorBody, isRecord, type CommandResponse } from "./command";
 import { extractFirstHttpUrl, hostOfHttpUrl, isHostAllowed, isHttpUrl } from "./scenario-generation-url";
-import { parseGenerationRequest, parseGenerationRunRequest, parseGenerationStatusFilter, parseListCursor, parseListLimit, parseRunIdFilter } from "./scenario-generation-parse";
+import { parseGenerationRequest, parseGenerationRunRequest, parseGenerationStatusFilter, parseListCursor, parseListLimit, parseRunIdFilter, parseScenarioIdFilter } from "./scenario-generation-parse";
+import { signedCommandRefsFor } from "./scenarios-support";
 import { UUID_RE } from "./server-shared";
 import { DEFAULT_PAGINATION_MAX_PAGES, MAX_AUTO_PAGINATION_PAGES, recordingPolicy, type RecordingPolicy } from "./scenario-generation-policy";
 import { finalizeDraftIrEvidence, looksLikeSideEffectPrompt, paginationPlan, scenarioPlannerFor } from "./scenario-generation-planner";
@@ -45,15 +44,15 @@ import type {
 } from "./scenario-generation-types";
 import type { RunEnqueuer } from "../runtime/run-queue";
 
-const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+export const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PLANNER_REPAIR_ATTEMPTS = 1;
 
-interface PlannedCompileResult {
+export interface PlannedCompileResult {
   plan: GenerationPlan;
   compiled: Extract<ReturnType<typeof compileScenario>, { ok: true }>;
 }
 
-class ScenarioGenerationPlanningError extends Error {
+export class ScenarioGenerationPlanningError extends Error {
   constructor(
     readonly apiError: ApiResponseError,
     readonly failedPlan?: GenerationPlan,
@@ -111,7 +110,7 @@ export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: Api
     },
   );
 
-  app.get<{ Querystring: { limit?: string; cursor?: string; status?: string; run_id?: string } }>(
+  app.get<{ Querystring: { limit?: string; cursor?: string; status?: string; run_id?: string; scenario_id?: string } }>(
     "/v1/scenario-generations",
     { config: { rbacAction: "scenario.read" } },
     async (request, reply) => {
@@ -120,6 +119,7 @@ export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: Api
       const cursor = parseListCursor(request.query.cursor);
       const status = parseGenerationStatusFilter(request.query.status);
       const runId = parseRunIdFilter(request.query.run_id);
+      const scenarioId = parseScenarioIdFilter(request.query.scenario_id);
       const rows = await withTenantTx(deps.pool, principal.tenantId, async (client) => {
         const result = await client.query<ScenarioGenerationRow>(
           `SELECT id, mode, status, prompt_hash, prompt_redacted_ref, planner, model, params_context, draft_ir, validation_report,
@@ -129,6 +129,7 @@ export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: Api
             WHERE tenant_id=$1::uuid
               AND ($4::text IS NULL OR status=$4)
               AND ($6::uuid IS NULL OR run_id=$6::uuid)
+              AND ($7::uuid IS NULL OR scenario_id=$7::uuid)
               AND (
                 $2::timestamptz IS NULL
                 OR created_at < $2::timestamptz
@@ -136,7 +137,7 @@ export function registerScenarioGenerationRoutes(app: FastifyInstance, deps: Api
               )
             ORDER BY created_at DESC, id DESC
             LIMIT $5::int`,
-          [principal.tenantId, cursor?.createdAt ?? null, cursor?.id ?? null, status ?? null, limit + 1, runId ?? null],
+          [principal.tenantId, cursor?.createdAt ?? null, cursor?.id ?? null, status ?? null, limit + 1, runId ?? null, scenarioId ?? null],
         );
         return result.rows;
       });
@@ -333,7 +334,7 @@ async function runScenarioGeneration(
   }
 }
 
-async function planAndCompileScenario(
+export async function planAndCompileScenario(
   deps: ApiServerDeps,
   request: GenerationRequest,
   signedCommandRefs: readonly string[] | undefined,
@@ -463,38 +464,4 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-async function signedCommandRefsFor(
-  deps: ApiServerDeps,
-  principal: AuthenticatedPrincipal,
-  purpose: SignedCommandRegistryPurpose,
-): Promise<readonly string[] | undefined> {
-  const result = await deps.signedCommandRegistry.listAllowedCommandRefs({ principal, purpose });
-  if (result.kind === "unavailable") {
-    return undefined;
-  }
-  const snapshot = result.snapshot;
-  if (typeof snapshot.sourceRef !== "string" || snapshot.sourceRef.length === 0) {
-    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "signed_command_registry_source_missing" });
-  }
-  if (!Array.isArray(snapshot.commands)) {
-    throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "signed_command_registry_commands_invalid" });
-  }
-  const cmdRefs: string[] = [];
-  for (const command of snapshot.commands) {
-    if (
-      command === undefined ||
-      typeof command.cmdRef !== "string" ||
-      command.cmdRef.length === 0 ||
-      typeof command.kid !== "string" ||
-      command.kid.length === 0 ||
-      typeof command.signature !== "string" ||
-      command.signature.length === 0 ||
-      typeof command.verificationKeyRef !== "string" ||
-      command.verificationKeyRef.length === 0
-    ) {
-      throw new ApiResponseError("IR_SCHEMA_INVALID", { reason: "signed_command_registry_ref_invalid" });
-    }
-    cmdRefs.push(command.cmdRef);
-  }
-  return cmdRefs;
-}
+// signedCommandRefsFor 는 scenarios-support 공용 export 를 재사용한다(중복 사본 제거 — F1).

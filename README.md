@@ -1043,3 +1043,29 @@
 | 서버 | `app/src/runtime/bot-pool-read.ts`·`ops-alerts/compute-governance.ts`·`ops-alerts/compute.ts` | scim/readiness/bot_pool 카피 한국어화(worker→실행기, lease→점유, heartbeat→상태 신호, circuit→회로 차단 병기) + audit_verifier 권장 조치 영문 잔재·trigger_fire 원시 오류코드 병기 교정 |
 | 검증 | `app/test/api-ops-alerts.int.ts` | D6 카피 회귀 가드 — 12소스 전부를 실제 compute 경로로 생성해 title/detail/recommended_action의 대문자 스네이크 enum·비병기 영단어 연속 부재를 단언(서버 카피는 web copy-gate 범위 밖이라 이 가드가 게이트) |
 | 콘솔 | `web/src/views/dashboard/OpsSignalPanel.tsx`·`components/layout/TopbarAlertBell.tsx`·`usePopoverDismiss.ts` | 대시보드 권장 조치 현지화(알림 센터와 동일 헬퍼) + 상단바 벨 드롭다운(계약 무변경 — 기존 목록 응답 재사용) |
+
+## v2.37 패치 로그 (말로 고치기 계약 — prompt_redacted 영속 + revise 엔드포인트)
+
+> **UI/UX 잔여 감점 해소 F1**(잔여 결함 정리 설계 2026-07-10 §1; 원패스 상세 설계 §13이 P1로 예약한
+> revision 계약의 이행). **"prompt 원문 저장 금지" 결정은 유지한다** — 저장 대상은 게이트웨이 결정형
+> redaction(`DeterministicGatewayRedactionBoundary`가 적용하는 `redactText` 마스킹) **통과본**이다.
+> `scenario_generations.prompt_redacted`(NULL=구세대·미보존)를 신설하고 생성 POST가 플래너 종류와 무관하게
+> 항상 채운다(비밀이 섞였던 프롬프트는 마스킹 토큰이 남는다 — 정직한 동작, 비밀 재주입 금지). 이를 입력으로
+> `POST /v1/scenario-generations/{generation_id}/revise`가 서버측 합성(`원 요청\n\n[수정 요청] instruction`)으로
+> 생성 파이프라인(AJV → IREL → V1..V13)을 재실행하고, **기존 시나리오의 새 draft 버전(version=head+1)으로
+> 원자 저장**한다(신규 시나리오 남발 방지, `base_version`≠head는 `SCENARIO_VERSION_CONFLICT` — PUT If-Match
+> 규율·IFM-2 동시성 환원과 동형, `promotion_status='draft'`라 승격 거버넌스 유지). evidence/planner/model은
+> 원 generation 값 그대로 승계(§8-⑦), start_url은 `params_context`, target은 head 버전 IR에서 회수(§8-① —
+> 원장 컬럼 추가 확장 불필요 판정). 구세대 원장은 `prompt_not_retained`로 정직하게 거부(조용한 비활성 금지).
+> 인라인 text 채택 사유: 프롬프트 상한 20,000자라 artifact lifecycle 결합은 과도(YAGNI) — `prompt_redacted_ref`는
+> 대형 첨부 확장용으로 예약 유지. `prompt_redacted`는 API 응답에 노출하지 않는다.
+
+| 항목 | 위치 | 조치 |
+|---|---|---|
+| DDL | `db/migration_core_entities.sql` `scenario_generations` | `prompt_redacted text` 컬럼 추가(NULL=구세대) + 헤더 주석을 "원문은 저장하지 않는다(hash + redaction 통과본만)"로 갱신 — v2.18 `runs.bookmark` 선례와 동일하게 CREATE TABLE 직접 수정 |
+| 계약 | `api-surface.md` §2.5 | revise 행 신설(오류 reason 어휘 포함) + 목록 행 `scenario_id` 필터 명기 + prompt 저장 정책 불릿 갱신 |
+| 계약 | `codegen/openapi.yaml` | `/scenario-generations/{generation_id}/revise` path/operation(`reviseScenarioGeneration`) + `ScenarioGenerationReviseRequest` 스키마 + 목록 `scenario_id` 쿼리 파라미터 |
+| 계약 | `ts/control-plane-contract.ts`·`codegen/contract-consistency.ts` | `ControlPlanePath`/`OperationId` 유니온에 revise 추가 + `assertControlPlanePath` 대조 행 추가 |
+| 서버 | `app/src/api/scenario-generation-store.ts` | `persistGeneration`에 revise 분기(기존 scenario에 version=head+1 draft INSERT — 단일 쓰기 경로 유지, `cloneIrWithVersion`+재컴파일은 rollback 선례 동형) + `prompt_redacted` 영속(`redactGenerationPrompt`) |
+| 서버 | `app/src/api/scenario-generation-revise.ts`(신설)·`scenario-generations.ts`·`scenario-generation-parse.ts`·`scenario-generation-redaction.ts`·`server.ts` | revise 라우트(RBAC `scenario.create`, Idempotency-Key 필수, 전용 에러 enum 없이 범용 코드+reason — scengen 관례) + 목록 `scenario_id` 필터 + 중복 `signedCommandRefsFor` 사본 제거(scenarios-support 공용 재사용) |
+| 검증 | `app/test/api-scenario-generations.int.ts`·`scenario-generation-revise.unit.ts`(신설) | revise 성공(새 draft 버전)/409·412 충돌/`prompt_not_retained`/instruction 경계/멱등키/`prompt_redacted` 마스킹 negative control. 기존 "원장 행 전체에 prompt 평문 부재" 단언은 신계약(redaction 통과본 저장)에 맞게 "draft_ir 평문 부재 + prompt_redacted 보존·비밀 마스킹"으로 갱신 |

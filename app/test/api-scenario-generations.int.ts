@@ -478,9 +478,10 @@ async function main(): Promise<void> {
       );
       check("read generation redacts prompt instructions", !gotBlocked.body.includes("공지사항에서 최근 게시글 제목"), gotBlocked.body);
       await withTenantTx(pool, TENANT, async (client) => {
-        const row = await client.query<{ generation_row: string; scenario_version_ir: string }>(
+        const row = await client.query<{ draft_ir_text: string; prompt_redacted: string | null; scenario_version_ir: string }>(
           `SELECT
-              g::text AS generation_row,
+              g.draft_ir::text AS draft_ir_text,
+              g.prompt_redacted,
               sv.ir::text AS scenario_version_ir
              FROM scenario_generations g
              JOIN scenario_versions sv ON sv.tenant_id = g.tenant_id AND sv.id = g.scenario_version_id
@@ -489,8 +490,14 @@ async function main(): Promise<void> {
         );
         check(
           "scenario generation ledger does not persist prompt plaintext in draft_ir",
-          row.rows[0]?.generation_row.includes(blockedPrompt) === false,
-          row.rows[0]?.generation_row,
+          row.rows[0]?.draft_ir_text.includes(blockedPrompt) === false,
+          row.rows[0]?.draft_ir_text,
+        );
+        // F1(v2.37): 원장은 redaction 통과본을 보존한다(revise 입력). 비밀 없는 프롬프트는 무손실 통과.
+        check(
+          "generation ledger retains redaction-passed prompt for revise",
+          row.rows[0]?.prompt_redacted === blockedPrompt,
+          String(row.rows[0]?.prompt_redacted),
         );
         check(
           "scenario version keeps executable prompt-derived IR outside generation ledger",
@@ -1371,6 +1378,210 @@ async function main(): Promise<void> {
       });
       check("viewer can page scenario generations with cursor -> 200", listedNext.statusCode === 200, listedNext.body);
       check("second page contains remaining generation", Array.isArray(listedNext.json().items) && listedNext.json().items.length >= 1, listedNext.body);
+
+      // ── F1(v2.37): 말로 고치기 revise — prompt_redacted 영속 + 기존 시나리오의 새 draft 버전 ──
+      const revisableSecretPrompt = "https://example.com/notices 에서 최근 공지 제목을 수집해줘. 계정 password: hunter2 는 참고용.";
+      const revisableCreate = await app.inject({
+        method: "POST",
+        url: "/v1/scenario-generations",
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-revise-base-1" },
+        payload: {
+          prompt: revisableSecretPrompt,
+          name: "generated-revisable",
+          mode: "save",
+          start_url: "https://example.com/notices",
+          target: { site_profile_id: SITE, browser_identity_id: IDENTITY, network_policy_id: NETWORK },
+          evidence: { screenshot: "failure", video: "never" },
+        },
+      });
+      check("revisable generation saved -> 201", revisableCreate.statusCode === 201, revisableCreate.body);
+      const revisableBody = revisableCreate.json();
+      check("revisable generation status saved", revisableBody.status === "saved" && typeof revisableBody.scenario_id === "string", revisableCreate.body);
+      check("generation response does not expose prompt_redacted", !("prompt_redacted" in revisableBody), revisableCreate.body);
+      await withTenantTx(pool, TENANT, async (client) => {
+        const row = await client.query<{ prompt_redacted: string | null }>(
+          `SELECT prompt_redacted FROM scenario_generations WHERE id=$1::uuid`,
+          [revisableBody.generation_id],
+        );
+        const stored = row.rows[0]?.prompt_redacted;
+        check(
+          "prompt_redacted masks secrets and never stores them raw (negative control)",
+          typeof stored === "string" && stored.includes("[REDACTED]") && !stored.includes("hunter2") && stored.includes("최근 공지 제목을 수집해줘"),
+          String(stored),
+        );
+      });
+
+      const revise1 = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-generations/${revisableBody.generation_id}/revise`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-revise-1" },
+        payload: { instruction: "링크 주소도 함께 수집해줘", base_version: 1 },
+      });
+      check("revise creates new draft version -> 200", revise1.statusCode === 200, revise1.body);
+      const revise1Body = revise1.json();
+      check("revise returns a new generation id", typeof revise1Body.generation_id === "string" && revise1Body.generation_id !== revisableBody.generation_id, revise1.body);
+      check("revise keeps original scenario id", revise1Body.scenario_id === revisableBody.scenario_id, revise1.body);
+      check("revise points at a new scenario version", typeof revise1Body.scenario_version_id === "string" && revise1Body.scenario_version_id !== revisableBody.scenario_version_id, revise1.body);
+      check("revise saves without run (mode=save, status=saved)", revise1Body.mode === "save" && revise1Body.status === "saved" && revise1Body.run_id === null, revise1.body);
+      check("revise inherits planner/model from source generation", revise1Body.planner === "deterministic_mvp" && revise1Body.model === null, revise1.body);
+      check("revise inherits evidence policy from source generation", isRecord(revise1Body.evidence_policy) && revise1Body.evidence_policy.screenshot === "failure" && revise1Body.evidence_policy.video === "never", revise1.body);
+      check("revise prompt hash differs (synthesized prompt)", typeof revise1Body.prompt_hash === "string" && revise1Body.prompt_hash !== revisableBody.prompt_hash, revise1.body);
+      check("revise params_context inherits start_url", isRecord(revise1Body.params_context) && revise1Body.params_context.start_url === "https://example.com/notices", revise1.body);
+      check(
+        "revise response draft_ir carries restamped meta (name fixed, version=head+1)",
+        isRecord(revise1Body.draft_ir) && isRecord(revise1Body.draft_ir.meta) && revise1Body.draft_ir.meta.name === "generated-revisable" && revise1Body.draft_ir.meta.version === 2,
+        revise1.body,
+      );
+      await withTenantTx(pool, TENANT, async (client) => {
+        const row = await client.query<{ version: number; promotion_status: string; ir_text: string; version_count: string; prompt_redacted: string | null }>(
+          `SELECT sv.version, sv.promotion_status, sv.ir::text AS ir_text,
+                  (SELECT count(*)::text FROM scenario_versions WHERE tenant_id=sv.tenant_id AND scenario_id=sv.scenario_id) AS version_count,
+                  (SELECT prompt_redacted FROM scenario_generations WHERE id=$2::uuid) AS prompt_redacted
+             FROM scenario_versions sv
+            WHERE sv.id=$1::uuid`,
+          [revise1Body.scenario_version_id, revise1Body.generation_id],
+        );
+        const sv = row.rows[0];
+        check(
+          "revise persists version=head+1 as draft (promotion governance intact)",
+          sv?.version === 2 && sv?.promotion_status === "draft" && sv?.version_count === "2",
+          JSON.stringify(sv),
+        );
+        check(
+          "revised scenario version IR embeds synthesized prompt with secrets still masked",
+          sv?.ir_text.includes("[수정 요청] 링크 주소도 함께 수집해줘") === true && sv?.ir_text.includes("hunter2") === false && sv?.ir_text.includes("[REDACTED]") === true,
+          sv?.ir_text,
+        );
+        check(
+          "revise generation retains synthesized redaction-passed prompt (next revise input)",
+          typeof sv?.prompt_redacted === "string" && sv.prompt_redacted.includes("[수정 요청] 링크 주소도 함께 수집해줘") && !sv.prompt_redacted.includes("hunter2"),
+          String(sv?.prompt_redacted),
+        );
+      });
+
+      const revise1Replay = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-generations/${revisableBody.generation_id}/revise`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-revise-1" },
+        payload: { instruction: "링크 주소도 함께 수집해줘", base_version: 1 },
+      });
+      check(
+        "revise idempotency replay returns the same generation",
+        revise1Replay.statusCode === 200 && revise1Replay.json().generation_id === revise1Body.generation_id,
+        revise1Replay.body,
+      );
+
+      const reviseStale = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-generations/${revisableBody.generation_id}/revise`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-revise-stale-1" },
+        payload: { instruction: "다시 고쳐줘", base_version: 1 },
+      });
+      check("stale base_version closes as SCENARIO_VERSION_CONFLICT -> 412", reviseStale.statusCode === 412, reviseStale.body);
+      check("stale base_version reason surfaces current head", reviseStale.body.includes("base_version_mismatch") && reviseStale.body.includes("\"currentVersion\":2"), reviseStale.body);
+
+      const revise2 = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-generations/${revise1Body.generation_id}/revise`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-revise-2" },
+        payload: { instruction: "제목은 최신순으로 정렬해줘", base_version: 2 },
+      });
+      check("second revise on the revised generation -> 200 (version 3)", revise2.statusCode === 200, revise2.body);
+      const revise2Body = revise2.json();
+      await withTenantTx(pool, TENANT, async (client) => {
+        const row = await client.query<{ prompt_redacted: string | null }>(
+          `SELECT prompt_redacted FROM scenario_generations WHERE id=$1::uuid`,
+          [revise2Body.generation_id],
+        );
+        const stored = row.rows[0]?.prompt_redacted;
+        check(
+          "revise history accumulates in the synthesized prompt (intended behavior)",
+          typeof stored === "string" && stored.includes("[수정 요청] 링크 주소도 함께 수집해줘") && stored.includes("[수정 요청] 제목은 최신순으로 정렬해줘"),
+          String(stored),
+        );
+      });
+
+      const listByScenario = await app.inject({
+        method: "GET",
+        url: `/v1/scenario-generations?scenario_id=${revisableBody.scenario_id}`,
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      check("generation list supports scenario_id reverse lookup", listByScenario.statusCode === 200, listByScenario.body);
+      const listByScenarioBody = listByScenario.json();
+      check(
+        "scenario_id filter returns the full revise lineage",
+        Array.isArray(listByScenarioBody.items) &&
+          listByScenarioBody.items.length === 3 &&
+          listByScenarioBody.items.every((item: unknown) => isRecord(item) && item.scenario_id === revisableBody.scenario_id),
+        listByScenario.body,
+      );
+      const invalidScenarioFilter = await app.inject({
+        method: "GET",
+        url: "/v1/scenario-generations?scenario_id=not-a-uuid",
+        headers: { authorization: `Bearer ${viewer}` },
+      });
+      check("generation list rejects invalid scenario_id filter -> 422", invalidScenarioFilter.statusCode === 422, invalidScenarioFilter.body);
+      check("generation list invalid scenario_id reason", invalidScenarioFilter.body.includes("invalid_scenario_id"), invalidScenarioFilter.body);
+
+      const viewerRevise = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-generations/${revise2Body.generation_id}/revise`,
+        headers: { authorization: `Bearer ${viewer}`, "idempotency-key": "gen-revise-viewer-1" },
+        payload: { instruction: "고쳐줘", base_version: 3 },
+      });
+      check("viewer cannot revise (scenario.create) -> 403", viewerRevise.statusCode === 403, viewerRevise.body);
+
+      const reviseNoKey = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-generations/${revise2Body.generation_id}/revise`,
+        headers: { authorization: `Bearer ${operator}` },
+        payload: { instruction: "고쳐줘", base_version: 3 },
+      });
+      check("revise without Idempotency-Key -> 422", reviseNoKey.statusCode === 422 && reviseNoKey.body.includes("missing_idempotency_key"), reviseNoKey.body);
+
+      const reviseEmptyInstruction = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-generations/${revise2Body.generation_id}/revise`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-revise-empty-1" },
+        payload: { instruction: "", base_version: 3 },
+      });
+      check("empty instruction -> 422 instruction_required", reviseEmptyInstruction.statusCode === 422 && reviseEmptyInstruction.body.includes("instruction_required"), reviseEmptyInstruction.body);
+
+      // prompt_redacted 영속(v2.37) 이전 구세대 원장 시뮬레이션 — 정직한 거부(prompt_not_retained).
+      await withTenantTx(pool, TENANT, async (client) => {
+        await client.query(`UPDATE scenario_generations SET prompt_redacted=NULL WHERE id=$1::uuid`, [revisableBody.generation_id]);
+      });
+      const reviseLegacy = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-generations/${revisableBody.generation_id}/revise`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-revise-legacy-1" },
+        payload: { instruction: "고쳐줘", base_version: 3 },
+      });
+      check("legacy generation without prompt_redacted -> 422 prompt_not_retained", reviseLegacy.statusCode === 422 && reviseLegacy.body.includes("prompt_not_retained"), reviseLegacy.body);
+
+      const draftOnlyForRevise = await app.inject({
+        method: "POST",
+        url: "/v1/scenario-generations",
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-revise-draft-1" },
+        payload: { prompt: "초안만 만들어줘", name: "generated-revise-draft", mode: "draft_only" },
+      });
+      check("draft_only generation for revise guard -> 200", draftOnlyForRevise.statusCode === 200, draftOnlyForRevise.body);
+      const reviseDraftOnly = await app.inject({
+        method: "POST",
+        url: `/v1/scenario-generations/${draftOnlyForRevise.json().generation_id}/revise`,
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-revise-draft-only-1" },
+        payload: { instruction: "저장해줘", base_version: 1 },
+      });
+      check("draft_only generation -> 422 scenario_not_persisted", reviseDraftOnly.statusCode === 422 && reviseDraftOnly.body.includes("scenario_not_persisted"), reviseDraftOnly.body);
+
+      const reviseUnknown = await app.inject({
+        method: "POST",
+        url: "/v1/scenario-generations/40000000-0000-4000-8000-0000000000ff/revise",
+        headers: { authorization: `Bearer ${operator}`, "idempotency-key": "gen-revise-unknown-1" },
+        payload: { instruction: "고쳐줘", base_version: 1 },
+      });
+      check("unknown generation revise -> 404", reviseUnknown.statusCode === 404, reviseUnknown.body);
+      check("revise never enqueues runs", enqueuedRuns.length === 4, JSON.stringify(enqueuedRuns));
 
       const unconfiguredLlmPlanner = await app.inject({
         method: "POST",

@@ -3289,6 +3289,12 @@ paths:
           schema:
             type: string
             format: uuid
+        - in: query
+          name: scenario_id
+          description: 저장된 자동화(시나리오)의 generation 이력 역조회 — 말로 고치기(revise) 진입점 복원용.
+          schema:
+            type: string
+            format: uuid
       responses:
         '200':
           description: tenant-scoped scenario generation 목록. prompt 원문은 노출하지 않는다.
@@ -3405,6 +3411,49 @@ paths:
           $ref: '#/components/responses/Error'        # SCENARIO_VERSION_CONFLICT (idempotency hash mismatch / already_run)
         '422':
           $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID
+        default:
+          $ref: '#/components/responses/Error'
+
+  /scenario-generations/{generation_id}/revise:
+    parameters:
+      - $ref: '#/components/parameters/GenerationId'
+    post:
+      tags: [ScenarioGenerations]
+      operationId: reviseScenarioGeneration
+      summary: 말로 고치기 — 저장된 generation 을 자연어 지시로 재수정
+      description: >
+        서버가 원장에서 prompt_redacted(결정형 redaction 통과본)·params_context·evidence_policy·planner/model 을
+        로드해 합성 프롬프트(원 요청 + [수정 요청] instruction)로 생성 파이프라인(AJV → IREL → V1..V13)을 재실행하고,
+        결과를 같은 시나리오의 새 draft 버전(version=head+1)으로 원자 저장한다. base_version 이 현재 head 와 다르면
+        SCENARIO_VERSION_CONFLICT 로 닫는다(PUT If-Match 규율과 동형). prompt_redacted 가 없는 구세대 원장은
+        IR_SCHEMA_INVALID(reason=prompt_not_retained), 저장되지 않은 generation 은 reason=scenario_not_persisted 로
+        거부한다. evidence/planner/model 은 원 generation 값을 그대로 승계한다. 새 generation 행의 prompt_hash 와
+        prompt_redacted 는 합성 프롬프트 기준이다(다음 재수정의 입력 — 수정 이력 누적은 의도된 동작).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenarioGenerationReviseRequest'
+      responses:
+        '200':
+          description: 새 draft 버전까지 원자 저장된 revise generation(scenario_id=원본, scenario_version_id=새 draft).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioGeneration'
+        '403':
+          $ref: '#/components/responses/Error'        # AUTHZ_FORBIDDEN
+        '404':
+          $ref: '#/components/responses/Error'        # RESOURCE_NOT_FOUND
+        '409':
+          $ref: '#/components/responses/Error'        # WORKITEM_CHECKOUT_CONFLICT (idempotency in-flight)
+        '412':
+          $ref: '#/components/responses/Error'        # SCENARIO_VERSION_CONFLICT (base_version mismatch / idempotency hash mismatch / 동시 version 선점)
+        '422':
+          $ref: '#/components/responses/Error'        # IR_SCHEMA_INVALID (instruction_required/instruction_too_long/prompt_too_long/prompt_not_retained/scenario_not_persisted)
         default:
           $ref: '#/components/responses/Error'
 
@@ -11574,6 +11623,21 @@ components:
           type: [string, "null"]
         evidence:
           $ref: '#/components/schemas/ScenarioGenerationEvidence'
+
+    ScenarioGenerationReviseRequest:
+      type: object
+      required: [instruction, base_version]
+      additionalProperties: false
+      properties:
+        instruction:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: 자연어 수정 지시. 서버가 저장된 prompt_redacted 와 합성해 재생성한다(합성 총길이 20,000자 상한).
+        base_version:
+          type: integer
+          minimum: 1
+          description: 수정 기준이 되는 현재 head 버전. head 와 다르면 SCENARIO_VERSION_CONFLICT(412).
 
     ScenarioGenerationTarget:
       type: object
