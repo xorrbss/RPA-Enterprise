@@ -80,6 +80,30 @@ SecretRef **경로/식별자** 목록(값 없음).
 
 ---
 
+## 4.1 세션 캡처(P3) 프로비저닝 — api AppRole + browser_session KEK (선택, 미설정=안전한 성능저하)
+
+운영자-로컬 세션 캡처(`POST /v1/sites/{id}/session/capture/complete`)는 캡처된 로그인 쿠키를 **봉투암호화**해
+영속한다(PR #158). 이 경로는 **api AppRole + 세션 KEK 가 프로비저닝됐을 때만 활성**이다 — 미설정이면 엔드포인트가
+등록되지 않는다(fail-closed = 안전한 성능저하, 평문 at-rest 금지). **open 의 하드 블로커가 아니다**(이게 없어도
+시스템은 동작; 단 prod 세션 재사용/하이웍스 자동 재로그인-스킵이 비활성).
+
+활성화하려면:
+
+1. **api AppRole** 생성 — `api` 런타임 identity 의 최소권한 정책: `browser_session` + `resume_token_hmac` purpose 만
+   (D8-A12 매트릭스, RESOLVE_MATRIX 의 `api` 행). Environment secret 으로 `VAULT_API_ROLE_ID` / `VAULT_API_SECRET_ID`
+   주입(+ 공통 `VAULT_ADDR`/`VAULT_MOUNT`). **`VAULT_API_ROLE_ID` 존재가 세션 캡처 활성 게이트다.**
+2. **세션 KEK seed** — `secret/data/rpa/staging/api/browser_session/active` 에 JSON `{"kid":"<회전식별자>","key":"<base64 32바이트>"}`
+   를 넣는다. `key` 는 **AES-256 키(정확히 32바이트, base64)** — `openssl rand -base64 32` 로 생성. `kid` 는 회전 추적용
+   식별자(예: `2026-06`). ⚠ 평문 키는 패킷/로그/이 레포에 절대 적지 않는다(경로/kid 만 노출 안전).
+3. **회전**: 새 `{kid,key}` 로 active 를 교체하면 신규 캡처는 새 kid. 폐기 kid 로 암호화된 기존 세션은 복호화 불가 →
+   콜드 스타트(운영자 재캡처) = 안전한 성능저하. (다중-kid grace 자동로드는 후속 기능.)
+4. **워커 복호화(후속)**: 워커가 세션을 복원(재사용)하려면 동일 KEK 를 `runtime-worker`/`browser-worker` AppRole 이
+   `browser_session` purpose 로 resolve 할 수 있어야 한다(매트릭스 이미 허용). 워커 세션복원 prod 배선은 후속 작업.
+
+기록(패킷 §6): `api` AppRole 주입 여부(on/off) + KEK SecretRef **경로**(`.../api/browser_session/active`)·kid (값 없음).
+
+---
+
 ## 5. 릴리스 승인 + 롤백 + staging 배포
 
 1. **릴리스 승인**: GitHub Environment `staging` 의 required reviewer(오너)가 각 배포를 승인 — 이 승인
