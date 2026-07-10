@@ -126,6 +126,12 @@ impl-bundle §C access middleware는 `redaction_status` 게이트만 강제했�
 - artifact 조회 = `redaction_status ∈ {redacted, not_required}` **AND** 호출자 역할이 해당 tenant/run의 artifact 조회 권한 보유(Phase 2 RBAC 역할 레지스트리).
 - 권한 부족 → `SECRET_ACCESS_DENIED`(security). 두 게이트는 미들웨어 1지점에서 순서대로(redaction → RBAC) 검사.
 
+### 8.1 Artifact object at-rest 기밀성 (매체 계층)
+
+객체 at-rest 기밀성은 **배포 저장·매체 계층**(디스크 암호화·S3 버킷 SSE·백업 암호화)이 제공하며, 이 매체 암호화가 실제 적용돼 있음은 오너가 증빙으로 확인한다(deferred 결정 Q2-1 = 적용됨). 애플리케이션은 v1에서 **객체 레벨(봉투) 암호화를 추가하지 않는다**.
+- **누출면 한정**: artifact read API는 redacted 서빙이다(`app/src/api/reads-artifacts.ts` 부근 — RLS가 `redaction_status ∈ {redacted, not_required}`·미삭제·비격리 row만 노출, 나머지는 404). 따라서 앱-계층 누출면은 없고, 잔여 at-rest 노출면은 **매체/백업/포렌식**으로 한정된다 — 그 표면을 매체 계층 암호화가 담당한다.
+- **승격 경로(현재 미적용)**: 규제·고객 계약이 애플리케이션 레벨 기밀성(kid 회전·테넌트별 키 분리·`tenant_id|artifact_id` AAD 바인딩)을 요구하면, 세션 봉투암호화 선례(`app/src/runtime/browser-session-store.ts`의 `KmsEnvelopeSessionEncryptor` — AES-256-GCM `[version|wrappedDek|body]`, 현재 정의만 되고 배선되지 않음)를 ObjectStore 경계에 재사용해 승격한다. v1은 이 경로를 배선하지 않는다(계약이 요구하지 않는 신규 보안 강화 결정이므로 명시 승인·별도 계약 필요). 승격 시 integrity checker의 sha256 대조 기준(평문 vs 암호문)을 함께 재정의해야 한다. 근거·옵션은 `docs/deferred-design-decision-packets-2026-07-11.md` §2.
+
 ---
 
 ## 9. action.sensitive & recording 동작
