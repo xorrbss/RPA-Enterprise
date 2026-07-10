@@ -453,6 +453,13 @@ code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, mono
 .step-cards-advanced { justify-self: start; font-size: 12px; }
 .step-cards-raw { margin: 0; font-size: 11px; max-height: 320px; overflow: auto; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; }
 .generation-draft-preview { display: grid; gap: 8px; }
+/* F2: 말로 고치기 입력 + 변경 표시 요약. */
+.step-cards-diff-note { margin: 0; }
+.revise-control { display: grid; gap: 6px; }
+.revise-control-row { display: flex; gap: 8px; align-items: flex-start; }
+.revise-control-row textarea { flex: 1; resize: vertical; min-height: 36px; }
+.revise-control-row .btn { flex: none; }
+.revise-control-note { margin: 0; }
 /* E4: 인라인 테스트 진행(배너+카드 오버레이). */
 .inline-test-progress { display: grid; gap: 10px; }
 .inline-test-progress-failure { margin: 0; }

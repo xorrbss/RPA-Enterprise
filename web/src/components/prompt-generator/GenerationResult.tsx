@@ -1,5 +1,8 @@
+import { useState } from "react";
 import { FileVideo, Image, Play } from "lucide-react";
 import { StepCards } from "../easy-create/StepCards";
+import { ReviseControl } from "../easy-create/ReviseControl";
+import { diffDraftIr, type StepDiff } from "../easy-create/step-diff";
 
 import { navigate } from "../../router";
 import type { ScenarioGenerationResult } from "../../api/types";
@@ -26,6 +29,7 @@ export function GenerationResult({
   runPending,
   modelConfirmationRequired,
   onRunWithCorrections,
+  onRevised,
   onFocusStartUrl,
   onFocusTarget,
   onOpenSiteCreate,
@@ -37,6 +41,7 @@ export function GenerationResult({
   runPending: boolean;
   modelConfirmationRequired: boolean;
   onRunWithCorrections: (generation: ScenarioGenerationResult) => void;
+  onRevised: (next: ScenarioGenerationResult) => void;
   onFocusStartUrl: () => void;
   onFocusTarget: () => void;
   onOpenSiteCreate: () => void;
@@ -45,6 +50,9 @@ export function GenerationResult({
 }): JSX.Element {
   const canRunWithCorrections = canRunGenerationWithCorrections(result);
   const correctionReady = correctionGuide === null || correctionGuideReady(correctionGuide);
+  // F2: 말로 고치기 diff — 마지막 revise 가 만든 generation 에만 표시(이력 선택 등 다른 result 로 바뀌면 소멸).
+  const [reviseDiff, setReviseDiff] = useState<{ readonly generationId: string; readonly diff: StepDiff } | null>(null);
+  const activeDiff = reviseDiff !== null && reviseDiff.generationId === result.generation_id ? reviseDiff.diff : null;
   return (
     <div className="generation-result" role="status">
       <div className="generation-result-head">
@@ -66,9 +74,24 @@ export function GenerationResult({
       {result.draft_ir !== null && result.draft_ir !== undefined && (
         <section className="generation-draft-preview" aria-label="초안 미리보기">
           <strong>초안 미리보기</strong>
-          <StepCards ir={result.draft_ir} emptyMessage="초안 단계를 표시할 수 없습니다. 아래 원문에서 확인하세요." />
+          <StepCards
+            ir={result.draft_ir}
+            changeMarks={activeDiff?.marks}
+            removedCount={activeDiff?.removedCount}
+            fullReplacement={activeDiff?.fullReplacement}
+            emptyMessage="초안 단계를 표시할 수 없습니다. 아래 원문에서 확인하세요."
+          />
         </section>
       )}
+      {/* F2: 말로 고치기 — 성공 시 result 교체(onRevised) + 위 카드에 변경 표시를 겹친다. */}
+      <ReviseControl
+        generationId={result.generation_id}
+        scenarioId={result.scenario_id}
+        onRevised={(next) => {
+          setReviseDiff({ generationId: next.generation_id, diff: diffDraftIr(result.draft_ir, next.draft_ir) });
+          onRevised(next);
+        }}
+      />
       <details className="developer-details result-raw-details">
         <summary>고급/원문 식별값 보기</summary>
         <div className="result-grid">

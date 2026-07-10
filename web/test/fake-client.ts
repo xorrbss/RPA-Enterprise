@@ -2574,28 +2574,48 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       draft_ir: {},
       validation_report: {},
     }),
-    listScenarioGenerations: async () => ({
-      items: [
+    reviseScenarioGeneration: async (generationId, body) => ({
+      generation_id: `${generationId}-rev`,
+      mode: "save",
+      status: "saved",
+      prompt_hash: "hash-rev",
+      planner: "deterministic_mvp",
+      model: null,
+      scenario_id: "00000000-0000-0000-0000-0000000000c1",
+      scenario_version_id: "00000000-0000-0000-0000-0000000000c3",
+      run_id: null,
+      evidence_policy: { screenshot: "failure", video: "never" },
+      blockers: [],
+      created_at: "2026-06-15T00:01:00.000Z",
+      created_by: "operator",
+      draft_ir: { meta: { name: `revised:${body.instruction}` }, start: "open", nodes: {} },
+      validation_report: { errors: [], warnings: [] },
+    }),
+    listScenarioGenerations: async (p) => {
+      const items = [
         {
           generation_id: "00000000-0000-0000-0000-0000000000a1",
-          mode: "save_and_run",
-          status: "run_queued",
+          mode: "save_and_run" as const,
+          status: "run_queued" as const,
           prompt_hash: "hash",
-          planner: "deterministic_mvp",
+          planner: "deterministic_mvp" as const,
           model: "gpt-4o-mini",
           scenario_id: "00000000-0000-0000-0000-0000000000c1",
           scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
           run_id: "00000000-0000-0000-0000-000000000099",
-          evidence_policy: { screenshot: "each_step", video: "never" },
+          evidence_policy: { screenshot: "each_step" as const, video: "never" as const },
           blockers: [],
           created_at: "2026-06-15T00:00:00.000Z",
           created_by: "operator",
           draft_ir: {},
           validation_report: {},
         },
-      ],
-      next_cursor: null,
-    }),
+      ];
+      return {
+        items: items.filter((item) => p?.scenario_id === undefined || item.scenario_id === p.scenario_id),
+        next_cursor: null,
+      };
+    },
     getScenarioGeneration: async (generationId) => ({
       generation_id: generationId,
       mode: "save",

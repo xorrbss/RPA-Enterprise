@@ -1,5 +1,7 @@
 import { useApiClient } from "../../api/context";
 import { StepCards } from "../../components/easy-create/StepCards";
+import { ReviseControl } from "../../components/easy-create/ReviseControl";
+import { diffDraftIr, type StepDiff } from "../../components/easy-create/step-diff";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { ClipboardCheck, FileCheck2, ListChecks, PlaySquare, ScrollText, Settings, X, type LucideIcon } from "lucide-react";
@@ -267,13 +269,54 @@ function FocusedActivityTab({ recentRuns }: { recentRuns: readonly RunItem[] }):
 }
 
 // E5′: 설계 탭 전용 초안 로더 — 상세(ir)는 필요할 때만 조회(쿼리키는 기존 scenario-detail 관례 공유).
+// F2: 아래에 말로 고치기 섹션을 붙인다 — 최신 generation 1건으로 revise, 성공 시 변경 표시를 카드에 겹친다.
+//     generation이 없거나 확인 불가면 사유를 항상 문장으로 표기한다(조용한 미노출 금지).
 function DesignStepCards({ scenarioId }: { readonly scenarioId: string }): JSX.Element {
   const api = useApiClient();
   const detail = useQuery({
     queryKey: ["scenario-detail", scenarioId],
     queryFn: () => api.getScenario(scenarioId),
   });
+  const generations = useQuery({
+    queryKey: ["scenario-generations", "by-scenario", scenarioId],
+    queryFn: () => api.listScenarioGenerations({ scenario_id: scenarioId, limit: 1 }),
+  });
+  const [reviseDiff, setReviseDiff] = useState<StepDiff | null>(null);
+  useEffect(() => {
+    setReviseDiff(null);
+  }, [scenarioId]);
+
   if (detail.isLoading) return <p className="subtle">초안을 불러오는 중입니다.</p>;
   if (detail.isError) return <p className="subtle">초안을 불러오지 못했습니다 — 새로고침 후 다시 확인하세요.</p>;
-  return <StepCards ir={detail.data?.ir} emptyMessage="표시할 초안 단계가 없습니다." />;
+  const latestGeneration = generations.data?.items[0] ?? null;
+  return (
+    <>
+      <StepCards
+        ir={detail.data?.ir}
+        changeMarks={reviseDiff?.marks}
+        removedCount={reviseDiff?.removedCount}
+        fullReplacement={reviseDiff?.fullReplacement}
+        emptyMessage="표시할 초안 단계가 없습니다."
+      />
+      {generations.isLoading && <p className="subtle">말로 고치기 가능 여부를 확인하는 중입니다.</p>}
+      {generations.isError && (
+        <p className="subtle" role="note">말로 고치기 상태를 확인하지 못했습니다 — 새로고침 후 다시 확인해 주세요.</p>
+      )}
+      {generations.isSuccess && latestGeneration === null && (
+        <p className="subtle" role="note">
+          이 자동화에는 말로 만든 요청 기록이 없어 말로 고치기를 쓸 수 없습니다.{" "}
+          <button className="linklike" type="button" onClick={() => navigate("create")}>
+            만들기 홈에서 새 요청으로 만들기
+          </button>
+        </p>
+      )}
+      {latestGeneration !== null && (
+        <ReviseControl
+          generationId={latestGeneration.generation_id}
+          scenarioId={scenarioId}
+          onRevised={(next) => setReviseDiff(diffDraftIr(detail.data?.ir, next.draft_ir))}
+        />
+      )}
+    </>
+  );
 }

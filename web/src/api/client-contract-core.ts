@@ -48,6 +48,7 @@ import type {
   ScenarioGenerationListParams,
   ScenarioGenerationRequest,
   ScenarioGenerationResult,
+  ScenarioGenerationReviseRequest,
   ScenarioGenerationRunRequest,
   ScenarioItem,
   ScenarioMutationResult,
@@ -199,6 +200,11 @@ export interface ApiClientCore {
   updateScenario(scenarioId: string, ir: unknown, version: number): Promise<ScenarioMutationResult>;
   generateScenario(body: ScenarioGenerationRequest, idempotencyKey: string): Promise<ScenarioGenerationResult>;
   runScenarioGeneration(generationId: string, body: ScenarioGenerationRunRequest, idempotencyKey: string): Promise<ScenarioGenerationResult>;
+  // F2: 말로 고치기 — 서버측 합성 재생성(api-surface §2.5 revise, Idempotency-Key 필수).
+  //   412 SCENARIO_VERSION_CONFLICT(base_version_mismatch/concurrent_version_insert) / 422 IR_SCHEMA_INVALID
+  //   + details.reason(instruction_required·instruction_too_long·prompt_too_long·prompt_not_retained·
+  //   scenario_not_persisted)은 ApiError로 표면화.
+  reviseScenarioGeneration(generationId: string, body: ScenarioGenerationReviseRequest, idempotencyKey: string): Promise<ScenarioGenerationResult>;
   getScenarioGenerationCapabilities(): Promise<ScenarioGenerationCapabilities>;
   listScenarioGenerations(p?: ScenarioGenerationListParams): Promise<ScenarioGenerationList>;
   getScenarioGeneration(generationId: string): Promise<ScenarioGenerationResult>;

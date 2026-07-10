@@ -213,6 +213,13 @@ export interface ScenarioGenerationRunRequest {
   readonly evidence?: ScenarioGenerationEvidence;
 }
 
+// F2: 말로 고치기(revise) 요청 — 서버가 원장의 redaction 통과 프롬프트에 instruction을 합성해 재생성한다.
+// base_version은 화면이 본 scenario 버전(If-Match 규율과 동형) — head 불일치는 409 SCENARIO_VERSION_CONFLICT.
+export interface ScenarioGenerationReviseRequest {
+  readonly instruction: string;
+  readonly base_version: number;
+}
+
 export interface ScenarioGenerationResult {
   readonly generation_id: string;
   readonly mode: "draft_only" | "save" | "save_and_run";
@@ -241,6 +248,7 @@ export interface ScenarioGenerationList {
 export interface ScenarioGenerationListParams extends ListParams {
   readonly status?: ScenarioGenerationResult["status"];
   readonly run_id?: string;
+  readonly scenario_id?: string;
 }
 
 export interface ScenarioGenerationArtifactList {
