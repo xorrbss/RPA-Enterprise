@@ -293,3 +293,59 @@ S3 put 요청에 `x-amz-server-side-encryption: aws:kms|AES256` 헤더 추가(`s
 | 봉투암호화 선례 | `app/src/runtime/browser-session-store.ts:123-207`(KmsEnvelope), `77-112`(AesGcm, prod wiring) |
 | 계약 침묵 | `security-contracts.md`·`impl-contracts-bundle.md`·`ops-defaults.md` (artifact at-rest 암호화 요구 0) |
 | read=redacted 서빙 | `app/src/api/reads-artifacts.ts:61-63` |
+
+---
+
+## 결정 반영 (2026-07-11, 오너 확정)
+
+> 오너가 §1.7 **Q1-1** 과 §2.7 **Q2-1**(각 절의 선결 질문)을 확정 답변했다. 아래는 그 답변과, 그로 인한
+> 종결 범위·미채택 옵션·잔여 질문 처리다. **이 반영도 코드/스키마 무변경** — 계약 .md(`auth-rbac.md`·
+> `security-contracts.md`)를 결정 기록 + 문서 드리프트 교정 목적으로만 바꾼다(동작·권한 enum 무변경, SSoT는
+> `ts/rbac-policy.ts`). 반영 PR = README v2.38 패치 로그.
+
+### 오너 확정 답변
+
+- **Q1-1 = 단일 플랫폼 운영자**: `admin`(=`worker_pool.manage` 보유)은 **단일 플랫폼 운영자**다(테넌트/고객사별
+  admin 아님).
+- **Q2-1 = 매체 암호화 이미 적용**: 현 배포 매체(디스크·S3 버킷·백업)에 at-rest 암호화가 **이미 적용**돼 있다
+  (오너 증빙 확인).
+
+### §1 종결 — 워커풀 격리 (Q1-1 하)
+
+- **채택: 1A-doc(문서 종결)**. 단일 플랫폼 운영자면 "타 테넌트 admin"이 존재하지 않으므로, §1.3의 격리 미결
+  지점(전역 열거·self-assign·cross-tenant 덮어쓰기/상태변경/삭제)은 **단일 운영자가 서로 다른 테넌트 컨텍스트로
+  동작하는 동일인**의 행위라 무해하다. §1.3-2의 int 테스트("tenant B admin→tenant A 풀 200",
+  `api-worker-pools.int.ts:263-265`)도 같은 이유로 escalation이 아니다. → cross-tenant 풀 관리는 **의도된 플랫폼
+  운영 권능**으로 확정. `auth-rbac.md §2`에 불변식으로 명문화("admin=단일 플랫폼 운영 role, 워커 풀=RLS 비대상
+  전역 인프라, 테넌트 principal에 미부여 = 배포 프로비저닝 불변식").
+- **미채택: 1B(소유권 모델)·1C(물리 분리)**. 각 고객사가 자기 admin을 갖는 멀티테넌트 SaaS 전제가 아니므로
+  `owner_tenant_id` 소유권 모델(1B)·물리 풀 분리(1C)는 현 운영 모델에서 YAGNI. 향후 admin을 고객사별로 분리
+  부여하는 모델이 실제 요구가 되면(전제 변경) 그때 1B를 별도 계약으로 승격한다.
+- **1A(ii) 코드 가드 defer 사유(미채택)**: §1.5의 "풀 write를 유지보수 경계(`MAINTENANCE_TENANT_IDS`)에 묶기"는
+  **하지 않는다**. `MAINTENANCE_TENANT_IDS`는 비어 있을 수 있고(empty면 BYPASSRLS 전역 경로 —
+  `app/src/worker/maintenance-scheduler-tenant-discovery.ts:259`) config 의존이라 API 권한 가드로 부적합하며, 단일
+  플랫폼 운영자 전제에선 조일 대상 자체가 없어(YAGNI) 코드 변경이 불필요하다. 신규 `platform_admin` role 도입
+  (1A(i))도 role 5종 enum·codegen·web 동시 변경을 요구해 단일 운영자에선 과대. → §1은 **코드 변경 없이** 문서 종결.
+- **부수 doc-sync(Q1-5) 처리**: `auth-rbac.md §2`에 `worker_pool.manage` 등재(감사 C5)를 **이 종결 PR에 포함**
+  (별도 PR 분리 안 함) — 매트릭스 행 등재 + 위 불변식 비고를 함께 넣어 결정과 doc-sync를 한 번에 종결.
+
+### §2 종결 — artifact at-rest (Q2-1 하)
+
+- **채택: 2A-doc(문서 종결)**. 매체 암호화가 이미 적용됐으므로 2A는 "신규 구현 0 — 계약 명문화"로 종결한다.
+  `security-contracts.md §8.1`(신설)에 "객체 at-rest 기밀성=배포 매체 계층(디스크/S3/백업 암호화), 앱은 v1 객체
+  레벨 암호화 미추가, artifact read=redacted 서빙이라 누출면은 매체/백업/포렌식 한정"을 명문화(계약 침묵→명시 전환).
+- **미채택: 2B(앱 봉투암호화)·2C(S3 SSE 헤더)**. 매체 암호화로 감사 지목 표면(backup/forensic)이 커버되고 read가
+  redacted 서빙이라, 앱 레벨 객체 암호화(2B)는 integrity/redaction 재설계로 클러스터를 키우는 YAGNI. 2C는 2A(버킷
+  SSE)에 흡수되어 단독 채택 비권장. 단, 2B는 세션 봉투암호화 선례(`KmsEnvelopeSessionEncryptor`)가 이미 있어
+  규제·고객 계약이 애플리케이션 레벨 기밀성을 요구할 때의 **승격 경로**로 §8.1에 참조만 남긴다(v1 미도입).
+
+### 잔여 질문 처리 (이 확정 답변 하)
+
+- **Q1-2**(플랫폼 대행 vs 셀프서비스): **무효화** — 단일 플랫폼 운영자면 풀 생성=플랫폼 행위, 셀프서비스 구분 소멸.
+- **Q1-3**(공용 NULL 풀 write 권한): **무효화** — 1B 소유권 모델 미채택으로 `owner_tenant_id` 개념 자체가 없음.
+- **Q1-4**(물리 격리 요건): **조건부 보류** — 현재 규제/민감 테넌트 물리격리 요구 없음. DG-5 물리 테넌시 트랙에서 재개.
+- **Q1-5**(doc-sync 포함 여부): **해소** — 본 PR에 포함(위 §1 부수 doc-sync).
+- **Q2-2**(매체 vs 앱 레벨 요구 수준): **해소** — Q2-1 확정으로 매체(2A) 채택, 앱 레벨(2B) 미도입.
+- **Q2-3**(테넌트별 키+kid 회전): **조건부 보류** — 2B 승격 시에만 유효. 승격 경로로 §8.1에 예약.
+- **Q2-4**(integrity sha256 대조 기준): **조건부 보류** — 2B 승격 시에만 유효. §8.1에 재정의 필요를 명시.
+- **Q2-5**(계약 명문화 여부): **해소** — `security-contracts.md §8.1`로 명문화(침묵 유지 안 함).
