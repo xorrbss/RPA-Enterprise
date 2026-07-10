@@ -63,7 +63,7 @@ export const QUICK_ACTIONS: readonly QuickActionSpec[] = [
     hint: "보안 화면의 Worker Pool 관리 영역으로 이동",
     view: "security",
     params: { section: "infra", focus: "worker-pools" },
-    keywords: ["worker pool", "worker pools", "pool", "workers", "bot pool", "워커", "풀", "작업자", "봇풀", "보안"],
+    keywords: ["worker pool", "worker pools", "pool", "workers", "bot pool", "워커", "실행기", "풀", "작업자", "봇풀", "보안"],
   },
   {
     id: "automation-report",

@@ -38,9 +38,9 @@ export function WorkerPoolPanel(): JSX.Element | null {
   const pressure = queuePressure(pending, oldestQueuedMs, stuckHint);
 
   return (
-    <section className="panel" aria-label="전용 워커 풀" style={{ marginBottom: 12 }}>
+    <section className="panel" aria-label="전용 실행기 풀" style={{ marginBottom: 12 }}>
       <div className="panel-head">
-        <h2>전용 워커 풀</h2>
+        <h2>전용 실행기 풀(worker pool)</h2>
         <span className="badge blue">{items.length}개 풀</span>
       </div>
 
@@ -53,7 +53,7 @@ export function WorkerPoolPanel(): JSX.Element | null {
             <span className="badge green">{assigned_pool_key}</span>
             <ActionButton
               label="배정 해제"
-              confirmText="이 테넌트의 워커 풀 배정을 해제할까요?"
+              confirmText="이 테넌트의 실행기 풀 배정을 해제할까요?"
               action="worker_pool.manage"
               successText="해제됨"
               invalidateKeys={[["worker-pools"]]}
@@ -63,7 +63,7 @@ export function WorkerPoolPanel(): JSX.Element | null {
         )}
       </p>
 
-      <p aria-label="전용 워커 풀 압력" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      <p aria-label="전용 실행기 풀 압력" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span className="subtle">풀 압력:</span>
         <span className={["badge", pressure.tone].filter(Boolean).join(" ")}>{pressure.label}</span>
         <span className="subtle">{pressure.detail}</span>
