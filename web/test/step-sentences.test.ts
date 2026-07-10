@@ -132,6 +132,58 @@ describe("step-sentences — flow·verify·예약 핸들러", () => {
   });
 });
 
+describe("step-sentences — 폴백 정밀화(F6)", () => {
+  test("객체형 예약 핸들러 next({handler:'@human_task'})는 사람 확인 문장 재사용(기본 문장 금지)", () => {
+    const step = firstStep(
+      ir({
+        n1: { next: { handler: "@human_task", input: { assignee_role: "reviewer" }, return_node: "n2" } },
+        n2: { terminal: "success" },
+      }),
+    );
+    expect(step.flow?.kind).toBe("next");
+    expect(step.flow?.label).toBe("→ 사람 확인으로");
+    expect(step.sentence).toBe("→ 사람 확인으로"); // 동작 없는 흐름 노드 — 흐름이 곧 문장
+    expect(step.sentence).not.toBe("다음 단계로 진행합니다");
+  });
+
+  test("on 분기 target 이 객체형 @challenge 여도 라벨 경유 — '[object Object]' 미노출", () => {
+    const step = firstStep(
+      ir({
+        n1: {
+          what: [{ action: "observe", instruction: "상태" }],
+          on: [
+            { when: "flags.captcha", target: { handler: "@challenge", input: {}, return_node: "n1" }, priority: 1 },
+            { when: "true", target: "done", priority: 9 },
+          ],
+        },
+        done: { terminal: "success" },
+      }),
+    );
+    expect(step.flow?.detail).toContain("추가 인증 처리로");
+    expect(step.flow?.detail).not.toContain("[object Object]");
+  });
+
+  test("fallback_chain 만 있는 노드는 대체 경로 문장(기본 문장 금지)", () => {
+    const step = firstStep(ir({ n1: { fallback_chain: [{ target: "t0" }, { target: "t1" }] }, t0: { terminal: "success" }, t1: { terminal: "fail_business" } }));
+    expect(step.flow?.kind).toBe("fallback");
+    expect(step.sentence).toBe("잘 안 되면 대체 경로 2개를 차례로 시도합니다");
+  });
+
+  test("what 없는 평범한 next 는 현행 기본 문장 유지(회귀 고정)", () => {
+    const step = firstStep(ir({ n1: { next: "n2" }, n2: { terminal: "success" } }));
+    expect(step.flow).toBeUndefined();
+    expect(step.sentence).toBe("다음 단계로 진행합니다");
+  });
+
+  test("@end_no_data const 문자열 next 회귀 — 데이터 없으면 종료", () => {
+    const step = firstStep(
+      ir({ n1: { what: [{ action: "extract", instruction: "표를 읽는다", schema_ref: "rows_v1" }], next: "@end_no_data" } }),
+    );
+    expect(step.flow?.kind).toBe("next");
+    expect(step.flow?.label).toBe("→ 데이터 없으면 종료");
+  });
+});
+
 describe("step-sentences — 순회 규칙", () => {
   test("주 경로 미포함 노드는 '기타 경로'(offMainPath)로 뒤에 나열 — 누락 은폐 금지", () => {
     const steps = renderIrSentences(
