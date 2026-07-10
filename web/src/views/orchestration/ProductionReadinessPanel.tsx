@@ -186,7 +186,7 @@ export function ProductionReadinessPanel({
         <ReadinessTile
           title="브라우저 용량"
           value={readiness === undefined ? "-" : String(readiness.signals.bot_pool.capacity_slots)}
-          detail={readiness === undefined ? "워커 확인 중" : `활성 ${readiness.signals.bot_pool.workers.active}`}
+          detail={readiness === undefined ? "실행기 확인 중" : `활성 ${readiness.signals.bot_pool.workers.active}`}
           tone={readiness !== undefined && readiness.signals.bot_pool.workers.active >= 2 ? "green" : "amber"}
         />
         <ReadinessTile

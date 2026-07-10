@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { formatDeadline, formatRunDuration, formatShortDateTime } from "../src/util/time";
+import { formatDeadline, formatDurationMs, formatRunDuration, formatShortDateTime } from "../src/util/time";
 
 describe("time display utilities", () => {
   test("deadline combines Korean local time and remaining duration", () => {
@@ -66,5 +66,32 @@ describe("formatRunDuration", () => {
     expect(formatRunDuration(t0, at(3_600_000))).toBe("1시간");
     expect(formatRunDuration(t0, at(3_600_000 + 30_000))).toBe("1시간");
     expect(formatRunDuration(t0, at(2 * 3_600_000 + 5 * 60_000))).toBe("2시간 5분");
+  });
+});
+
+// formatRunDuration이 재사용하는 ms→한국어 단위 코어(경계 직접 검증).
+describe("formatDurationMs", () => {
+  test("무효 입력은 null (소요 단정 금지)", () => {
+    expect(formatDurationMs(null)).toBeNull();
+    expect(formatDurationMs(undefined)).toBeNull();
+    expect(formatDurationMs(-1)).toBeNull();
+    expect(formatDurationMs(Number.NaN)).toBeNull();
+    expect(formatDurationMs(Number.POSITIVE_INFINITY)).toBeNull();
+  });
+
+  test("0/1초 미만", () => {
+    expect(formatDurationMs(0)).toBe("1초 미만");
+    expect(formatDurationMs(999)).toBe("1초 미만");
+  });
+
+  test("초/분+초 경계", () => {
+    expect(formatDurationMs(1_000)).toBe("1초");
+    expect(formatDurationMs(59_000)).toBe("59초");
+    expect(formatDurationMs(75_000)).toBe("1분 15초");
+  });
+
+  test("시간+분 (초 생략)", () => {
+    expect(formatDurationMs(3_600_000)).toBe("1시간");
+    expect(formatDurationMs(2 * 3_600_000 + 5 * 60_000)).toBe("2시간 5분");
   });
 });

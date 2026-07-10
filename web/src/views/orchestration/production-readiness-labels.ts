@@ -37,7 +37,7 @@ export function gateStatusLabel(status: ProductionReadinessGate["status"]): stri
 
 export function readinessGateLabel(gate: ProductionReadinessGate): string {
   if (gate.gate_id === "database_migrations") return "DB 변경 적용";
-  if (gate.gate_id === "browser_pool_ha") return "브라우저 워커 이중화";
+  if (gate.gate_id === "browser_pool_ha") return "브라우저 실행기 이중화";
   if (gate.gate_id === "audit_chain_evidence") return "감사 체인 증빙";
   if (gate.gate_id === "external_alert_delivery") return "외부 알림 전달";
   if (gate.gate_id === "managed_backup_restore_drill") return "백업 복구 리허설";
@@ -55,7 +55,7 @@ export function readinessGateMessage(gate: ProductionReadinessGate): string {
   if (gate.reason_code === "observability_telemetry_evidence_missing") return "수집기, 대시보드, 알림 경로 증빙을 추가해야 합니다.";
   if (gate.status !== "pass") return gate.detail;
   if (gate.gate_id === "database_migrations") return "필수 DB 변경이 적용되어 있습니다.";
-  if (gate.gate_id === "browser_pool_ha") return "브라우저 워커가 이중화되어 있습니다.";
+  if (gate.gate_id === "browser_pool_ha") return "브라우저 실행기가 이중화되어 있습니다.";
   if (gate.gate_id === "audit_chain_evidence") return "최근 감사 검증 증빙이 정상입니다.";
   return gate.detail;
 }

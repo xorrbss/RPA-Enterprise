@@ -46,7 +46,7 @@ describe("security-section-nav", () => {
     ["#security?principal=principal-a", "접속·권한", "SSO/IdP 준비도"],
     ["#security?focus=credentials", "비밀·연결·감사", "보안 연결 사용 현황"],
     ["#security?credential_site=site-a&credential=secret%3A%2F%2Ftenant-a%2Fexecutor", "비밀·연결·감사", "보안 연결 사용 현황"],
-    ["#security?focus=worker-pools", "운영 인프라", "전용 워커 풀"],
+    ["#security?focus=worker-pools", "운영 인프라", "전용 실행기 풀(worker pool)"],
   ])("%s maps to the %s section", async (hash, sectionLabel, heading) => {
     location.hash = hash;
     renderApp();
@@ -64,7 +64,7 @@ describe("security-section-nav", () => {
     expect(screen.queryByRole("heading", { name: "SSO/IdP 준비도" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "보안 연결 사용 현황" })).toBeNull();
     expect(screen.queryByRole("heading", { name: /AI (runtime policy|운영 정책)/ })).toBeNull();
-    expect(screen.queryByRole("heading", { name: "전용 워커 풀" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "전용 실행기 풀(worker pool)" })).toBeNull();
   });
 
   test("site-create intent opens the site registration form", async () => {

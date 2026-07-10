@@ -43,7 +43,7 @@ const SECURITY_SECTIONS: readonly {
   { key: "access", label: "접속·권한", purpose: "SSO, RBAC, 담당자, SCIM 역할 매핑 확인" },
   { key: "secrets", label: "비밀·연결·감사", purpose: "SecretRef, Credential, 보안 연결, 감사 증거 점검" },
   { key: "ai", label: "AI 거버넌스", purpose: "AI 정책, 런타임 통제, 증거 장부 확인" },
-  { key: "infra", label: "운영 인프라", purpose: "워커 풀과 실행 인프라 운영 상태 확인" },
+  { key: "infra", label: "운영 인프라", purpose: "실행기 풀과 실행 인프라 운영 상태 확인" },
   { key: "offboarding", label: "오프보딩", purpose: "데이터 반출과 승인 게이트 영구 삭제 관리" },
 ];
 

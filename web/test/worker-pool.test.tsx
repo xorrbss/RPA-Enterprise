@@ -45,7 +45,7 @@ function workerPool(overrides: Partial<WorkerPoolItem>): WorkerPoolItem {
 
 const PA: WorkerPoolItem = workerPool({ pool_key: "pa" });
 
-describe("전용 워커 풀 패널 (DG-3b)", () => {
+describe("전용 실행기 풀 패널 (DG-3b)", () => {
   beforeEach(() => {
     location.hash = "#security?section=infra";
     localStorage.clear();
@@ -57,7 +57,7 @@ describe("전용 워커 풀 패널 (DG-3b)", () => {
     expect(await screen.findByRole("heading", { name: "보안 읽기 전용 요약" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "운영 인프라 읽기 전용 섹션 요약" })).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "보안 deep link 권한 안내" })).toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "전용 워커 풀" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "전용 실행기 풀" })).toBeNull();
   });
 
   test("admin: 풀 목록 + 현재 배정 + 배정 해제", async () => {
@@ -68,7 +68,7 @@ describe("전용 워커 풀 패널 (DG-3b)", () => {
           wpList([workerPool({ pool_key: "sensitive-finance", description: "재무 민감" })], "sensitive-finance"),
       }),
     );
-    const region = await screen.findByRole("region", { name: "전용 워커 풀" });
+    const region = await screen.findByRole("region", { name: "전용 실행기 풀" });
     expect(within(region).getAllByText("sensitive-finance").length).toBeGreaterThanOrEqual(1);
     expect(within(region).getByText("배정됨")).toBeInTheDocument();
     expect(within(region).getByRole("button", { name: "배정 해제" })).toBeInTheDocument();
@@ -78,7 +78,7 @@ describe("전용 워커 풀 패널 (DG-3b)", () => {
   test("admin: 미배정 시 기본 풀 표기", async () => {
     localStorage.setItem("rpa.token", jwt(["admin"]));
     renderApp(fakeClient({ listWorkerPools: async () => wpList([PA], null) }));
-    const region = await screen.findByRole("region", { name: "전용 워커 풀" });
+    const region = await screen.findByRole("region", { name: "전용 실행기 풀" });
     expect(within(region).getByText(/기본\(default\)/)).toBeInTheDocument();
     expect(within(region).queryByRole("button", { name: "배정 해제" })).toBeNull();
     expect(within(region).getByRole("button", { name: "이 테넌트에 배정" })).toBeInTheDocument();
@@ -96,7 +96,7 @@ describe("전용 워커 풀 패널 (DG-3b)", () => {
         },
       }),
     );
-    const region = await screen.findByRole("region", { name: "전용 워커 풀" });
+    const region = await screen.findByRole("region", { name: "전용 실행기 풀" });
     fireEvent.click(within(region).getByRole("button", { name: "풀 만들기" }));
     fireEvent.change(within(region).getByPlaceholderText(/sensitive-finance/), { target: { value: "newpool" } });
     fireEvent.click(within(region).getByRole("button", { name: "생성" }));
@@ -115,7 +115,7 @@ describe("전용 워커 풀 패널 (DG-3b)", () => {
         },
       }),
     );
-    const region = await screen.findByRole("region", { name: "전용 워커 풀" });
+    const region = await screen.findByRole("region", { name: "전용 실행기 풀" });
     fireEvent.click(within(region).getByRole("button", { name: "Drain" }));
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: "확인" }));
@@ -130,8 +130,8 @@ describe("전용 워커 풀 패널 (DG-3b)", () => {
         listWorkerPools: async () => wpList([PA], "pa", { queued_runs: 3, oldest_queued_at: tenMinAgo }),
       }),
     );
-    const region = await screen.findByRole("region", { name: "전용 워커 풀" });
-    expect(within(region).getByLabelText("전용 워커 풀 압력")).toBeInTheDocument();
+    const region = await screen.findByRole("region", { name: "전용 실행기 풀" });
+    expect(within(region).getByLabelText("전용 실행기 풀 압력")).toBeInTheDocument();
     expect(within(region).getByText("지연 위험")).toBeInTheDocument();
     expect(within(region).getByText(/queued 3건/)).toBeInTheDocument();
     // 5분 초과 적체 + 전용 풀 → 정직한 지연 힌트(단정 아님)
@@ -146,8 +146,8 @@ describe("전용 워커 풀 패널 (DG-3b)", () => {
         listWorkerPools: async () => wpList([PA], null, { queued_runs: 2, oldest_queued_at: tenMinAgo }),
       }),
     );
-    const region = await screen.findByRole("region", { name: "전용 워커 풀" });
-    expect(within(region).getByLabelText("전용 워커 풀 압력")).toBeInTheDocument();
+    const region = await screen.findByRole("region", { name: "전용 실행기 풀" });
+    expect(within(region).getByLabelText("전용 실행기 풀 압력")).toBeInTheDocument();
     expect(within(region).getByText("대기 감지")).toBeInTheDocument();
     expect(within(region).getByText(/queued 2건/)).toBeInTheDocument();
     expect(within(region).getByText(/기본 풀 대기/)).toBeInTheDocument();
