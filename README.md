@@ -1069,3 +1069,36 @@
 | 서버 | `app/src/api/scenario-generation-store.ts` | `persistGeneration`에 revise 분기(기존 scenario에 version=head+1 draft INSERT — 단일 쓰기 경로 유지, `cloneIrWithVersion`+재컴파일은 rollback 선례 동형) + `prompt_redacted` 영속(`redactGenerationPrompt`) |
 | 서버 | `app/src/api/scenario-generation-revise.ts`(신설)·`scenario-generations.ts`·`scenario-generation-parse.ts`·`scenario-generation-redaction.ts`·`server.ts` | revise 라우트(RBAC `scenario.create`, Idempotency-Key 필수, 전용 에러 enum 없이 범용 코드+reason — scengen 관례) + 목록 `scenario_id` 필터 + 중복 `signedCommandRefsFor` 사본 제거(scenarios-support 공용 재사용) |
 | 검증 | `app/test/api-scenario-generations.int.ts`·`scenario-generation-revise.unit.ts`(신설) | revise 성공(새 draft 버전)/409·412 충돌/`prompt_not_retained`/instruction 경계/멱등키/`prompt_redacted` 마스킹 negative control. 기존 "원장 행 전체에 prompt 평문 부재" 단언은 신계약(redaction 통과본 저장)에 맞게 "draft_ir 평문 부재 + prompt_redacted 보존·비밀 마스킹"으로 갱신 |
+
+## v2.38 패치 로그 (deferred 설계 결정 오너 확정 반영 — 워커풀 격리·artifact at-rest 문서 종결)
+
+> **deferred 설계 이슈 2건을 오너 확정 답변으로 문서 종결한다 — 코드·스키마·동작 무변경, 계약 .md를 결정 기록 +
+> 코드/문서 드리프트 교정 목적으로만 변경한다.** 출처 결정 패킷: `docs/deferred-design-decision-packets-2026-07-11.md`
+> (§1 워커풀 격리 = DG 거버넌스 적대 감사 #373 deferred 클러스터, §2 artifact at-rest = artifact-lifecycle 적대
+> 감사 #270 deferred 클러스터). 두 건 모두 "누출은 데이터 breach 아님, 인프라/at-rest 수준"으로 P2/P1 latent 분류된
+> 설계 이슈였고, 오너 조율(운영 모델·배포 매체 사실)을 기다려 왔다.
+>
+> - **§1 워커풀 격리 (Q1-1 = 단일 플랫폼 운영자)**: `admin`(`worker_pool.manage` 보유)은 **단일 플랫폼 운영 role**이며
+>   워커 풀은 `tenant_id` 없는 전역 인프라 자원(`auth-rbac.md §4`에서 `workers`처럼 RLS 비대상)이므로, cross-tenant 풀
+>   관리는 권한 상승이 아니라 **의도된 플랫폼 운영 권능**으로 확정. 감사 int 테스트의 "tenant B admin→tenant A 풀 200"은
+>   단일 운영자가 서로 다른 테넌트 컨텍스트로 동작하는 동일인이라 무해(escalation 아님). 부수 doc-sync(감사 C5 doc 갭)로
+>   `auth-rbac.md §2` 권한 매트릭스에 `worker_pool.manage`를 등재(`ts/rbac-policy.ts`의 admin 배정과 일치)하고, "admin=단일
+>   플랫폼 운영 role, 테넌트/고객사 principal에 미부여(배포 프로비저닝 불변식)" 비고를 명문화. 옵션 1B(소유권 모델)·1C(물리
+>   분리)는 현 운영 모델에서 YAGNI로 미채택. 1A(ii) 코드 가드(풀 write를 `MAINTENANCE_TENANT_IDS`에 묶기)도 미채택 —
+>   해당 config는 empty 가능(empty면 BYPASSRLS 전역 경로)이라 API 권한 가드로 부적합 + 단일 운영자에선 조일 대상 부재(defer
+>   사유는 패킷에 기록).
+> - **§2 artifact at-rest (Q2-1 = 매체 암호화 이미 적용)**: 배포 매체(디스크·S3 버킷·백업) at-rest 암호화가 이미 적용돼
+>   있음을 오너가 증빙으로 확인. `security-contracts.md §8.1`(신설)에 "객체 at-rest 기밀성=매체 계층 제공, 앱은 v1에서 객체
+>   레벨(봉투) 암호화 미추가, artifact read API는 redacted 서빙이라 누출면은 매체/백업/포렌식으로 한정"을 명문화(계약 침묵
+>   → 명시 전환). 앱 레벨 봉투암호화(옵션 2B, 세션 `KmsEnvelopeSessionEncryptor` 선례 재사용)는 규제·고객 계약이 애플리케이션
+>   레벨 기밀성을 요구할 때의 승격 경로로만 참조(v1 미도입). 옵션 2C(S3 SSE 헤더 단독)는 2A 버킷 SSE에 흡수되어 미채택.
+>
+> 잔여 질문(Q1-2~5·Q2-2~5)은 이 확정 답변 하에서 무효화 또는 조건부 보류로 패킷 종결 섹션에 표기했다. 권한 enum의 SSoT는
+> `ts/rbac-policy.ts`이며(문서를 코드에 일치시켰고 그 역방향 아님), codegen 산출·DDL·앱 코드·web은 무변경이다.
+
+| 항목 | 위치 | 조치 |
+|---|---|---|
+| 계약 | `auth-rbac.md §2`(매트릭스 + 비고) | `worker_pool.manage` 권한 매트릭스 행 등재(admin 전용, `ts/rbac-policy.ts:196,297` 배정과 일치) + "admin=단일 플랫폼 운영 role·테넌트 principal 미부여" 배포 프로비저닝 불변식 비고. 감사 C5 doc-sync 갭 해소 |
+| 계약 | `security-contracts.md §8.1`(신설) | artifact object at-rest 기밀성=배포 매체 계층(Q2-1)으로 명문화, 앱 객체(봉투) 암호화 v1 미도입, `KmsEnvelopeSessionEncryptor` 선례를 승격 경로로 참조 |
+| 결정 기록 | `docs/deferred-design-decision-packets-2026-07-11.md`(append) | "결정 반영(2026-07-11, 오너 확정)" 섹션 — Q1-1/Q2-1 답변, 종결 범위(§1=1A-doc·§2=2A-doc), 미채택 옵션(1B/1C·2B/2C), 잔여 질문 무효화/보류, 1A 코드 가드 defer 사유 |
+| 무변경 확인 | 코드·스키마·codegen 산출 | `app/src`·`web`·`ts/`·`db`·`codegen` 무변경(문서만). 권한 enum SSoT=`ts/rbac-policy.ts`는 읽기만 |

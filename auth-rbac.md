@@ -98,6 +98,7 @@ export type Role =
 | tenant offboarding purge 승인/반려 | api-surface §9 `POST /v1/offboarding/purge-requests/{id}/decide` (`tenant_data.purge.approve`; **SoD 요청자≠승인자** — 본인 결정은 `AUTHZ_FORBIDDEN`(`self_approval_forbidden`). 승인 시 purge_after=now()+grace) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | tenant offboarding 원장 조회 | api-surface §9 `GET /v1/offboarding/purge-requests` (`tenant_data.export` 재사용) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | network policy 편집(allowed_domains) | security-contracts §6 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
+| 워커 풀 레지스트리 관리(조회/생성/수정/삭제/테넌트 배정/워커 멤버십) | api-surface `GET/POST/DELETE /v1/worker-pools`·`PATCH /v1/worker-pools/{pool_key}`·`PUT/DELETE /v1/worker-pool`·`PUT/DELETE /v1/worker-pools/{pool_key}/workers/{worker_id}` (`worker_pool.manage`, DG-3; 워커 풀=`tenant_id` 없는 전역 인프라 자원 — §4 `workers`처럼 RLS 비대상, 아래 비고 참조) | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | RBAC 역할 부여/회수 | 본 문서 §1 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 | SCIM provider 관리 및 동기화(`/v1/scim/providers`, `POST /v1/scim/principals`) | 본 문서 §2 비고(SCIM) + security-contracts §12. provider/mapping 관리는 SecretRef만 저장하고, inbound sync는 registered provider·schema version·signed request를 통과해야 함 | — | — | — | — | ✓ | `AUTHZ_FORBIDDEN` |
 
@@ -126,6 +127,10 @@ export type Role =
 - SCIM group-to-role mapping source of truth는 RPA-owned `scim_group_role_mappings` 원장이다. 각 row는 `(tenant_id, provider_key, external_group)` opaque external group string 하나를 닫힌 RPA role enum 하나로 매핑하며, `status='active'` row만 inbound sync에 사용한다. 외부 IdP group 의미/계층/상속은 추측하지 않는다.
 - `POST /v1/scim/principals` body는 `roles` 또는 `external_groups` 중 정확히 하나만 포함해야 한다. 둘을 혼합하거나 둘 다 생략하면 `IR_SCHEMA_INVALID(scim_role_source_conflict|missing_scim_role_source)`로 fail-closed 한다. `external_groups` 경로는 모든 group이 active ledger row로 매핑되어야 하며, 하나라도 미매핑/disabled이면 `IR_SCHEMA_INVALID(scim_group_role_unmapped)`이고 principal/role upsert를 수행하지 않는다.
 - 여러 external group이 같은 RPA role로 매핑되면 resolved role set은 중복 제거한다. direct `roles` 입력은 이미 upstream에서 닫힌 RPA role로 변환된 provider에 한해 유지되는 경로이며, ledger 기반 `external_groups`와 병합하지 않는다.
+
+비고(worker pool / 플랫폼 운영 경계):
+- `worker_pool.manage`(admin 전용 — 권한 배정 SSoT는 `ts/rbac-policy.ts`)를 보유한 `admin`은 **단일 플랫폼 운영 role**이다. 워커 풀은 `tenant_id`가 없는 전역 인프라 자원(§4에서 `workers`와 동일하게 **RLS 비대상**)이므로, 서로 다른 테넌트 컨텍스트에 걸친 풀 관리(생성/수정/삭제/배정)는 권한 상승(escalation)이 아니라 **의도된 플랫폼 운영 권능**이다. `worker_pools` 자체에는 소유 테넌트 컬럼이 없고, 테넌트→풀 배정(`worker_pool_assignments`)만 RLS 스코프다.
+- 따라서 테넌트/고객사 principal에게는 admin(worker_pool.manage)을 부여하지 않는다. 부여하면 워커풀 격리 전제가 깨진다 — 이는 RBAC 코드가 강제하는 규칙이 아니라 **배포 프로비저닝 불변식**이다. admin을 고객사별로 분리 부여하는 멀티테넌트 SaaS 운영 모델이 실제 요구가 되면, 풀 소유권(`owner_tenant_id`) 모델을 도입하는 별도 계약이 선행해야 한다(현재 미채택 — `docs/deferred-design-decision-packets-2026-07-11.md` §1 참조).
 
 ---
 
