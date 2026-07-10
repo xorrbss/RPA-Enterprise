@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { navigate } from "../../router";
 import { CaptureGuide } from "../../components/CaptureGuide";
@@ -249,6 +249,7 @@ export function ScenarioSetupCorridor({
   canReadEvidence,
   onCreateDraft,
   onOpenTest = (scenarioId?: string) => navigate("scenarioStudio", scenarioId === undefined ? { focus: "test" } : { scenario: scenarioId, focus: "test" }),
+  collapsible = false,
 }: {
   sites: readonly SiteItem[];
   siteState: CorridorQueryState;
@@ -267,8 +268,11 @@ export function ScenarioSetupCorridor({
   canReadEvidence: boolean;
   onCreateDraft: () => void;
   onOpenTest?: (scenarioId?: string) => void;
+  // F3(§3.3): 만들기 홈에서는 접힌 요약으로 렌더 — blocker(차단) 관측 시 자동 펼침. 기존 소비처(Scenarios)는 불변.
+  collapsible?: boolean;
 }): JSX.Element {
   const [captureSite, setCaptureSite] = useState<SiteItem | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const steps = [
     siteStep(siteState, sites, canCreateSite, canUpdateSite),
     sessionStep((site) => setCaptureSite(site), siteState, sites, firstLoginSiteNeedingSession, canCaptureSession),
@@ -277,11 +281,18 @@ export function ScenarioSetupCorridor({
     evidenceStep(runState, latestCompletedRun, canReadEvidence),
   ];
   const firstAction = steps.find((step) => step.status !== "ready" && step.action !== undefined)?.action;
-  return (
-    <section className="panel setup-corridor" aria-label="자동화 준비 단계">
+  const hasBlocked = steps.some((step) => step.status === "blocked");
+  const readyCount = steps.filter((step) => step.status === "ready").length;
+  useEffect(() => {
+    // 차단이 관측되면 접힘 뒤에 묻히지 않게 자동 펼침(조용한 은폐 금지). 이후 사용자가 닫는 것은 존중.
+    if (collapsible && hasBlocked) setExpanded(true);
+  }, [collapsible, hasBlocked]);
+
+  const body = (
+    <>
       <div className="panel-head">
         <div>
-          <h2>자동화 준비 단계</h2>
+          {!collapsible && <h2>자동화 준비 단계</h2>}
           <p className="subtle">사이트, 세션, 초안, 테스트, 증빙을 현재 확인된 데이터 기준으로 보여줍니다.</p>
         </div>
         {firstAction !== undefined && (
@@ -308,6 +319,29 @@ export function ScenarioSetupCorridor({
       </ol>
       {/* E3: 세션 등록은 화면 이동 없이 그 자리에서 안내(운영자 PC 등록 프레이밍 유지). */}
       {captureSite !== null && <CaptureGuide site={captureSite} onClose={() => setCaptureSite(null)} />}
+    </>
+  );
+  if (collapsible) {
+    return (
+      <details
+        className="panel setup-corridor collapse-panel"
+        open={expanded}
+        onToggle={(event) => setExpanded((event.currentTarget as HTMLDetailsElement).open)}
+      >
+        <summary>
+          자동화 준비 단계
+          <span className="subtle">
+            {readyCount}/{steps.length} 준비됨
+            {hasBlocked ? " · 차단 있음" : firstAction !== undefined ? ` · 다음: ${firstAction.label}` : ""}
+          </span>
+        </summary>
+        <section aria-label="자동화 준비 단계">{body}</section>
+      </details>
+    );
+  }
+  return (
+    <section className="panel setup-corridor" aria-label="자동화 준비 단계">
+      {body}
     </section>
   );
 }

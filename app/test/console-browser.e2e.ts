@@ -18,6 +18,12 @@ import puppeteer, { type HTTPRequest, type Page } from "puppeteer-core";
 const DIST = fileURLToPath(new URL("../../web/dist/", import.meta.url));
 const SEEDED_RUN_ID = "11111111-aaaa-bbbb-cccc-000000000001";
 const SEEDED_WORKITEM_REF = "wi-e2e";
+// F3 만들기 홈 IDLE 세로 밀도 상한(@1440×900, 아래 시드 기준) — 패널 상시 직렬 렌더로의 회귀 차단(설계 §3.4·§8-④).
+// 임계 근거: 구현 후 실측 1,524px(전: ~3,300px) × 1.15 여유 ≈ 1,753 → 1,750 채택(목표 ≤ ~1,800px 이내).
+const CREATE_IDLE_MAX_SCROLL_HEIGHT = 1_750;
+// 3b) 만들기 페르소나 — auth/readiness 의 효과 역할(current_principal.roles)이 UI 게이팅의 우선 소스라
+//     (web permissions.useRoles) 생성기 표면을 렌더하려면 서버 응답의 역할을 전환해야 한다. 기본은 [](viewer 폴백 단정 유지).
+let personaRoles: readonly string[] = [];
 const RUN_DETAIL_LABEL = "실행 추적 상세 보기";
 
 let failures = 0;
@@ -94,6 +100,16 @@ function apiFixture(url: URL): unknown {
   }
   if (pathname === "/api/v1/gateway/policy") {
     return { model: "gpt-4o-mini", capabilities: { jsonMode: true } };
+  }
+  // F3: 만들기 페르소나(3b)에서 생성기가 마운트되며 필요 — 폴백 {items:[]} 은 visual_evidence 접근에서 크래시한다.
+  if (pathname === "/api/v1/scenario-generations/capabilities") {
+    return {
+      planner: { default_planner: "deterministic_mvp", available: ["deterministic_mvp"] },
+      visual_evidence: {
+        screenshot: { enabled: true, policies: ["never", "failure", "each_step"], default_policy: "each_step" },
+        video: { enabled: false, policies: ["never"], default_policy: "never", artifact_type: "video_masked", media_type: "video/webm" },
+      },
+    };
   }
   if (pathname === "/api/v1/gateway/call-summary") {
     return { window_days: 30, total: { calls: 0, input_tokens: null, output_tokens: null, cost: null }, by_model: [] };
@@ -275,7 +291,8 @@ function apiFixture(url: URL): unknown {
         tenant_id: "00000000-0000-4000-8000-0000000000a1",
         // 실서버 계약 미러: 효과 역할 = 토큰 클레임 ∪ 수동 부여. e2e-token 은 roles 클레임이 없고 부여도 없으므로 [].
         // (nav/useRoles 가 이 응답을 게이팅에 쓰므로 고정 admin 이면 '역할 스코프 nav(viewer 7개)' 단정과 모순.)
-        roles: [],
+        // F3(3b)에서만 personaRoles 로 전환해 만들기 페르소나(scenario.create)를 렌더한다.
+        roles: [...personaRoles],
         source: "jwt",
         display_name: null,
         email: null,
@@ -545,6 +562,30 @@ async function main(): Promise<void> {
         JSON.stringify(bar),
       );
     }
+
+    // 3b) F3 만들기 홈 원패스 IDLE 밀도 가드 — 만들기 페르소나(scenario.create)로 전환해 전체 셸
+    //     (생성기+접힌 워크벤치/녹화/준비 단계)을 렌더한 상태의 scrollHeight 상한을 고정한다(설계 §3.4).
+    //     스크린샷이 아닌 DOM 계측(topbar 가드와 동형 page.evaluate 패턴).
+    personaRoles = ["operator", "admin"];
+    await page.evaluate(() => {
+      const payload = btoa(JSON.stringify({ sub: "e2e-creator", tenant_id: "t", roles: ["operator", "admin"] }))
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+      localStorage.setItem("rpa.token", `e30.${payload}.sig`);
+    });
+    await page.setViewport({ width: 1440, height: 900 });
+    await page.goto(`${base}/#create`, { waitUntil: "networkidle0", timeout: 30_000 });
+    await page.waitForSelector(".create-console", { timeout: 15_000 });
+    // 생성기(만들기 권한 표면)가 실제 렌더된 뒤 측정 — 읽기 전용 폴백을 잰 가짜 green 방지.
+    await page.waitForSelector(".scenario-generator", { timeout: 15_000 });
+    const createIdleHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+    console.log(`  (만들기 홈 IDLE 실측 scrollHeight: ${createIdleHeight}px @1440×900)`);
+    check(
+      `만들기 홈 IDLE 세로 밀도 ≤ ${CREATE_IDLE_MAX_SCROLL_HEIGHT}px @1440×900`,
+      createIdleHeight <= CREATE_IDLE_MAX_SCROLL_HEIGHT,
+      `실측 ${createIdleHeight}px`,
+    );
 
     // 4) 런타임 에러 없음(번들 무결성)
     check("브라우저 페이지 에러 없음", pageErrors.length === 0 && consoleErrors.length === 0, [...pageErrors, ...consoleErrors].join("; "));

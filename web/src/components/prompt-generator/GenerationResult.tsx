@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { FileVideo, Image, Play } from "lucide-react";
 import { StepCards } from "../easy-create/StepCards";
 import { ReviseControl } from "../easy-create/ReviseControl";
@@ -35,6 +35,7 @@ export function GenerationResult({
   onOpenSiteCreate,
   onFocusParams,
   onDisableVideoEvidence,
+  testAction,
 }: {
   result: ScenarioGenerationResult;
   correctionGuide: CorrectionGuideState | null;
@@ -47,6 +48,9 @@ export function GenerationResult({
   onOpenSiteCreate: () => void;
   onFocusParams: () => void;
   onDisableVideoEvidence: () => void;
+  // F3: 호스트가 인라인 테스트 CTA(RunScenarioButton onStarted)를 주입하는 슬롯 —
+  // undefined 면 기존 워크벤치 딥링크 버튼 유지(비-원패스 소비처 보존), null 은 CTA 미노출.
+  testAction?: ReactNode;
 }): JSX.Element {
   const canRunWithCorrections = canRunGenerationWithCorrections(result);
   const correctionReady = correctionGuide === null || correctionGuideReady(correctionGuide);
@@ -164,9 +168,13 @@ export function GenerationResult({
       )}
       {result.scenario_id !== null && (
         <div className="inline-actions" aria-label="저장된 자동화 연결">
-          <button className="btn" type="button" onClick={() => navigate("create", { scenario: result.scenario_id!, focus: "test" })}>
-            테스트 실행
-          </button>
+          {testAction === undefined ? (
+            <button className="btn" type="button" onClick={() => navigate("create", { scenario: result.scenario_id!, focus: "test" })}>
+              테스트 실행
+            </button>
+          ) : (
+            testAction
+          )}
           <button className="btn" type="button" onClick={() => navigate("automationOps", { scenario: result.scenario_id! })}>
             운영 예약
           </button>

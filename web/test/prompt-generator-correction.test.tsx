@@ -381,12 +381,13 @@ describe("PromptScenarioGenerator correction run", () => {
     fireEvent.click(
       within(guide).getByRole("button", { name: "시작 주소 입력" }),
     );
-    expect(screen.getByLabelText("시작 주소")).toHaveFocus();
+    // F3: 보정 포커스는 접힌 폼("요청 고치기")을 펼친 다음 프레임에 이동한다 — 비동기 대기.
+    await waitFor(() => expect(screen.getByLabelText("시작 주소")).toHaveFocus());
     fireEvent.change(screen.getByLabelText("시작 주소"), {
       target: { value: "https://shop.example/orders" },
     });
     fireEvent.click(within(guide).getByRole("button", { name: "사이트 선택" }));
-    expect(screen.getByLabelText("사이트")).toHaveFocus();
+    await waitFor(() => expect(screen.getByLabelText("사이트")).toHaveFocus());
     fireEvent.change(screen.getByLabelText("사이트"), {
       target: { value: "10000000-0000-4000-8000-0000000000a1" },
     });
