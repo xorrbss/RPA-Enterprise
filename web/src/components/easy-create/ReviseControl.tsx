@@ -8,8 +8,8 @@ import { ApiError, type ScenarioGenerationReviseRequest, type ScenarioGeneration
 
 // F2: 말로 고치기 입력(설계 §2.1~§2.3) — 초안 직후(GenerationResult)와 저장된 자동화(FocusedScenarioStudio
 // 설계 탭) 두 표면이 같은 컴포넌트를 쓴다. base_version은 화면이 공유하는 scenario-detail 쿼리의 version이며
-// 서버가 head와 대조한다(불일치=409, PUT If-Match 규율과 동형). 실패·비활성 사유는 항상 문장으로 표기한다
-// (조용한 비활성·미노출 금지).
+// 서버가 head와 대조한다(불일치=412 SCENARIO_VERSION_CONFLICT, PUT If-Match 규율과 동형 — 분기는 HTTP 상태가
+// 아니라 에러 코드 기준). 실패·비활성 사유는 항상 문장으로 표기한다(조용한 비활성·미노출 금지).
 
 const NOT_PERSISTED_MESSAGE =
   "이 초안은 아직 자동화로 저장되지 않아 말로 고치기를 쓸 수 없습니다. 먼저 저장한 뒤 다시 시도해 주세요.";
@@ -67,6 +67,14 @@ export function ReviseControl({
         }
         if (reason === "instruction_required") {
           setError("수정할 내용을 입력해 주세요.");
+          return;
+        }
+        if (reason === "instruction_too_long") {
+          setError("수정 요청이 너무 깁니다. 2,000자 이내로 줄여 주세요.");
+          return;
+        }
+        if (reason === "prompt_too_long") {
+          setError("누적된 수정 요청이 너무 길어 말로 고치기를 계속할 수 없습니다. 만들기 홈에서 요청을 새로 입력해 다시 만들어 주세요.");
           return;
         }
       }

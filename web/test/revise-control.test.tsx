@@ -101,11 +101,15 @@ describe("ReviseControl (F2)", () => {
     expect(called).toBe(0);
   });
 
-  test("409 동시 수정: 충돌 문구와 재조회 버튼을 보여준다", async () => {
+  test("412 동시 수정: 충돌 문구와 재조회 버튼을 보여준다 (분기=에러 코드 기준)", async () => {
     const client = fakeClient({
       getScenario: async (id) => ({ scenario_id: id, name: "s", version: 1, promotion_status: "draft" }),
       reviseScenarioGeneration: async () => {
-        throw new ApiError(409, "SCENARIO_VERSION_CONFLICT", { code: "SCENARIO_VERSION_CONFLICT" });
+        // F1 확정 계약: HTTP 412 + SCENARIO_VERSION_CONFLICT(details.reason=base_version_mismatch).
+        throw new ApiError(412, "SCENARIO_VERSION_CONFLICT", {
+          code: "SCENARIO_VERSION_CONFLICT",
+          details: { reason: "base_version_mismatch", currentVersion: 2 },
+        });
       },
     });
     withProviders(client, <ReviseControl generationId="gen-1" scenarioId="sc-1" onRevised={() => undefined} />);
@@ -175,6 +179,42 @@ describe("ReviseControl (F2)", () => {
     submitInstruction("...");
 
     expect(await screen.findByText("수정할 내용을 입력해 주세요.")).toBeInTheDocument();
+  });
+
+  test("422 instruction_too_long: 길이 초과 사유를 문장으로 표기한다", async () => {
+    const client = fakeClient({
+      getScenario: async (id) => ({ scenario_id: id, name: "s", version: 1, promotion_status: "draft" }),
+      reviseScenarioGeneration: async () => {
+        throw new ApiError(422, "IR_SCHEMA_INVALID", {
+          code: "IR_SCHEMA_INVALID",
+          details: { reason: "instruction_too_long" },
+        });
+      },
+    });
+    withProviders(client, <ReviseControl generationId="gen-1" scenarioId="sc-1" onRevised={() => undefined} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "말로 고치기" })).toBeInTheDocument());
+    submitInstruction("단계를 하나 더");
+
+    expect(await screen.findByText("수정 요청이 너무 깁니다. 2,000자 이내로 줄여 주세요.")).toBeInTheDocument();
+  });
+
+  test("422 prompt_too_long: 누적 길이 초과 사유를 문장으로 표기한다", async () => {
+    const client = fakeClient({
+      getScenario: async (id) => ({ scenario_id: id, name: "s", version: 1, promotion_status: "draft" }),
+      reviseScenarioGeneration: async () => {
+        throw new ApiError(422, "IR_SCHEMA_INVALID", {
+          code: "IR_SCHEMA_INVALID",
+          details: { reason: "prompt_too_long" },
+        });
+      },
+    });
+    withProviders(client, <ReviseControl generationId="gen-1" scenarioId="sc-1" onRevised={() => undefined} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "말로 고치기" })).toBeInTheDocument());
+    submitInstruction("단계를 하나 더");
+
+    expect(
+      await screen.findByText(/누적된 수정 요청이 너무 길어 말로 고치기를 계속할 수 없습니다\./),
+    ).toBeInTheDocument();
   });
 
   test("scenario_id 없는 초안(draft_only)은 입력 대신 사유 문장", () => {
