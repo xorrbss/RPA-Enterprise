@@ -4,6 +4,7 @@ import { FileVideo, Image, Play } from "lucide-react";
 import { StepCards } from "../easy-create/StepCards";
 import { ReviseControl } from "../easy-create/ReviseControl";
 import { diffDraftIr, type StepDiff } from "../easy-create/step-diff";
+import { useSavedReviseDiff } from "../easy-create/use-saved-revise-diff";
 
 import { navigate } from "../../router";
 import { useApiClient } from "../../api/context";
@@ -68,9 +69,20 @@ export function GenerationResult({
   });
   const savedPreview = result.scenario_id !== null;
   // F2: 말로 고치기 diff — 마지막 revise 가 만든 generation 에만 표시(이력 선택 등 다른 result 로 바뀌면 소멸).
-  // diff 는 응답 draft_ir 끼리 비교한다 — 양쪽 다 같은 redaction 을 통과해 마스킹 차이로 인한 가짜 변경이 없다(N1 점검).
+  // 저장 완료(scenario_id 있음, 저장본 캐시 확보) 경로는 저장본끼리(v1 vs v2) 비교로 승격(#453 한계 해소) —
+  // 응답끼리 비교는 양쪽 instruction 이 같은 토큰으로 마스킹돼 instruction 만 바뀐 수정이 무표시였다.
+  // 스냅샷·새 저장본 도착 대기 로직은 FocusedScenarioStudio 설계 탭과 공유한다(use-saved-revise-diff).
+  const savedRevise = useSavedReviseDiff(savedDetail.data);
+  // draft_only(scenario_id null)·저장본 미확보 경로는 응답 draft_ir 끼리 비교 유지 — 저장본이 없고, 양쪽이
+  // 같은 redaction 을 통과해 마스킹 차이로 인한 가짜 변경은 없다(현행 정합. draft_only 는 ReviseControl 이
+  // 폼 자체를 막으므로 실질적으로 방어 경로다).
   const [reviseDiff, setReviseDiff] = useState<{ readonly generationId: string; readonly diff: StepDiff } | null>(null);
-  const activeDiff = reviseDiff !== null && reviseDiff.generationId === result.generation_id ? reviseDiff.diff : null;
+  const activeDiff =
+    savedRevise.result !== null && savedRevise.result.key === result.generation_id
+      ? savedRevise.result.diff
+      : reviseDiff !== null && reviseDiff.generationId === result.generation_id
+        ? reviseDiff.diff
+        : null;
   return (
     <div className="generation-result" role="status">
       <div className="generation-result-head">
@@ -114,7 +126,11 @@ export function GenerationResult({
         generationId={result.generation_id}
         scenarioId={result.scenario_id}
         onRevised={(next) => {
-          setReviseDiff({ generationId: next.generation_id, diff: diffDraftIr(result.draft_ir, next.draft_ir) });
+          if (result.scenario_id !== null && savedDetail.data !== undefined) {
+            savedRevise.begin(next.generation_id, savedDetail.data);
+          } else {
+            setReviseDiff({ generationId: next.generation_id, diff: diffDraftIr(result.draft_ir, next.draft_ir) });
+          }
           onRevised(next);
         }}
       />
