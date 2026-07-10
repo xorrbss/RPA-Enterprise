@@ -84,8 +84,25 @@ function formatDeadlineAbsolute(date: Date, now: Date): string {
   return formatShortDateTime(date.toISOString());
 }
 
+// 소요 시간(ms) → 한국어 단위 문자열. 관측된 밀리초만 받는다(음수/비유한/미지정은 null — 소요를 단정하지 않는다).
+// 1초 미만은 "1초 미만", 이후 초/분/시간 단위(시간 단위부터는 초를 생략해 분 단위 정밀도 유지).
+export function formatDurationMs(ms: number | null | undefined): string | null {
+  if (ms === null || ms === undefined || !Number.isFinite(ms) || ms < 0) return null;
+  if (ms < 1000) return "1초 미만";
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts: string[] = [];
+  if (hours > 0) parts.push(`${hours}시간`);
+  if (minutes > 0) parts.push(`${minutes}분`);
+  if (hours === 0 && seconds > 0) parts.push(`${seconds}초`);
+  // ms >= 1000이면 totalSeconds >= 1이라 시간/분/초 중 최소 하나는 존재한다.
+  return parts.join(" ");
+}
+
 // run 소요 시간(F5) — 관측된 started_at/ended_at 두 값이 모두 있을 때만 산출한다(둘 중 하나라도 없으면 null;
-// 진행 중 run의 경과를 클라이언트 시계로 추정하지 않는다 — 날조 금지). 1초 미만은 "1초 미만", 이후 초/분/시간 한국어 단위.
+// 진행 중 run의 경과를 클라이언트 시계로 추정하지 않는다 — 날조 금지). 단위 포매팅은 formatDurationMs 재사용.
 export function formatRunDuration(
   startedAt: string | null | undefined,
   endedAt: string | null | undefined,
@@ -95,20 +112,8 @@ export function formatRunDuration(
   const startMs = Date.parse(startedAt);
   const endMs = Date.parse(endedAt);
   if (Number.isNaN(startMs) || Number.isNaN(endMs)) return null;
-  const ms = endMs - startMs;
-  if (ms < 0) return null; // 역전 타임스탬프는 소요를 단정하지 않는다.
-  if (ms < 1000) return "1초 미만";
-  const totalSeconds = Math.floor(ms / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  const parts: string[] = [];
-  if (hours > 0) parts.push(`${hours}시간`);
-  if (minutes > 0) parts.push(`${minutes}분`);
-  // 시간 단위부터는 초를 생략해 가독성을 유지한다(분 단위 정밀도).
-  if (hours === 0 && seconds > 0) parts.push(`${seconds}초`);
-  // ms >= 1000이면 시간/분/초 중 최소 하나는 존재한다(totalSeconds >= 1).
-  return parts.join(" ");
+  // 역전 타임스탬프(ms < 0)는 formatDurationMs가 null로 처리한다(소요 단정 금지).
+  return formatDurationMs(endMs - startMs);
 }
 
 function formatRelativeDuration(ms: number, direction: "future" | "past"): string {
