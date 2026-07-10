@@ -147,6 +147,33 @@ describe("mobile drawer navigation", () => {
     expect(screen.getByRole("dialog", { name: "주 메뉴" })).toBeInTheDocument();
   });
 
+  test("outside mousedown closes the account menu", () => {
+    renderApp();
+
+    const account = screen.getByRole("button", { name: "계정 메뉴" });
+    fireEvent.click(account);
+    expect(screen.getByRole("region", { name: "계정 및 역할" })).toBeInTheDocument();
+
+    fireEvent.mouseDown(document.body);
+
+    expect(screen.queryByRole("region", { name: "계정 및 역할" })).toBeNull();
+    expect(account).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("Escape on the account menu closes it and restores focus to the trigger", () => {
+    renderApp();
+
+    const account = screen.getByRole("button", { name: "계정 메뉴" });
+    account.focus();
+    fireEvent.click(account);
+    expect(screen.getByRole("region", { name: "계정 및 역할" })).toBeInTheDocument();
+
+    fireEvent.keyDown(account, { key: "Escape" });
+
+    expect(screen.queryByRole("region", { name: "계정 및 역할" })).toBeNull();
+    expect(account).toHaveFocus();
+  });
+
   test("drawer opens with role-filtered nav", () => {
     renderApp();
     const menu = screen.getByRole("button", { name: "메뉴" });

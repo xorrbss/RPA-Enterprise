@@ -5,7 +5,7 @@ import {
   HelpCircle, Menu, UserCircle, X,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 
 import { navigate, type ViewKey } from "../router";
 import { useRoles } from "../api/permissions";
@@ -25,6 +25,7 @@ import { Freshness } from "./Freshness";
 import { OffboardingBanner } from "./OffboardingBanner";
 import { GlobalCreateMenu, LogoutButton, RolesChip, SearchButton, SubjectChip, TopbarContextBadge } from "./layout/TopbarActions";
 import { TopbarAlertBell } from "./layout/TopbarAlertBell";
+import { usePopoverDismiss } from "./layout/usePopoverDismiss";
 
 const ICONS: Record<string, LucideIcon> = {
   Video, PlaySquare, LayoutDashboard, ClipboardCheck, ListChecks,
@@ -152,6 +153,17 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
   const drawerRef = useRef<HTMLDivElement>(null);
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const accountRootRef = useRef<HTMLSpanElement>(null);
+  const accountTriggerRef = useRef<HTMLButtonElement>(null);
+  // 계정 팝오버 닫힘 규약(mousedown 바깥 닫기 + Escape 닫기 + 트리거 포커스 복원)은 벨·생성 메뉴와 동일하게
+  // usePopoverDismiss 공유. 화면 전환/데스크톱 전환 시 닫기는 아래 setAccountOpen(false) 효과가 그대로 담당.
+  const closeAccount = useCallback(() => setAccountOpen(false), []);
+  const { onKeyDown: onAccountKeyDown } = usePopoverDismiss({
+    open: accountOpen,
+    onClose: closeAccount,
+    rootRef: accountRootRef,
+    triggerRef: accountTriggerRef,
+  });
   useEffect(() => {
     if (!advancedAvailable && navMode !== "standard") {
       setNavMode("standard");
@@ -231,12 +243,6 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
     }
   }
 
-  function onAccountKeyDown(event: ReactKeyboardEvent<HTMLSpanElement>): void {
-    if (event.key !== "Escape") return;
-    event.preventDefault();
-    setAccountOpen(false);
-  }
-
   return (
     <div className="app">
       <nav className="sidebar" aria-label="주 메뉴" aria-hidden={isMobileNav ? "true" : undefined}>
@@ -290,13 +296,15 @@ export function Layout({ view, children }: { view: ViewKey; children: ReactNode 
             <Freshness />
             <GlobalCreateMenu roles={roles} />
             <SearchButton onClick={() => setPaletteOpen(true)} />
-            <span className="account-menu" onKeyDown={onAccountKeyDown}>
+            <span ref={accountRootRef} className="account-menu" onKeyDown={onAccountKeyDown}>
               <button
+                ref={accountTriggerRef}
                 className="btn icon-btn account-menu-button mobile-account-button"
                 type="button"
                 aria-label="계정 메뉴"
+                aria-haspopup="menu"
                 aria-expanded={accountOpen}
-                aria-controls={accountMenuId}
+                aria-controls={accountOpen ? accountMenuId : undefined}
                 onClick={() => setAccountOpen((current) => !current)}
               >
                 <UserCircle size={16} aria-hidden="true" />
