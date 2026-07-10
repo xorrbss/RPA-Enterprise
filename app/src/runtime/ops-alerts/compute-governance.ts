@@ -306,7 +306,7 @@ function mapBotPoolAlert(pool: BotPoolItem, detectedAt: string): ComputedOpsAler
     detail: pool.health_reason,
     subject_type: "bot_pool",
     subject_id: pool.bot_pool_id,
-    recommended_action: "Bot Pool 용량, 만료 lease, worker heartbeat/circuit 상태를 확인하세요.",
+    recommended_action: "봇 풀 용량, 만료된 점유(lease), 실행기 상태 신호(heartbeat)와 회로 차단(circuit) 상태를 확인하세요.",
     route: "#automationOps?section=queue", // 봇풀 패널이 큐 섹션에 렌더 — view key/section 은 라우터·Orchestration 이 실제 소비하는 값만 사용(dead link 금지)
     detected_at: detectedAt,
     due_at: null,
@@ -332,11 +332,12 @@ function mapScimSecretRotationAlert(row: ScimSecretRotationAlertRow | undefined)
     alert_id: `scim_secret_rotation:${row.provider_key}`,
     severity: overdue ? "critical" : "warning",
     source: "scim_secret_rotation",
-    title: overdue ? "SCIM signing SecretRef rotation overdue" : "SCIM signing SecretRef rotation due soon",
-    detail: `${row.display_name} (${row.provider_key}) policy ${row.secret_rotation_policy} is ${rotationStatus}; due_at ${dueAt.toISOString()}.`,
+    // F4 D5: 운영자 한국어 카피. 기한 시각은 detail 에서 빼고 기존 due_at 필드로 일원화(web 이 한국어 시각으로 렌더).
+    title: overdue ? "SCIM 서명 비밀 교체 기한 경과" : "SCIM 서명 비밀 교체 기한 임박",
+    detail: `${row.display_name}(${row.provider_key})의 교체 정책(${row.secret_rotation_policy}) 기한이 ${overdue ? "지났습니다" : "다가오고 있습니다"}.`,
     subject_type: "scim_provider",
     subject_id: row.provider_key,
-    recommended_action: "Patch the provider to a newly issued signature_secret_ref, or set secret_rotation_policy=manual only with owner-approved evidence.",
+    recommended_action: "새로 발급한 서명 비밀 참조로 제공자 설정을 갱신하세요.",
     route: `#security?section=access&provider=${encodeURIComponent(row.provider_key)}`,
     detected_at: detectedAt.toISOString(),
     due_at: dueAt.toISOString(),
@@ -355,7 +356,7 @@ function mapAuditVerifierStatusAlert(row: AuditVerifierLatestRunRow | undefined)
       : `최신 감사 체인 검증에서 ${row.violation_count}건의 위반이 발견되었습니다. 검증 범위는 ${row.rows_checked}행입니다.`,
     subject_type: "audit_verifier",
     subject_id: row.id,
-    recommended_action: "Audit Explorer에서 검증 실행 증적을 확인하고 수동 재검증 또는 incident 절차를 시작하세요.",
+    recommended_action: "감사 이력 화면에서 검증 실행 증적을 확인하고 수동 재검증 또는 사고 대응 절차를 시작하세요.",
     route: "#auditExplorer",
     detected_at: row.completed_at.toISOString(),
     due_at: null,
@@ -378,7 +379,7 @@ function mapAuditVerifierStaleAlert(row: AuditVerifierFreshnessRow | undefined):
       : `마지막 감사 체인 검증이 ${row.latest_completed_at.toISOString()} 이후 갱신되지 않았습니다.`,
     subject_type: "audit_verifier",
     subject_id: row.latest_run_id,
-    recommended_action: "maintenance scheduler와 audit_verifier runtime job 처리 상태를 확인하고 필요하면 수동 검증을 실행하세요.",
+    recommended_action: "자동 점검 일정(maintenance scheduler)과 감사 검증 작업의 처리 상태를 확인하고 필요하면 수동 검증을 실행하세요.",
     route: "#auditExplorer",
     detected_at: detectedAt.toISOString(),
     due_at: dueAt?.toISOString() ?? null,
@@ -398,19 +399,20 @@ function mapReadinessEvidenceAlert(row: ProductionReadinessEvidenceAlertRow): Co
     alert_id: `readiness_evidence:${row.evidence_type}`,
     severity: failed || expired ? "critical" : "warning",
     source: "readiness_evidence",
+    // F4 D5: 운영자 한국어 카피. 만료 시각은 detail 에서 빼고 기존 due_at 필드로 일원화(web 이 한국어 시각으로 렌더).
     title: failed
-      ? `${label} evidence failed`
+      ? `${label} 증빙 실패`
       : expired
-        ? `${label} evidence expired`
-        : `${label} evidence expires soon`,
+        ? `${label} 증빙 만료`
+        : `${label} 증빙 만료 임박`,
     detail: failed
-      ? `${label} latest production-readiness evidence is recorded as failed at ${row.evidence_at.toISOString()}.`
+      ? `${label}의 최신 운영 전환 증빙이 실패로 기록되어 있습니다.`
       : row.expires_at === null
-        ? `${label} latest production-readiness evidence has no expiry timestamp and cannot be treated as ready.`
-        : `${label} latest production-readiness evidence expires at ${row.expires_at.toISOString()}.`,
+        ? `${label}의 최신 운영 전환 증빙에 만료 시각이 없어 준비 완료로 볼 수 없습니다.`
+        : `${label}의 최신 운영 전환 증빙이 곧 만료됩니다.`,
     subject_type: "readiness_evidence",
     subject_id: row.evidence_type,
-    recommended_action: "Open production readiness and record fresh valid owner/platform evidence before controlled-prod release.",
+    recommended_action: "운영 준비 화면에서 유효한 증빙을 다시 기록한 뒤 전환을 진행하세요.",
     route: "#automationOps?section=readiness",
     detected_at: detectedAt.toISOString(),
     due_at: row.expires_at?.toISOString() ?? null,
@@ -427,10 +429,11 @@ function isReadinessEvidenceAlertType(value: string): value is ProductionReadine
   );
 }
 
+// F4 D5: web 운영 준비 게이트 라벨(production-readiness-labels.ts)과 동일 어휘 — 화면 간 역어 불일치 방지.
 function readinessEvidenceLabel(evidenceType: ProductionReadinessEvidenceAlertType): string {
-  if (evidenceType === "external_alert_delivery") return "External alert delivery";
-  if (evidenceType === "managed_backup_restore_drill") return "Managed backup/PITR restore drill";
-  if (evidenceType === "slo_oncall_signoff") return "SLO/on-call sign-off";
-  if (evidenceType === "support_training_completion") return "Support/training completion";
-  return "Observability telemetry wiring";
+  if (evidenceType === "external_alert_delivery") return "외부 알림 전달";
+  if (evidenceType === "managed_backup_restore_drill") return "백업 복구 리허설";
+  if (evidenceType === "slo_oncall_signoff") return "SLO·당직 승인";
+  if (evidenceType === "support_training_completion") return "지원·교육 완료";
+  return "관측성 연결";
 }

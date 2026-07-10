@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Building2,
@@ -19,6 +19,7 @@ import { useApiClient } from "../../api/context";
 import { decodeSubject, ROLE_LABELS, rolesCan } from "../../api/permissions";
 import type { ProductionReadiness } from "../../api/types";
 import { clearToken } from "../TokenGate";
+import { usePopoverDismiss } from "./usePopoverDismiss";
 
 export function RolesChip({ roles }: { roles: readonly string[] }): JSX.Element {
   if (roles.length === 0)
@@ -237,30 +238,13 @@ export function GlobalCreateMenu({ roles }: { roles: readonly string[] }): JSX.E
   const rootRef = useRef<HTMLSpanElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuId = useId();
+  const close = useCallback(() => setOpen(false), []);
+  // 닫힘 규약(mousedown 바깥/Escape/포커스 복원)은 usePopoverDismiss 공유(F4 — TopbarAlertBell 과 동일).
+  const { onKeyDown } = usePopoverDismiss({ open, onClose: close, rootRef, triggerRef });
   useEffect(() => setOpen(false), [roles]);
-  useEffect(() => {
-    if (!open) return;
-    const onMouseDown = (event: MouseEvent): void => {
-      const target = event.target;
-      if (!(target instanceof Node) || rootRef.current?.contains(target) === true) return;
-      setOpen(false);
-    };
-    document.addEventListener("mousedown", onMouseDown);
-    return () => document.removeEventListener("mousedown", onMouseDown);
-  }, [open]);
   if (items.length === 0) return null;
   return (
-    <span
-      ref={rootRef}
-      className="create-menu"
-      onKeyDown={(event) => {
-        if (event.key !== "Escape" || !open) return;
-        event.preventDefault();
-        event.stopPropagation();
-        setOpen(false);
-        triggerRef.current?.focus();
-      }}
-    >
+    <span ref={rootRef} className="create-menu" onKeyDown={onKeyDown}>
       <button
         ref={triggerRef}
         className="btn create-menu-button"

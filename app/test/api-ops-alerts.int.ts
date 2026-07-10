@@ -18,6 +18,7 @@ import { buildServer } from "../src/api/server";
 import { webhookSigningPayload } from "../src/api/webhook-trigger-auth";
 import { createPool, withTenantTx } from "../src/db/pool";
 import type { PlainSecret, SecretRef } from "../../ts/core-types";
+import { ERROR_CATALOG } from "../../ts/error-catalog";
 import type { SecretStoreBoundary, SignedCommandRegistry } from "../../ts/security-middleware-contract";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -410,6 +411,9 @@ async function main(): Promise<void> {
         alert_id: string;
         severity: string;
         source: string;
+        title: string;
+        detail: string;
+        recommended_action: string;
         route: string | null;
         status: string;
         delivery: { channel: string; external_delivery: boolean };
@@ -434,6 +438,43 @@ async function main(): Promise<void> {
     check("bot pool alert targets automation ops queue section", alertById.get("bot_pool:browser-default")?.route === "#automationOps?section=queue", all.body);
     check("audit verifier alert targets Audit Explorer", alertById.get(`audit_verifier:${AUDIT_VERIFIER_INVALID}`)?.route === "#auditExplorer", all.body);
     check("readiness evidence alert targets production readiness section", alertById.get("readiness_evidence:slo_oncall_signoff")?.route === "#automationOps?section=readiness", all.body);
+
+    // F4 D6: 서버 알림 카피 회귀 가드 — 12소스 전부를 실제 compute 경로(위 목록 응답)로 생성해
+    //   title/detail/recommended_action 에 ① 대문자 스네이크 enum ② 비병기 영단어 연속(공백으로 이어진
+    //   영단어 2개 이상)이 없음을 단언한다. 서버 카피는 web copy-gate(web/src 한정) 범위 밖이라 이 가드가 게이트.
+    //   허용(검사 전 제거): 병기 괄호("점유(lease)" 등 괄호 세그먼트 전체), 시드 데이터 값(display_name —
+    //   카피가 아닌 테넌트 데이터), ERROR_CATALOG userMessage/operatorAction(계약 소유 카피 — 카탈로그가
+    //   운영자 알림의 단일 출처라 서버 소스가 재작성하지 않는다). 소문자 상태/종류 enum 토큰(running,
+    //   validation/open 등)은 web localizeStatusText 가 치환하는 확립 패턴이라 단어 "연속"만 금지한다(D4).
+    // 자리표시 값("-" 등)은 제외 — 1자 스트립이 "ops-pool"→"ops pool"처럼 단어를 쪼개 가짜 run 을 만든다.
+    const catalogOwnedCopy = Object.values(ERROR_CATALOG)
+      .flatMap((meta) => [meta.userMessage, meta.operatorAction])
+      .filter((value) => /[A-Za-z]/.test(value) && value.trim().length >= 2);
+    const seededDataValues = ["Okta Due Soon", "Okta Overdue"];
+    const stripAllowedCopy = (text: string): string => {
+      let out = text;
+      for (const value of [...catalogOwnedCopy, ...seededDataValues]) out = out.split(value).join(" ");
+      return out.replace(/\([^()]*\)/g, " ");
+    };
+    const UPPER_SNAKE_ENUM = /[A-Z]{2,}(?:_[A-Z0-9]+)+/;
+    const ENGLISH_WORD_RUN = /[A-Za-z][A-Za-z0-9_-]*(?: +[A-Za-z][A-Za-z0-9_-]*)+/;
+    const copyViolations: string[] = [];
+    const guardedSources = new Set<string>();
+    for (const item of allBody.items) {
+      guardedSources.add(item.source);
+      const fields = [
+        ["title", item.title],
+        ["detail", item.detail],
+        ["recommended_action", item.recommended_action],
+      ] as const;
+      for (const [field, value] of fields) {
+        const scrubbed = stripAllowedCopy(value);
+        if (UPPER_SNAKE_ENUM.test(scrubbed)) copyViolations.push(`${item.alert_id} ${field} raw-enum :: ${value}`);
+        if (ENGLISH_WORD_RUN.test(scrubbed)) copyViolations.push(`${item.alert_id} ${field} english-run :: ${value}`);
+      }
+    }
+    check("copy guard exercises all twelve computed sources", guardedSources.size === 12, [...guardedSources].join(","));
+    check("no raw enums or non-병기 english runs in computed alert copy (D6)", copyViolations.length === 0, copyViolations.join(" | "));
 
     const scimOnly = await app.inject({ method: "GET", url: "/v1/ops-alerts?source=scim_secret_rotation", headers: { authorization: `Bearer ${viewer}` } });
     const scimBody = scimOnly.json() as {

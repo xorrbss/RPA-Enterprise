@@ -159,7 +159,7 @@ function clientWithOpsData(overrides: Partial<ApiClient> = {}): ApiClient {
           status: "open" as const,
           delivery: { channel: "console" as const, status: "delivered" as const, delivered_at: "2026-06-23T09:04:00.000Z", external_delivery: false as const },
           ack: null,
-          recommended_action: "Audit Explorer에서 검증 실행 증적을 확인하세요.",
+          recommended_action: "감사 이력 화면에서 검증 실행 증적을 확인하세요.",
           route: "#auditExplorer",
           detected_at: "2026-06-23T09:04:00.000Z",
           due_at: null,
@@ -304,7 +304,7 @@ function clientWithOpsData(overrides: Partial<ApiClient> = {}): ApiClient {
             live_capacity: { available: false, reason_code: "worker_pool_membership_missing" },
           },
           health: "critical" as const,
-          health_reason: "만료된 활성 브라우저 lease 1건을 회수해야 합니다.",
+          health_reason: "만료된 브라우저 점유(lease) 1건을 회수해야 합니다.",
         },
       ],
       next_cursor: null,
@@ -1745,7 +1745,7 @@ describe("automation ops view", () => {
     expect(poolRow).toHaveTextContent("queued 3건 · claimed 0건 · 압력 3.0x · 발화 예정 1건");
     expect(poolRow).toHaveTextContent("가장 오래된 대기");
     expect(poolRow).toHaveTextContent("풀별 live 용량 미계약");
-    expect(within(poolRow).getByText("만료된 활성 브라우저 lease 1건을 회수해야 합니다.")).toBeInTheDocument();
+    expect(within(poolRow).getByText("만료된 브라우저 점유(lease) 1건을 회수해야 합니다.")).toBeInTheDocument();
     expect(within(poolRow).getByText("위험")).toBeInTheDocument();
 
     const flowRow = screen.getByText("실행 흐름").closest("li") as HTMLLIElement;

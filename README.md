@@ -1025,3 +1025,21 @@
 | 서버 | `app/src/api/reads-runs.ts`·`server.ts` | 목록·상세 SELECT/직렬화에 `r.started_at`, `r.ended_at` 투영 |
 | 콘솔 | `web/src/api/types-runs.ts`·`util/time.ts`·`views/RunTrace.tsx`·`views/runtrace/RunDetailPanel.tsx` | `formatRunDuration`(둘 다 있을 때만 산출) + 목록 "소요" 열(종결 run만 값) + 상세 시작/종료/소요 3항목 |
 | 검증 | `web/test/time-util.test.ts`·`run-trace.test.tsx` | 포매터 경계(null/1초 미만/59초/분+초/시간)·소요 열 렌더(종결=값, 진행 중="—") |
+
+## v2.36 패치 로그 (OpsAlert enum 드리프트 보정 + 운영 알림 카피 한국어 마감)
+
+> **UI/UX 잔여 감점 해소 F4**(잔여 결함 정리 설계 2026-07-10 §4). ① **검증된 내부 불일치**:
+> `codegen/openapi.yaml`의 `OpsAlertSource` enum이 10종만 열거해 `artifact_redaction`(v2.32)·
+> `security_abort`(v2.33) 도입분이 누락되고, `OpsAlertSubjectType`에 `artifact`가 누락되어 있었다 —
+> TS 타입(app/web)·`api-surface.md`·서버 구현은 12종 전부 보유. openapi.yaml만 뒤처진 드리프트이므로
+> enum 3값을 추가해 정합화한다(신규 의미 도입 아님). ② 운영 알림 서버 카피 한국어 마감: 계약상
+> `title`/`detail`/`recommended_action`은 자유형 string이라 스키마 무변경. 병기 원칙(한국어(원어) 1회)로
+> scim_secret_rotation·readiness_evidence 전영문 카피와 bot_pool 한/영 혼재를 교정하고, detail 내
+> ISO 시각은 기존 `due_at` 필드로 일원화(web이 한국어 시각으로 렌더 — 정보 손실 없음).
+
+| 항목 | 위치 | 조치 |
+|---|---|---|
+| 계약 | `codegen/openapi.yaml` `OpsAlertSource`/`OpsAlertSubjectType` | `artifact_redaction`·`security_abort`, `artifact` 추가(드리프트 보정) — `api-surface.md`는 이미 12종 서술로 수정 불필요 |
+| 서버 | `app/src/runtime/bot-pool-read.ts`·`ops-alerts/compute-governance.ts`·`ops-alerts/compute.ts` | scim/readiness/bot_pool 카피 한국어화(worker→실행기, lease→점유, heartbeat→상태 신호, circuit→회로 차단 병기) + audit_verifier 권장 조치 영문 잔재·trigger_fire 원시 오류코드 병기 교정 |
+| 검증 | `app/test/api-ops-alerts.int.ts` | D6 카피 회귀 가드 — 12소스 전부를 실제 compute 경로로 생성해 title/detail/recommended_action의 대문자 스네이크 enum·비병기 영단어 연속 부재를 단언(서버 카피는 web copy-gate 범위 밖이라 이 가드가 게이트) |
+| 콘솔 | `web/src/views/dashboard/OpsSignalPanel.tsx`·`components/layout/TopbarAlertBell.tsx`·`usePopoverDismiss.ts` | 대시보드 권장 조치 현지화(알림 센터와 동일 헬퍼) + 상단바 벨 드롭다운(계약 무변경 — 기존 목록 응답 재사용) |

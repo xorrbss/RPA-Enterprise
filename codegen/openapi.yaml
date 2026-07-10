@@ -6349,6 +6349,8 @@ components:
         - audit_verifier
         - readiness_evidence
         - session_expiry
+        - artifact_redaction
+        - security_abort
     OpsAlertSubjectType:
       type: string
       enum:
@@ -6361,6 +6363,7 @@ components:
         - audit_verifier
         - readiness_evidence
         - browser_session
+        - artifact
     OpsAlertStatus:
       type: string
       enum:
