@@ -250,6 +250,30 @@ describe("StepCards 변경 표시 오버레이 (F2)", () => {
   });
 });
 
+describe("StepCards 종결 카드 배지 중복 억제 (N4)", () => {
+  test("terminal 전용 카드는 문장과 배지가 같은 말('완료합니다')을 반복하지 않는다", () => {
+    render(
+      <StepCards
+        ir={{
+          start: "open",
+          nodes: {
+            open: { what: [{ action: "act", instruction: "화면을 연다" }], next: "done" },
+            done: { terminal: "success" },
+          },
+        }}
+      />,
+    );
+    // 흐름 전용 노드는 흐름 라벨이 곧 문장 — 배지까지 겹치면 같은 말 2회. 문장 1회만 남아야 한다.
+    expect(screen.getAllByText("완료합니다")).toHaveLength(1);
+  });
+
+  test("동작 있는 노드의 흐름 배지는 유지된다(문장≠배지, 과억제 금지)", () => {
+    render(<StepCards ir={IR} />);
+    expect(screen.getByText("리뷰를 읽는다")).toBeInTheDocument();
+    expect(screen.getByText("완료합니다")).toBeInTheDocument(); // grab 카드의 종결 흐름 배지
+  });
+});
+
 const STUDIO_SCENARIO = { scenario_id: "sc-1", name: "리뷰 수집", version: 2, latest_version_id: "ver-1" };
 
 function renderStudio(client: ApiClient): void {
