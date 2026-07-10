@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, ClipboardCheck, FileText, PlaySquare, Sparkles } from "lucide-react";
 
@@ -8,6 +8,7 @@ import { useListView } from "../api/useListView";
 import type { ScenarioGenerationRequest, ScenarioItem } from "../api/types";
 import { BrowserRecorderPanel } from "../components/BrowserRecorderPanel";
 import { PromptScenarioGenerator } from "../components/PromptScenarioGenerator";
+import type { EasyGenerationPhase } from "../components/easy-create/useEasyGeneration";
 import { navigate, useHashParam } from "../router";
 import { ScenarioTestWorkbench } from "./Playground";
 import { ReviewStrip } from "./create/ReviewStrip";
@@ -29,6 +30,13 @@ export function CreateView(): JSX.Element {
   const modeParam = useHashParam("mode");
   const generationMode: ScenarioGenerationRequest["mode"] =
     modeParam === "save_and_run" || modeParam === "save" || modeParam === "draft_only" ? modeParam : "save";
+  // F3(§3.2·§3.3): 원패스 phase — 생성기가 통지하고, 홈은 phase 매트릭스로 섹션 노출을 게이팅한다.
+  // GENERATING/PREVIEW/TESTING 에서는 초안 흐름만 남긴다(세로 밀도 해소 — 패널 직렬 렌더 제거).
+  const [phase, setPhase] = useState<EasyGenerationPhase>("IDLE");
+  const idle = phase === "IDLE";
+  // 접힘은 기존 <details> 관례(AdvancedSettings 동형). focus=test 딥링크는 워크벤치를 자동 펼침(무음 no-op 금지).
+  const [workbenchOpen, setWorkbenchOpen] = useState(focusParam === "test");
+  const [recorderOpen, setRecorderOpen] = useState(false);
 
   const scenarioList = useListView<ScenarioItem>(
     ["scenarios"],
@@ -61,7 +69,9 @@ export function CreateView(): JSX.Element {
   const showStartChooser = creatorParam === null && templateParam === null && promptParam === null;
 
   useEffect(() => {
-    if (focusParam === "test") testWorkbenchRef.current?.scrollIntoView?.({ block: "start" });
+    if (focusParam !== "test") return;
+    setWorkbenchOpen(true);
+    testWorkbenchRef.current?.scrollIntoView?.({ block: "start" });
   }, [focusParam]);
 
   useEffect(() => {
@@ -90,17 +100,19 @@ export function CreateView(): JSX.Element {
   }
 
   function focusRecorder(): void {
+    // 시작 방식에서 "녹화"를 고르면 접힌 녹화 패널을 펼치고 이동한다(§3.3 매트릭스).
+    setRecorderOpen(true);
     recorderRef.current?.scrollIntoView?.({ block: "start" });
   }
 
   return (
     <div className="create-console">
       {/* E1: 확인 필요 스트립 — 내게 확인할 일이 있을 때만 홈 최상단에(만들기 홈이 기본 랜딩이 되면서 myWork 진입점 흡수). */}
-      <ReviewStrip />
-      <CreateJourneyHeader />
+      {idle && <ReviewStrip />}
+      {idle && <CreateJourneyHeader />}
       {can("scenario.create") ? (
         <>
-          {showStartChooser ? (
+          {idle && showStartChooser && (
             <AutomationStartChooser
               onBrowserText={focusNaturalLanguageInput}
               onBrowserRecord={focusRecorder}
@@ -109,7 +121,8 @@ export function CreateView(): JSX.Element {
               onConnector={() => navigate("connectorCatalog", { focus: "connectors" })}
               onManual={() => navigate("scenarioStudio", { expert: "manual" })}
             />
-          ) : (
+          )}
+          {idle && !showStartChooser && (
             <section className="panel scenario-create-strip" aria-label="선택한 자동화 출발점">
               <div>
                 <h2>선택한 출발점 이어가기</h2>
@@ -125,7 +138,7 @@ export function CreateView(): JSX.Element {
               </span>
             </section>
           )}
-          <PromptScenarioGenerator defaultMode={generationMode} />
+          <PromptScenarioGenerator defaultMode={generationMode} onPhaseChange={setPhase} />
         </>
       ) : (
         <section className="panel create-readonly-panel" aria-label="만들기 콘솔 읽기 전용 안내">
@@ -135,34 +148,64 @@ export function CreateView(): JSX.Element {
       )}
 
       {/* E6: 업무 사용자의 템플릿 경로 — 커넥터 카탈로그(관리 콘솔)가 유일 경로였던 것을 홈에 제공. */}
-      <TemplateGallery canCreateScenario={can("scenario.create")} />
-      <ScenarioSetupCorridor
-        sites={sites}
-        siteState={queryState(sitesQuery)}
-        scenarios={scenarios}
-        scenarioState={queryState(scenarioList.query)}
-        recentRuns={recentRuns}
-        runState={queryState(recentRunsQuery)}
-        latestScenario={latestScenario}
-        latestCompletedRun={latestCompletedRun}
-        firstLoginSiteNeedingSession={firstLoginSiteNeedingSession}
-        canCreateSite={can("site.create")}
-        canUpdateSite={can("site.update")}
-        canCaptureSession={can("session.capture")}
-        canCreateScenario={can("scenario.create")}
-        canCreateRun={can("run.create")}
-        canReadEvidence={can("artifact.read")}
-        onCreateDraft={focusNaturalLanguageInput}
-        onOpenTest={(scenarioId) => navigate("create", scenarioId === undefined ? { focus: "test" } : { scenario: scenarioId, focus: "test" })}
-      />
+      {idle && <TemplateGallery canCreateScenario={can("scenario.create")} />}
+      {idle && (
+        <ScenarioSetupCorridor
+          collapsible
+          sites={sites}
+          siteState={queryState(sitesQuery)}
+          scenarios={scenarios}
+          scenarioState={queryState(scenarioList.query)}
+          recentRuns={recentRuns}
+          runState={queryState(recentRunsQuery)}
+          latestScenario={latestScenario}
+          latestCompletedRun={latestCompletedRun}
+          firstLoginSiteNeedingSession={firstLoginSiteNeedingSession}
+          canCreateSite={can("site.create")}
+          canUpdateSite={can("site.update")}
+          canCaptureSession={can("session.capture")}
+          canCreateScenario={can("scenario.create")}
+          canCreateRun={can("run.create")}
+          canReadEvidence={can("artifact.read")}
+          onCreateDraft={focusNaturalLanguageInput}
+          onOpenTest={(scenarioId) => navigate("create", scenarioId === undefined ? { focus: "test" } : { scenario: scenarioId, focus: "test" })}
+        />
+      )}
 
-      <div ref={testWorkbenchRef}>
-        <ScenarioTestWorkbench embedded createRoute="create" />
-      </div>
+      {/* F3: 기존 자동화 테스트/녹화는 접힌 details 로 — focus=test 딥링크는 phase 와 무관하게 워크벤치를 보장(계약 유지). */}
+      {(idle || focusParam === "test") && (
+        <div ref={testWorkbenchRef}>
+          <details
+            className="panel collapse-panel"
+            open={workbenchOpen}
+            onToggle={(event) => setWorkbenchOpen((event.currentTarget as HTMLDetailsElement).open)}
+          >
+            <summary>
+              기존 자동화 테스트
+              <span className="subtle">저장된 자동화의 실행 계획 확인과 테스트 실행</span>
+            </summary>
+            <div className="collapse-panel-body">
+              <ScenarioTestWorkbench embedded createRoute="create" />
+            </div>
+          </details>
+        </div>
+      )}
 
-      {can("scenario.create") && (
+      {idle && can("scenario.create") && (
         <div ref={recorderRef}>
-          <BrowserRecorderPanel />
+          <details
+            className="panel collapse-panel"
+            open={recorderOpen}
+            onToggle={(event) => setRecorderOpen((event.currentTarget as HTMLDetailsElement).open)}
+          >
+            <summary>
+              브라우저 녹화로 만들기
+              <span className="subtle">화면을 따라 하며 클릭·입력 순서를 녹화해 초안을 만듭니다</span>
+            </summary>
+            <div className="collapse-panel-body">
+              <BrowserRecorderPanel />
+            </div>
+          </details>
         </div>
       )}
     </div>

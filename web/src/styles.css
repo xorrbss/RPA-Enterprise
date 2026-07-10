@@ -2247,3 +2247,18 @@ tr[data-focus="true"] td { background: var(--amber-soft); }
   background: rgba(59, 130, 246, 0.07);
 }
 .palette-trigger { display: inline-flex; align-items: center; gap: 4px; }
+
+/* F3: 만들기 홈 원패스 셸 — 접힘은 기존 details 관례(새 아코디언·단계 칩·프로그레스 바 금지). */
+.generator-form-stack { display: grid; gap: 12px; }
+.generator-locked { border: 0; margin: 0; padding: 0; min-width: 0; }
+.generator-request-details > summary { overflow-wrap: anywhere; }
+.generator-summary-hidden { display: none; }
+.generator-request-details.developer-details > .generator-form-stack { margin-top: 12px; }
+.generator-request-line { color: var(--text); font-weight: 400; }
+.generation-history-details > .generation-history { margin-top: 10px; }
+.collapse-panel > summary { cursor: pointer; user-select: none; padding: 14px 16px; font-size: 14px; font-weight: 600; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.collapse-panel > summary .subtle { font-weight: 400; font-size: 13px; }
+.collapse-panel[open] > summary { border-bottom: 1px solid var(--line); }
+.collapse-panel > .collapse-panel-body { padding: 12px 16px; }
+.collapse-panel > .collapse-panel-body > .panel { border: 0; box-shadow: none; }
+.setup-corridor.collapse-panel .panel-head { border-bottom: 0; }

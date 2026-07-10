@@ -17,25 +17,29 @@ import {
 import { AdvancedSettings } from "./prompt-generator/AdvancedSettings";
 import { GenerationHistory } from "./prompt-generator/GenerationHistory";
 import { GenerationResult } from "./prompt-generator/GenerationResult";
+import { GenerationTestAction } from "./prompt-generator/GenerationTestAction";
 import { GeneratorFormFields } from "./prompt-generator/GeneratorFormFields";
+import { GeneratorFormShell } from "./prompt-generator/GeneratorFormShell";
 import { useGenerationActions } from "./prompt-generator/useGenerationActions";
 import { usePrefill } from "./prompt-generator/usePrefill";
+import { TestProgress } from "./easy-create/TestProgress";
+import { useEasyGeneration, type EasyGenerationPhase } from "./easy-create/useEasyGeneration";
 import {
-  DEFAULT_AVAILABLE_PLANNERS,
-  FALLBACK_SCREENSHOT_POLICIES,
-  FALLBACK_VIDEO_POLICIES,
   createdSiteToItem,
-  firstAllowedPolicy,
   screenshotPolicyLabel,
   videoPolicyLabel,
   type ScreenshotPolicy,
   type VideoPolicy,
 } from "./prompt-generator/helpers";
+import { useEvidencePolicySync } from "./prompt-generator/useEvidencePolicySync";
 
 export function PromptScenarioGenerator({
   defaultMode = "save_and_run",
+  onPhaseChange,
 }: {
   readonly defaultMode?: ScenarioGenerationRequest["mode"];
+  // F3: 원패스 phase 를 호스트(만들기 홈)에 통지 — 홈이 phase 매트릭스(§3.3)로 섹션 노출을 게이팅한다.
+  readonly onPhaseChange?: (phase: EasyGenerationPhase) => void;
 } = {}): JSX.Element {
   const api = useApiClient();
   const can = useCan();
@@ -73,12 +77,24 @@ export function PromptScenarioGenerator({
   const [video, setVideo] = useState<VideoPolicy>("never");
   const [videoTouched, setVideoTouched] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
-  const [result, setResult] = useState<ScenarioGenerationResult | null>(null);
+  const [result, setResultState] = useState<ScenarioGenerationResult | null>(null);
+  // F3: 홈 안 테스트 실행 추적(TESTING). 해시 미보존 — 새로고침 시 IDLE 복귀 수용(YAGNI, 레지스터 기록).
+  const [testRunId, setTestRunId] = useState<string | null>(null);
+  // F3: PREVIEW/TESTING 의 입력 폼 접힘("요청 고치기") 상태 — 새 결과가 오면 접는다.
+  const [formOpen, setFormOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [siteCreateOpenSignal, setSiteCreateOpenSignal] = useState(0);
   // 고급 설정(<details>) 펼침 상태 — 모델 지정 필요·params 보정 시 자동으로 펼쳐 묻힘(무음 no-op) 방지.
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [developerOpen, setDeveloperOpen] = useState(false);
   const [paramsJsonOpen, setParamsJsonOpen] = useState(false);
+
+  // F3: 결과 교체/초기화 시 테스트 추적·폼 접힘을 함께 리셋 — 이전 실행 진행이 새 초안에 붙는 오표시 방지.
+  function setResult(next: ScenarioGenerationResult | null): void {
+    setResultState(next);
+    setTestRunId(null);
+    setFormOpen(false);
+  }
   const startUrlInputRef = useRef<HTMLInputElement | null>(null);
   const siteSelectRef = useRef<HTMLSelectElement | null>(null);
   const paramsInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -89,23 +105,24 @@ export function PromptScenarioGenerator({
 
   const actionLabel = mode === "save_and_run" ? "저장 후 실행" : mode === "save" ? "자동화 초안 만들기" : "초안 생성";
   const evidenceSettingsLoading = capabilities.isLoading;
-  const screenshotCapability = capabilities.data?.visual_evidence.screenshot;
-  const screenshotRecordingEnabled = screenshotCapability?.enabled === true;
-  const screenshotPolicies = useMemo<readonly ScreenshotPolicy[]>(
-    () => (screenshotCapability?.policies.length ? screenshotCapability.policies : FALLBACK_SCREENSHOT_POLICIES),
-    [screenshotCapability?.policies],
-  );
-  const screenshotDefaultPolicy = screenshotCapability?.default_policy ?? (screenshotRecordingEnabled ? "each_step" : "never");
-  const videoCapability = capabilities.data?.visual_evidence.video;
-  const videoRecordingEnabled = videoCapability?.enabled === true;
-  const videoPolicies = useMemo<readonly VideoPolicy[]>(
-    () => (videoCapability?.policies.length ? videoCapability.policies : FALLBACK_VIDEO_POLICIES),
-    [videoCapability?.policies],
-  );
-  const videoDefaultPolicy = videoCapability?.default_policy ?? (videoRecordingEnabled ? "always" : "never");
-  const plannerCapability = capabilities.data?.planner;
-  const availablePlanners = plannerCapability?.available ?? DEFAULT_AVAILABLE_PLANNERS;
-  const defaultPlanner = plannerCapability?.default_planner ?? "deterministic_mvp";
+  const {
+    screenshotPolicies,
+    screenshotRecordingEnabled,
+    screenshotLoaded,
+    videoPolicies,
+    videoRecordingEnabled,
+    availablePlanners,
+  } = useEvidencePolicySync({
+    capabilities: capabilities.data,
+    screenshot,
+    screenshotTouched,
+    setScreenshot,
+    video,
+    videoTouched,
+    setVideo,
+    planner,
+    setPlanner,
+  });
   const policyCheck = useQuery({
     queryKey: ["scenario-generator-model-check", checkedModel],
     queryFn: () => api.getGatewayPolicy(checkedModel),
@@ -131,29 +148,32 @@ export function PromptScenarioGenerator({
     targetManuallyEditedRef.current = true;
   }
 
-  function focusField(element: HTMLElement | null): void {
-    element?.focus();
-    element?.scrollIntoView?.({ block: "center" });
-  }
-
-  function openDeveloperThen(focus: () => void): void {
-    setAdvancedOpen(true);
-    setDeveloperOpen(true);
-    if (typeof window.requestAnimationFrame === "function") {
-      window.requestAnimationFrame(focus);
-      return;
-    }
-    window.setTimeout(focus, 0);
-  }
-
-  function openInlineSiteCreate(): void {
-    setSiteCreateOpenSignal((value) => value + 1);
-    const reveal = () => siteCreateRef.current?.scrollIntoView?.({ block: "center" });
+  // 접힌 폼(<details>)이 펼쳐진 다음 프레임에 포커스/스크롤 — 닫힌 요소에 대한 무음 no-op 방지.
+  function afterFormOpen(reveal: () => void): void {
+    setFormOpen(true);
     if (typeof window.requestAnimationFrame === "function") {
       window.requestAnimationFrame(reveal);
       return;
     }
     window.setTimeout(reveal, 0);
+  }
+
+  function focusField(element: HTMLElement | null): void {
+    afterFormOpen(() => {
+      element?.focus();
+      element?.scrollIntoView?.({ block: "center" });
+    });
+  }
+
+  function openDeveloperThen(focus: () => void): void {
+    setAdvancedOpen(true);
+    setDeveloperOpen(true);
+    afterFormOpen(focus);
+  }
+
+  function openInlineSiteCreate(): void {
+    setSiteCreateOpenSignal((value) => value + 1);
+    afterFormOpen(() => siteCreateRef.current?.scrollIntoView?.({ block: "center" }));
   }
 
   function openSiteSecurity(siteId?: string): void {
@@ -247,44 +267,6 @@ export function PromptScenarioGenerator({
     applySiteDefaults,
   });
 
-  useEffect(() => {
-    if (screenshotCapability === undefined) return;
-    if (!screenshotCapability.enabled) {
-      const next = firstAllowedPolicy(screenshotPolicies, "never", "never");
-      if (screenshot !== next) setScreenshot(next);
-      return;
-    }
-    if (!screenshotPolicies.includes(screenshot)) {
-      setScreenshot(firstAllowedPolicy(screenshotPolicies, screenshotDefaultPolicy, "never"));
-      return;
-    }
-    if (!screenshotTouched && screenshot !== screenshotDefaultPolicy && screenshotPolicies.includes(screenshotDefaultPolicy)) {
-      setScreenshot(screenshotDefaultPolicy);
-    }
-  }, [screenshot, screenshotCapability, screenshotDefaultPolicy, screenshotPolicies, screenshotTouched]);
-
-  useEffect(() => {
-    if (videoCapability === undefined) return;
-    if (!videoCapability.enabled) {
-      const next = firstAllowedPolicy(videoPolicies, "never", "never");
-      if (video !== next) setVideo(next);
-      return;
-    }
-    if (!videoPolicies.includes(video)) {
-      setVideo(firstAllowedPolicy(videoPolicies, videoDefaultPolicy, "never"));
-      return;
-    }
-    if (!videoTouched && video === "never" && videoPolicies.includes(videoDefaultPolicy)) {
-      setVideo(videoDefaultPolicy);
-    }
-  }, [video, videoCapability, videoDefaultPolicy, videoPolicies, videoTouched]);
-
-  useEffect(() => {
-    if (!availablePlanners.includes(planner)) {
-      setPlanner(defaultPlanner);
-    }
-  }, [availablePlanners, defaultPlanner, planner]);
-
   const actions = useGenerationActions({
     prompt,
     name,
@@ -323,13 +305,22 @@ export function PromptScenarioGenerator({
 
   const correctionGuide = result === null ? null : actions.currentCorrectionGuide(result);
 
-  return (
-    <section className="panel scenario-generator">
-      <div className="panel-head">
-        <h2>말로 설명해 만들기</h2>
-      </div>
-      <div className="scenario-generator-body">
-        <GeneratorFormFields
+  // F3: 원패스 phase(§3.2) — 파생 계산만, 전이 로직은 기존 actions 가 소유.
+  const phase = useEasyGeneration({ generating: actions.generatePending, result, testRunId });
+  useEffect(() => {
+    onPhaseChange?.(phase);
+  }, [onPhaseChange, phase]);
+  // 모델 지정 요구가 접힌 폼 뒤에 묻히지 않게 자동 펼침(조용한 무반응 금지).
+  useEffect(() => {
+    if (modelRequired !== null) setFormOpen(true);
+  }, [modelRequired]);
+
+  const requestLine = prompt.trim().split("\n")[0]?.slice(0, 80) ?? "";
+  const requestSummary = requestLine.length > 0 ? requestLine : "요청 내용 보호됨";
+
+  const formBlock = (
+    <>
+      <GeneratorFormFields
           prompt={prompt}
           onPromptChange={setPrompt}
           startUrl={startUrl}
@@ -371,7 +362,7 @@ export function PromptScenarioGenerator({
           screenshot={screenshot}
           onScreenshot={(next) => { setScreenshotTouched(true); setScreenshot(next); }}
           screenshotPolicies={screenshotPolicies}
-          screenshotLoaded={screenshotCapability !== undefined}
+          screenshotLoaded={screenshotLoaded}
           screenshotRecordingEnabled={screenshotRecordingEnabled}
           video={video}
           onVideo={(next) => { setVideoTouched(true); setVideo(next); }}
@@ -423,12 +414,26 @@ export function PromptScenarioGenerator({
             {videoPolicyLabel(video)}
           </span>
         </div>
+    </>
+  );
+
+  // F3 phase 매트릭스(§3.3): GENERATING=폼 잠금+진행 표시(나머지 숨김), PREVIEW=접힌 요약+결과가 주인공,
+  // TESTING=결과 유지+TestProgress 홈 내 렌더(화면 이동 없음). 오류는 접힘 밖에 상시 표기(묻힘 금지).
+  return (
+    <section className="panel scenario-generator">
+      <div className="panel-head">
+        <h2>말로 설명해 만들기</h2>
+      </div>
+      <div className="scenario-generator-body">
+        <GeneratorFormShell phase={phase} requestSummary={requestSummary} formOpen={formOpen} onFormOpenChange={setFormOpen}>
+          {formBlock}
+        </GeneratorFormShell>
         {localError !== null && (
           <div className="form-alert red" role="alert">
             {localError}
           </div>
         )}
-        {result !== null && (
+        {phase !== "GENERATING" && result !== null && (
           <GenerationResult
             result={result}
             correctionGuide={correctionGuide}
@@ -447,12 +452,29 @@ export function PromptScenarioGenerator({
               setVideoTouched(true);
               setVideo("never");
             }}
+            testAction={
+              result.scenario_id === null ? undefined : (
+                <GenerationTestAction scenarioId={result.scenario_id} onStarted={setTestRunId} />
+              )
+            }
           />
         )}
-        <GenerationHistory
-          selectedGenerationId={result?.generation_id ?? null}
-          onSelect={actions.selectGeneration}
-        />
+        {phase === "TESTING" && result !== null && testRunId !== null && (
+          <TestProgress runId={testRunId} ir={result.draft_ir} />
+        )}
+        {phase !== "GENERATING" && (
+          <details
+            className="developer-details generation-history-details"
+            open={historyOpen}
+            onToggle={(event) => setHistoryOpen((event.currentTarget as HTMLDetailsElement).open)}
+          >
+            <summary>최근 생성 이력·다음 액션 보기</summary>
+            <GenerationHistory
+              selectedGenerationId={result?.generation_id ?? null}
+              onSelect={actions.selectGeneration}
+            />
+          </details>
+        )}
       </div>
     </section>
   );
