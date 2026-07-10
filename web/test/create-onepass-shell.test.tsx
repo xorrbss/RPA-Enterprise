@@ -16,7 +16,7 @@ function jwt(roles: readonly string[]): string {
   return `e30.${payload}.sig`;
 }
 
-function renderApp(client: ApiClient): void {
+function renderApp(client: ApiClient): QueryClient {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
@@ -25,6 +25,7 @@ function renderApp(client: ApiClient): void {
       </ApiClientProvider>
     </QueryClientProvider>,
   );
+  return qc;
 }
 
 const SCENARIO_ID = "00000000-0000-0000-0000-0000000000c1";
@@ -146,6 +147,65 @@ describe("create one-pass shell (F3)", () => {
     expect(screen.queryByText("브라우저 녹화로 만들기")).toBeNull();
     // 목록 미동기화 상태의 테스트 CTA 는 사유를 문장으로(조용한 부재 금지 — 기본 fake 목록은 빈 목록).
     expect(screen.getByText(/테스트 실행 준비 중/)).toBeInTheDocument();
+  });
+
+  test("PREVIEW: F2 말로 고치기(ReviseControl)·변경 표시가 원패스 셸에서 유실되지 않는다", async () => {
+    location.hash = "#create";
+    const baseIr = {
+      start: "a",
+      nodes: {
+        a: { what: [{ action: "observe", instruction: "원래 단계" }], next: "b" },
+        b: { what: [{ action: "extract", instruction: "지워질 단계" }], terminal: "success" },
+      },
+    };
+    const revisedIr = {
+      start: "a",
+      nodes: { a: { what: [{ action: "observe", instruction: "고쳐진 단계" }], terminal: "success" } },
+    };
+    const generation = {
+      generation_id: "00000000-0000-0000-0000-0000000000a1",
+      mode: "save" as const,
+      status: "saved" as const,
+      prompt_hash: "hash",
+      planner: "deterministic_mvp" as const,
+      model: null,
+      scenario_id: SCENARIO_ID,
+      scenario_version_id: "00000000-0000-0000-0000-0000000000c2",
+      run_id: null,
+      evidence_policy: { screenshot: "each_step" as const, video: "never" as const },
+      blockers: [],
+      created_at: "2026-07-10T00:00:00.000Z",
+      created_by: "operator",
+      validation_report: {},
+    };
+    const qc = renderApp(
+      fakeClient({
+        generateScenario: async () => ({ ...generation, draft_ir: baseIr }),
+        reviseScenarioGeneration: async () => ({
+          ...generation,
+          generation_id: "00000000-0000-0000-0000-0000000000a2",
+          scenario_version_id: "00000000-0000-0000-0000-0000000000c3",
+          draft_ir: revisedIr,
+        }),
+      }),
+    );
+
+    await submitDraft();
+    await screen.findByText("초안 미리보기");
+
+    // PREVIEW 주인공 화면에 말로 고치기 입력이 살아 있다(F2 배선 보존).
+    // base_version 조회(scenario-detail)가 로드된 뒤에 제출해야 한다(ReviseControl 은 버전 미확인 시 정직 거절).
+    await waitFor(() => expect(qc.getQueryData(["scenario-detail", SCENARIO_ID])).toBeDefined());
+    fireEvent.change(screen.getByLabelText("수정 요청 입력"), { target: { value: "b 단계는 빼줘" } });
+    fireEvent.click(screen.getByRole("button", { name: "말로 고치기" }));
+
+    // 새 초안으로 교체 + 변경 표시(달라진 단계 배지·빠진 단계 요약)가 겹친다.
+    expect(await screen.findByText(/고쳐진 단계/)).toBeInTheDocument();
+    expect(screen.getByText("달라진 단계")).toBeInTheDocument();
+    expect(screen.getByText("이전 초안에서 빠진 단계 1개")).toBeInTheDocument();
+    // revise 후에도 PREVIEW 유지 — 폼은 접힌 요약, 홈 섹션은 계속 숨김.
+    expect(detailsOf("요청 고치기").open).toBe(false);
+    expect(screen.queryByRole("region", { name: "만들기 기본 경로" })).toBeNull();
   });
 
   test("TESTING: 테스트 실행이 화면 이동 없이 홈 안 TestProgress 로 이어진다", async () => {
