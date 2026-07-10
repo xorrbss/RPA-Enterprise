@@ -10,7 +10,7 @@ import { navigate } from "../../router";
 import { formatDateTime } from "../../util/time";
 import { RunModeBadge, StatusBadge } from "../../components/badges";
 import { assessTestRunReadiness, runStatusLabel } from "../../components/readiness";
-import type { RunItem, ScenarioItem } from "../../api/types";
+import type { RunItem, ScenarioDetail, ScenarioItem } from "../../api/types";
 
 type FocusTab = "plan" | "test" | "links" | "activity" | "versions" | "settings";
 
@@ -282,9 +282,21 @@ function DesignStepCards({ scenarioId }: { readonly scenarioId: string }): JSX.E
     queryFn: () => api.listScenarioGenerations({ scenario_id: scenarioId, limit: 1 }),
   });
   const [reviseDiff, setReviseDiff] = useState<StepDiff | null>(null);
+  // N1: revise 성공 diff 는 저장본끼리(v1 vs v2) 비교한다 — 응답 draft_ir 은 instruction 이 redaction 되어
+  // 비redaction 저장본과 비교하면 동일 노드가 마스킹 차이만으로 가짜 "달라진 단계"가 된다. 이전 저장본(v1)은
+  // refetch 로 v2 가 되기 전에 스냅샷으로 보관하고, ReviseControl 이 invalidate 한 scenario-detail 재조회가
+  // 새 data 객체(v2)로 도착한 뒤 계산한다(도착 전 계산 금지 — react-query 는 성공 refetch 시 객체를 교체한다).
+  const [pendingDiffBase, setPendingDiffBase] = useState<{ readonly base: ScenarioDetail | undefined } | null>(null);
   useEffect(() => {
     setReviseDiff(null);
+    setPendingDiffBase(null);
   }, [scenarioId]);
+  useEffect(() => {
+    if (pendingDiffBase === null || detail.data === undefined) return;
+    if (detail.data === pendingDiffBase.base) return; // 아직 v1 캐시 그대로 — v2 도착 대기
+    setReviseDiff(diffDraftIr(pendingDiffBase.base?.ir, detail.data.ir));
+    setPendingDiffBase(null);
+  }, [pendingDiffBase, detail.data]);
 
   if (detail.isLoading) return <p className="subtle">초안을 불러오는 중입니다.</p>;
   if (detail.isError) return <p className="subtle">초안을 불러오지 못했습니다 — 새로고침 후 다시 확인하세요.</p>;
@@ -314,7 +326,7 @@ function DesignStepCards({ scenarioId }: { readonly scenarioId: string }): JSX.E
         <ReviseControl
           generationId={latestGeneration.generation_id}
           scenarioId={scenarioId}
-          onRevised={(next) => setReviseDiff(diffDraftIr(detail.data?.ir, next.draft_ir))}
+          onRevised={() => setPendingDiffBase({ base: detail.data })}
         />
       )}
     </>
