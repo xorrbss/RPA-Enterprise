@@ -51,3 +51,4 @@ PR → CI green → 머지 → main green 확인 후 다음. 문서 file:line은
 | E5′ 설계 탭 실초안 | ✅머지 | #441 | web 1015·CI 12/12 | 집중 스튜디오 설계 탭에 StepCards(scenario-detail 공유). 말로 고치기=P1 확정(원본 프롬프트 접근 계약 부재 — 설계 §13 revision API 후보 유지) |
 | E6 템플릿 갤러리 | ✅머지 | #440 | web 1015·CI 12/12(픽스처 타입 1회 수정) | 홈 갤러리(listTemplates+카탈로그 프리필 계약 재사용). creator 파라미터=STALE(Phase 7이 소비 로직 신설). easy-labels 사전=T4 게이트로 최소선 충족, 위저드 셸 부재로 보류(설계 개정 기록) |
 | E7+T7 스튜디오 액션 재편 | ✅머지 | #439 | web 1015·CI 12/12 | 행 [열기][실행]+더 보기(테스트 계획·편집·이력·배포·운영 기준·보관), 용어 단일화(테스트), 실행 기준 단정 배지 열 삭제 |
+| F6 step-sentences 폴백 정밀화 | ✅머지 | #443 | web 1020(step-sentences 22→27)·lint:copy·CI 11/11 | 객체형 예약 핸들러({handler}) 문장 재사용+"[object Object]" 제거·fallback_chain 전용 노드 문장 신설·평범한 next 기본 문장 유지. §8-⑥: 설계 초안 "대비 방법"은 기존 어휘와 통일해 "대체 경로"로 확정 |

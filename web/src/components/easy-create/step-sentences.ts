@@ -127,10 +127,13 @@ const TERMINAL_SENTENCES: Record<string, string> = {
   fail_system: "시스템 실패로 종료합니다",
 };
 
-function reservedTargetLabel(target: string): string | null {
-  if (target === "@human_task") return "→ 사람 확인으로";
-  if (target === "@challenge") return "→ 추가 인증 처리로";
-  if (target === "@end_no_data") return "→ 데이터 없으면 종료";
+// 예약 핸들러 target — 문자열형(@end_no_data 등)과 호출 객체형({handler,input,return_node},
+// ir.schema.json §reservedHandlerCall) 모두 같은 문장으로 매칭한다("[object Object]" 렌더 금지, F6).
+function reservedTargetLabel(target: unknown): string | null {
+  const handler = isRec(target) ? str(target.handler) : typeof target === "string" ? target : null;
+  if (handler === "@human_task") return "→ 사람 확인으로";
+  if (handler === "@challenge") return "→ 추가 인증 처리로";
+  if (handler === "@end_no_data") return "→ 데이터 없으면 종료";
   return null;
 }
 
@@ -139,7 +142,7 @@ function flowNote(node: Rec): FlowNote | undefined {
     // when(IREL 원문)은 요약 금지 — detail 원문 그대로.
     const detail = node.on
       .filter(isRec)
-      .map((branch) => `${String(branch.when ?? "")} → ${reservedTargetLabel(String(branch.target ?? "")) ?? String(branch.target ?? "")}`)
+      .map((branch) => `${String(branch.when ?? "")} → ${reservedTargetLabel(branch.target) ?? String(branch.target ?? "")}`)
       .join("\n");
     return { kind: "branch", label: "조건에 따라 나뉩니다", detail };
   }
@@ -151,10 +154,11 @@ function flowNote(node: Rec): FlowNote | undefined {
     const terminal = String(node.terminal);
     return { kind: "terminal", label: TERMINAL_SENTENCES[terminal] ?? `종료: ${terminal}` };
   }
-  const next = str(node.next);
-  if (next !== null) {
-    const reserved = reservedTargetLabel(next);
-    if (reserved !== null) return { kind: "next", label: reserved };
+  const reservedNext = reservedTargetLabel(node.next);
+  if (reservedNext !== null) return { kind: "next", label: reservedNext };
+  if (Array.isArray(node.fallback_chain) && node.fallback_chain.length > 0) {
+    // fallback_chain 전용 노드(스키마상 유일 flow 키) — 기본 문장 대신 대체 경로 문장(F6, 어휘는 기존 "대체 경로" 계열과 통일).
+    return { kind: "fallback", label: `잘 안 되면 대체 경로 ${node.fallback_chain.length}개를 차례로 시도합니다` };
   }
   return undefined;
 }
