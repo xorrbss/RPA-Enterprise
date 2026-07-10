@@ -21,3 +21,27 @@ export function groupOpsAlerts(alerts: readonly OpsAlertItem[]): OpsAlertGroup[]
   });
   return [...groups.values()];
 }
+
+// F4: 소스 라벨·route 이동도 그룹핑과 같은 이유로 공용 유틸로 이동(벨은 components/layout 이라 views 역참조 금지).
+// 기존 소비처(views/orchestration/ops-alert-labels.ts)는 재수출로 경로 호환 유지.
+export function opsAlertSourceLabel(source: OpsAlertItem["source"]): string {
+  if (source === "run_sla") return "실행 SLA";
+  if (source === "human_task_sla") return "사람 작업 SLA";
+  if (source === "trigger_fire") return "트리거 발화";
+  if (source === "failure_spike") return "실패 급증";
+  if (source === "session_expiry") return "로그인 세션 만료";
+  if (source === "artifact_redaction") return "증빙 보호 실패";
+  if (source === "security_abort") return "보안 차단 중단";
+  if (source === "bot_pool") return "Bot Pool";
+  if (source === "scim_secret_rotation") return "SCIM SecretRef";
+  if (source === "readiness_evidence") return "운영 전환 준비";
+  if (source === "audit_verifier") return "감사 체인";
+  return "재처리 대기";
+}
+
+export function navigateAlertRoute(route: string | null): void {
+  if (route === null) return;
+  const trimmed = route.trim();
+  if (trimmed.length === 0) return;
+  location.hash = trimmed.startsWith("#") ? trimmed : `#${trimmed.replace(/^\/+/, "")}`;
+}

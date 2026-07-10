@@ -94,7 +94,7 @@ function dashboardClient(overrides: Partial<ApiClient> = {}): ApiClient {
           status: "open",
           delivery: { channel: "console", status: "delivered", delivered_at: "2026-06-23T09:03:00.000Z", external_delivery: false },
           ack: null,
-          recommended_action: "공통 장애 여부를 점검하세요.",
+          recommended_action: "실행 기록에서 failed_system 원인을 점검하세요.",
           route: "#runTrace",
           detected_at: "2026-06-23T09:03:00.000Z",
           due_at: null,
@@ -110,7 +110,7 @@ function dashboardClient(overrides: Partial<ApiClient> = {}): ApiClient {
           status: "open",
           delivery: { channel: "console", status: "delivered", delivered_at: "2026-06-23T09:04:00.000Z", external_delivery: false },
           ack: null,
-          recommended_action: "Audit Explorer에서 검증 실행 증적을 확인하세요.",
+          recommended_action: "감사 이력 화면에서 검증 실행 증적을 확인하세요.",
           route: "#auditExplorer",
           detected_at: "2026-06-23T09:04:00.000Z",
           due_at: null,
@@ -341,7 +341,10 @@ describe("대시보드 관찰성 지표(run outcome 집계 + 성공률)", () => 
     expect(screen.getByText("실패 급증 감지")).toBeInTheDocument();
     expect(screen.getByText("감사 체인 검증 증적 지연")).toBeInTheDocument();
     expect(screen.getByText("실행 SLA · 실행 기록에서 병목 단계를 확인하세요.")).toBeInTheDocument();
-    expect(screen.getByText("감사 체인 · Audit Explorer에서 검증 실행 증적을 확인하세요.")).toBeInTheDocument();
+    expect(screen.getByText("감사 체인 · 감사 이력 화면에서 검증 실행 증적을 확인하세요.")).toBeInTheDocument();
+    // F4: 권장 조치도 알림 센터와 동일하게 raw enum 을 한국어로 치환한다(failed_system → 시스템 실패).
+    expect(screen.getByText("실패 급증 · 실행 기록에서 시스템 실패 원인을 점검하세요.")).toBeInTheDocument();
+    expect(screen.queryByText(/failed_system/)).toBeNull();
 
     screen.getByRole("button", { name: "월말 정산 실행 SLA 초과" }).click();
     await waitFor(() => expect(location.hash).toBe("#runTrace?run=run-ops-1"));

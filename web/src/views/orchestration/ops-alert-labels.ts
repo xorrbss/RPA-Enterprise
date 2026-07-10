@@ -20,8 +20,9 @@ export const ALERT_SOURCE_FILTER_OPTIONS: ReadonlyArray<{ readonly value: AlertS
   { value: "audit_verifier", label: "감사 체인" },
 ];
 
-// 그룹핑은 공용 유틸로 이동(T1/T2) — 알림 센터·대시보드·상단바 벨이 같은 규칙을 소비한다. 기존 import 경로 호환 재수출.
-export { groupOpsAlerts, type OpsAlertGroup } from "../../util/ops-alerts";
+// 그룹핑·소스 라벨·route 이동은 공용 유틸로 이동(T1/T2·F4) — 알림 센터·대시보드·상단바 벨이 같은 규칙을
+// 소비한다. 기존 import 경로 호환 재수출.
+export { groupOpsAlerts, navigateAlertRoute, opsAlertSourceLabel, type OpsAlertGroup } from "../../util/ops-alerts";
 
 export function localizeStatusText(value: string): string {
   // 알림 detail 문장 내 raw enum → 운영자 한국어. 상태(run/human-task state·발송 상태)에 더해 사람 확인 종류(kind)도
@@ -60,13 +61,6 @@ export function deliveryStatusTone(status: OpsNotificationDelivery["status"]): "
   return "amber";
 }
 
-export function navigateAlertRoute(route: string | null): void {
-  if (route === null) return;
-  const trimmed = route.trim();
-  if (trimmed.length === 0) return;
-  location.hash = trimmed.startsWith("#") ? trimmed : `#${trimmed.replace(/^\/+/, "")}`;
-}
-
 export function alertSeverityTone(severity: OpsAlertItem["severity"]): "red" | "amber" | "blue" {
   if (severity === "critical") return "red";
   if (severity === "warning") return "amber";
@@ -77,21 +71,6 @@ export function alertSeverityLabel(severity: OpsAlertItem["severity"]): string {
   if (severity === "critical") return "위험";
   if (severity === "warning") return "주의";
   return "정보";
-}
-
-export function opsAlertSourceLabel(source: OpsAlertItem["source"]): string {
-  if (source === "run_sla") return "실행 SLA";
-  if (source === "human_task_sla") return "사람 작업 SLA";
-  if (source === "trigger_fire") return "트리거 발화";
-  if (source === "failure_spike") return "실패 급증";
-  if (source === "session_expiry") return "로그인 세션 만료";
-  if (source === "artifact_redaction") return "증빙 보호 실패";
-  if (source === "security_abort") return "보안 차단 중단";
-  if (source === "bot_pool") return "Bot Pool";
-  if (source === "scim_secret_rotation") return "SCIM SecretRef";
-  if (source === "readiness_evidence") return "운영 전환 준비";
-  if (source === "audit_verifier") return "감사 체인";
-  return "재처리 대기";
 }
 
 export function opsAlertTiming(alert: OpsAlertItem): string {

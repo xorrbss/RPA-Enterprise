@@ -1,7 +1,8 @@
 import { ErrorState, desktopStateForError } from "../../components/states";
 import { navigate } from "../../router";
 import { formatDateTime } from "../../util/time";
-import { groupOpsAlerts } from "../../util/ops-alerts";
+import { groupOpsAlerts, opsAlertSourceLabel } from "../../util/ops-alerts";
+import { localizeStatusText } from "../orchestration/ops-alert-labels";
 import type { OpsAlertItem, OpsHealth } from "../../api/types";
 
 export function OpsSignalPanel({
@@ -67,7 +68,8 @@ export function OpsSignalPanel({
                     </button>
                     {count > 1 && <span className="badge muted">외 {count - 1}건</span>}
                   </span>
-                  <span className="subtle">{opsAlertSourceLabel(alert.source)} · {alert.recommended_action}</span>
+                  {/* F4: 권장 조치도 알림 센터(OpsAlertCenter)와 동일하게 enum 토큰을 한국어로 치환. */}
+                  <span className="subtle">{opsAlertSourceLabel(alert.source)} · {localizeStatusText(alert.recommended_action)}</span>
                 </li>
               ))}
             </ul>
@@ -109,16 +111,8 @@ function opsAlertSeverityLabel(severity: OpsAlertItem["severity"]): string {
   return "정보";
 }
 
-function opsAlertSourceLabel(source: OpsAlertItem["source"]): string {
-  if (source === "run_sla") return "실행 SLA";
-  if (source === "human_task_sla") return "사람 작업 SLA";
-  if (source === "trigger_fire") return "트리거 발화";
-  if (source === "failure_spike") return "실패 급증";
-  if (source === "bot_pool") return "Bot Pool";
-  if (source === "scim_secret_rotation") return "SCIM SecretRef";
-  if (source === "audit_verifier") return "감사 체인";
-  return "재처리 대기";
-}
+// F4: 로컬 소스 라벨 중복 제거 — session_expiry 등 4개 소스가 누락돼 "재처리 대기"로 오라벨되던 것을
+// 공용 util/ops-alerts.opsAlertSourceLabel(12종 완비)로 교체.
 
 function navigateOpsAlert(route: string | null): void {
   if (route === null || route.trim().length === 0) {

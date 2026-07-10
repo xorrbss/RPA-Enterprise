@@ -132,8 +132,56 @@ body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* T1: 알림 벨 — 운영 알림·준비 차단을 모으는 단일 진입점. 배지 색이 곧 최고 심각도. */
-.topbar-alert-bell { position: relative; }
+/* T1: 알림 벨 — 운영 알림·준비 차단을 모으는 단일 진입점. 배지 색이 곧 최고 심각도.
+   F4: 벨 클릭은 즉시 이동 대신 미리보기 팝오버(닫힘 규약은 create-menu 와 동일 usePopoverDismiss). */
+.topbar-alert-bell { position: relative; display: inline-flex; flex: 0 0 auto; }
+.alert-bell-trigger { position: relative; }
+.alert-bell-trigger[aria-expanded="true"] { background: var(--blue-soft); border-color: var(--blue); color: var(--blue-ink); }
+.alert-bell-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 35;
+  width: min(340px, calc(100vw - 32px));
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.alert-bell-item {
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 9px 10px;
+  text-align: left;
+  font: inherit;
+}
+.alert-bell-item:hover,
+.alert-bell-item:focus-visible { background: var(--soft); }
+.alert-bell-item-copy { min-width: 0; display: grid; gap: 2px; }
+.alert-bell-item-copy strong { font-size: 13px; overflow-wrap: anywhere; display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.alert-bell-item-copy small { color: var(--muted); font-size: 12px; line-height: 1.35; }
+.alert-bell-note { padding: 9px 10px; color: var(--muted); font-size: 12px; }
+.alert-bell-more {
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--blue-ink);
+  cursor: pointer;
+  padding: 9px 10px 4px;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+}
+.alert-bell-more:hover,
+.alert-bell-more:focus-visible { text-decoration: underline; }
 .alert-bell-count {
   position: absolute;
   top: -5px;

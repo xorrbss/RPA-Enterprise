@@ -6,6 +6,7 @@
  */
 import type { PoolClient } from "pg";
 
+import { ERROR_CATALOG, type ErrorCode } from "../../../../ts/error-catalog";
 import { readArtifactRedactionAlertById, readArtifactRedactionAlerts } from "./artifact-redaction";
 import {
   readAuditVerifierAlertById,
@@ -393,7 +394,7 @@ function mapTriggerFireAlert(row: TriggerFireRow): ComputedOpsAlert {
     severity: row.status === "failed" ? "critical" : "warning",
     source: "trigger_fire",
     title: row.status === "failed" ? "예약 실행 실패" : "예약 실행 건너뜀",
-    detail: `${row.scheduled_for.toISOString()} 예약 fire가 ${row.status} 상태입니다.${code !== null ? ` 사유: ${code}` : ""}`,
+    detail: `${row.scheduled_for.toISOString()} 예약 실행(fire)이 ${row.status} 상태입니다.${code !== null ? ` 사유: ${describeFailureCode(code)}` : ""}`,
     subject_type: "run_trigger",
     subject_id: row.trigger_id,
     recommended_action: "예약 설정과 최대 동시 실행 수, 실패 사유를 확인하세요.",
@@ -445,4 +446,11 @@ function failureCode(value: unknown): string | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
   const code = (value as Record<string, unknown>).code;
   return typeof code === "string" && code.length > 0 ? code : null;
+}
+
+// F4 D6: 카탈로그 코드는 userMessage 한국어 + 코드 병기로 표기(security-abort 관례).
+//   미등록 코드는 raw 유지 — 정직 노출(조용한 은폐 금지).
+function describeFailureCode(code: string): string {
+  const meta = ERROR_CATALOG[code as ErrorCode];
+  return meta !== undefined ? `${meta.userMessage.replace(/\.$/, "")}(오류 코드 ${code})` : code;
 }

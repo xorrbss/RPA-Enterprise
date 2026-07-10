@@ -245,11 +245,12 @@ function botPoolHealthReason(
   pending: BotPoolItem["queue"],
   capacity: BotPoolItem["capacity"],
 ): string {
-  if (leases.expired_open > 0) return `만료된 활성 브라우저 lease ${leases.expired_open}건을 회수해야 합니다.`;
-  if (workers.active === 0 && (pending.queued_runs > 0 || pending.due_triggers > 0)) return "대기 중인 실행이 있지만 사용 가능한 브라우저 worker가 없습니다.";
-  if (workers.total === 0) return "등록된 브라우저 worker가 없습니다.";
-  if (workers.stale > 0) return `브라우저 worker ${workers.stale}개가 2분 이상 heartbeat를 보내지 않았습니다.`;
-  if (workers.open_circuit > 0) return `브라우저 worker ${workers.open_circuit}개의 circuit 상태를 확인해야 합니다.`;
+  // F4 D5: 기술 원어는 "한국어(원어)" 병기로 문장당 1회 노출(worker→실행기, lease→점유, heartbeat→상태 신호, circuit→회로 차단).
+  if (leases.expired_open > 0) return `만료된 브라우저 점유(lease) ${leases.expired_open}건을 회수해야 합니다.`;
+  if (workers.active === 0 && (pending.queued_runs > 0 || pending.due_triggers > 0)) return "대기 중인 실행이 있지만 사용 가능한 브라우저 실행기(worker)가 없습니다.";
+  if (workers.total === 0) return "등록된 브라우저 실행기(worker)가 없습니다.";
+  if (workers.stale > 0) return `브라우저 실행기(worker) ${workers.stale}개가 2분 이상 상태 신호(heartbeat)를 보내지 않았습니다.`;
+  if (workers.open_circuit > 0) return `브라우저 실행기 ${workers.open_circuit}개의 회로 차단(circuit) 상태를 확인해야 합니다.`;
   if (health === "warning") return `대기 실행이 가용 슬롯보다 ${capacity.capacity_gap}건 많습니다.`;
   return "브라우저 실행 용량이 정상 범위입니다.";
 }

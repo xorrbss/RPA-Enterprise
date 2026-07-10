@@ -1,14 +1,17 @@
+import { useCallback, useId, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Bell } from "lucide-react";
 
 import { navigate } from "../../router";
 import { useApiClient } from "../../api/context";
-import type { ProductionReadiness } from "../../api/types";
-import { groupOpsAlerts } from "../../util/ops-alerts";
+import type { OpsAlertItem, ProductionReadiness } from "../../api/types";
+import { groupOpsAlerts, navigateAlertRoute, opsAlertSourceLabel, type OpsAlertGroup } from "../../util/ops-alerts";
+import { usePopoverDismiss } from "./usePopoverDismiss";
 
 // 상단바 알림 벨 — 운영 알림(그룹)과 운영 전환 준비 차단을 한 진입점으로 모은다(T1).
 // env 옆 상시 빨간 "차단" 칩을 대체: 신호는 사라지지 않고 벨 배지·레이블로 옮긴다(조용한 은폐 금지).
-// P0는 알림 센터 딥링크만 — 드롭다운 미리보기는 열린 결정 P1(T계열 설계 §10).
+// F4 §4.3: 클릭 즉시 이동을 드롭다운 미리보기로 대체 — readiness 차단 1행 + 그룹 상위 5행(severity 내림차순)
+// + "알림 센터에서 모두 보기". 닫힘 규약은 usePopoverDismiss(GlobalCreateMenu 와 공유).
 
 function readinessBlockerCount(readiness: ProductionReadiness | undefined): number {
   if (readiness === undefined) return 0;
@@ -16,6 +19,14 @@ function readinessBlockerCount(readiness: ProductionReadiness | undefined): numb
     return Math.max(readiness.summary.blocker_count, 1);
   }
   return 0;
+}
+
+const SEVERITY_RANK: Record<OpsAlertItem["severity"], number> = { critical: 2, warning: 1, info: 0 };
+
+function topGroupsBySeverity(groups: readonly OpsAlertGroup[]): OpsAlertGroup[] {
+  return [...groups]
+    .sort((a, b) => SEVERITY_RANK[b.representative.severity] - SEVERITY_RANK[a.representative.severity])
+    .slice(0, 5);
 }
 
 export function TopbarAlertBell(): JSX.Element | null {
@@ -31,6 +42,12 @@ export function TopbarAlertBell(): JSX.Element | null {
     queryFn: () => api.listOpsAlerts({ limit: 50 }),
     refetchInterval: 30_000,
   });
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLSpanElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuId = useId();
+  const close = useCallback(() => setOpen(false), []);
+  const { onKeyDown } = usePopoverDismiss({ open, onClose: close, rootRef, triggerRef });
   const blockerCount = readinessBlockerCount(readiness.data);
   const alertItems = alerts.data?.items ?? [];
   const groups = groupOpsAlerts(alertItems);
@@ -49,20 +66,94 @@ export function TopbarAlertBell(): JSX.Element | null {
         ? "amber"
         : "muted";
   const summary = parts.length > 0 ? parts.join(" · ") : "새 알림 없음";
+  const topGroups = topGroupsBySeverity(groups);
+  const goTo = (move: () => void): void => {
+    close();
+    move();
+  };
   return (
-    <button
-      type="button"
-      className="btn icon-btn topbar-alert-bell"
-      aria-label={`알림 — ${summary}`}
-      title={`${summary} — 알림 센터 열기`}
-      onClick={() => navigate("automationOps", { section: "alerts" })}
-    >
-      <Bell size={16} aria-hidden="true" />
-      {badgeCount > 0 && (
-        <span className={`alert-bell-count ${tone}`} aria-hidden="true">
-          {badgeCount > 9 ? "9+" : String(badgeCount)}
-        </span>
+    <span ref={rootRef} className="topbar-alert-bell" onKeyDown={onKeyDown}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="btn icon-btn alert-bell-trigger"
+        aria-label={`알림 — ${summary}`}
+        title={`${summary} — 알림 미리보기 열기`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Bell size={16} aria-hidden="true" />
+        {badgeCount > 0 && (
+          <span className={`alert-bell-count ${tone}`} aria-hidden="true">
+            {badgeCount > 9 ? "9+" : String(badgeCount)}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div id={menuId} className="alert-bell-popover" role="menu" aria-label="알림 미리보기">
+          {blockerCount > 0 && (
+            <button
+              type="button"
+              role="menuitem"
+              className="alert-bell-item"
+              onClick={() => goTo(() => navigate("automationOps", { section: "readiness" }))}
+            >
+              <span className="alert-bell-item-copy">
+                <strong>운영 전환 준비 차단 {blockerCount}건</strong>
+                <small>운영 준비 화면에서 차단 사유 확인</small>
+              </span>
+            </button>
+          )}
+          {alerts.isError && (
+            <div role="menuitem" aria-disabled="true" className="alert-bell-note">
+              운영 알림을 확인할 수 없습니다.
+            </div>
+          )}
+          {!alerts.isError && alerts.data === undefined && (
+            <div role="menuitem" aria-disabled="true" className="alert-bell-note">
+              운영 알림 확인 중…
+            </div>
+          )}
+          {topGroups.map(({ representative, count }) => (
+            <button
+              key={representative.alert_id}
+              type="button"
+              role="menuitem"
+              className="alert-bell-item"
+              onClick={() =>
+                goTo(() => {
+                  const route = representative.route;
+                  if (route !== null && route.trim().length > 0) navigateAlertRoute(route);
+                  else navigate("automationOps", { section: "alerts" });
+                })
+              }
+            >
+              <span className="alert-bell-item-copy">
+                <strong>
+                  {representative.title}
+                  {count > 1 && <span className="badge muted">외 {count - 1}건</span>}
+                </strong>
+                <small>{opsAlertSourceLabel(representative.source)}</small>
+              </span>
+            </button>
+          ))}
+          {alerts.data !== undefined && topGroups.length === 0 && blockerCount === 0 && (
+            <div role="menuitem" aria-disabled="true" className="alert-bell-note">
+              새 알림이 없습니다.
+            </div>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            className="alert-bell-more"
+            onClick={() => goTo(() => navigate("automationOps", { section: "alerts" }))}
+          >
+            알림 센터에서 모두 보기 →
+          </button>
+        </div>
       )}
-    </button>
+    </span>
   );
 }
