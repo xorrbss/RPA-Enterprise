@@ -103,7 +103,7 @@ describe("전용 실행기 풀 패널 (DG-3b)", () => {
     await waitFor(() => expect(captured).toEqual({ pool_key: "newpool", max_concurrency: 1, priority: "medium" }));
   });
 
-  test("admin: Drain 상태 전환 → updateWorkerPool 호출", async () => {
+  test("admin: 비우기(drain) 상태 전환 → updateWorkerPool 호출", async () => {
     localStorage.setItem("rpa.token", jwt(["admin"]));
     let captured: { poolKey: string; status?: string } | null = null;
     renderApp(
@@ -116,7 +116,7 @@ describe("전용 실행기 풀 패널 (DG-3b)", () => {
       }),
     );
     const region = await screen.findByRole("region", { name: "전용 실행기 풀" });
-    fireEvent.click(within(region).getByRole("button", { name: "Drain" }));
+    fireEvent.click(within(region).getByRole("button", { name: "비우기(drain)" }));
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: "확인" }));
     await waitFor(() => expect(captured).toEqual({ poolKey: "pa", status: "draining" }));
@@ -133,7 +133,7 @@ describe("전용 실행기 풀 패널 (DG-3b)", () => {
     const region = await screen.findByRole("region", { name: "전용 실행기 풀" });
     expect(within(region).getByLabelText("전용 실행기 풀 압력")).toBeInTheDocument();
     expect(within(region).getByText("지연 위험")).toBeInTheDocument();
-    expect(within(region).getByText(/queued 3건/)).toBeInTheDocument();
+    expect(within(region).getByText(/대기 3건/)).toBeInTheDocument();
     // 5분 초과 적체 + 전용 풀 → 정직한 지연 힌트(단정 아님)
     expect(within(region).getByText(/WORKER_POOL_KEYS/)).toBeInTheDocument();
   });
@@ -149,8 +149,11 @@ describe("전용 실행기 풀 패널 (DG-3b)", () => {
     const region = await screen.findByRole("region", { name: "전용 실행기 풀" });
     expect(within(region).getByLabelText("전용 실행기 풀 압력")).toBeInTheDocument();
     expect(within(region).getByText("대기 감지")).toBeInTheDocument();
-    expect(within(region).getByText(/queued 2건/)).toBeInTheDocument();
-    expect(within(region).getByText(/기본 풀 대기/)).toBeInTheDocument();
+    expect(within(region).getByText(/대기 2건/)).toBeInTheDocument();
+    // N2 잔존 해소 가드: 안내문이 F4 확정 어휘(봇 풀·점유(lease)·상태 신호(heartbeat))로 표기된다.
+    expect(
+      within(region).getByText(/기본 풀 대기는 전용 풀 배정 오류로 단정하지 않습니다\. 봇 풀 용량, 만료된 점유\(lease\), 실행기 상태 신호\(heartbeat\)를 함께 확인하세요\./),
+    ).toBeInTheDocument();
     expect(within(region).queryByText(/WORKER_POOL_KEYS/)).toBeNull();
   });
 });

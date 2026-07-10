@@ -67,12 +67,13 @@ export function WorkerPoolPanel(): JSX.Element | null {
         <span className="subtle">풀 압력:</span>
         <span className={["badge", pressure.tone].filter(Boolean).join(" ")}>{pressure.label}</span>
         <span className="subtle">{pressure.detail}</span>
-        {stuckHint && <span className="subtle">배정 풀의 worker, drain/disable 상태, WORKER_POOL_KEYS를 확인하세요.</span>}
+        {stuckHint && <span className="subtle">배정 풀의 실행기(worker), 풀 상태(비우는 중·비활성), WORKER_POOL_KEYS를 확인하세요.</span>}
       </p>
 
       {pending.queued_runs > 0 && assigned_pool_key === null && oldestQueuedMs !== null && oldestQueuedMs > STUCK_QUEUE_MS && (
         <p className="subtle" style={{ marginTop: -4 }}>
-          기본 풀 대기는 전용 풀 배정 오류로 단정하지 않습니다. Bot Pool 용량과 Graphile queue 상태를 함께 확인하세요.
+          {/* F4 D5 확정 어휘(ops-alerts recommended_action 과 동일 계열) — 원어는 "한국어(원어)" 병기. */}
+          기본 풀 대기는 전용 풀 배정 오류로 단정하지 않습니다. 봇 풀 용량, 만료된 점유(lease), 실행기 상태 신호(heartbeat)를 함께 확인하세요.
         </p>
       )}
 
@@ -88,7 +89,7 @@ export function WorkerPoolPanel(): JSX.Element | null {
                 <th scope="col">풀</th>
                 <th scope="col">상태</th>
                 <th scope="col">동시성</th>
-                <th scope="col">Priority</th>
+                <th scope="col">우선순위</th>
                 <th scope="col">설명</th>
                 <th scope="col">관리</th>
               </tr>
@@ -179,7 +180,7 @@ function WorkerPoolCreateForm(): JSX.Element {
             <input type="number" min={1} value={maxConcurrency} onChange={(e) => setMaxConcurrency(Number(e.target.value))} />
           </label>
           <label style={{ display: "grid", gap: 4 }}>
-            <span className="subtle">Priority</span>
+            <span className="subtle">우선순위</span>
             <select value={priority} onChange={(e) => setPriority(e.target.value as WorkerPoolPriority)}>
               {PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
             </select>
@@ -223,7 +224,7 @@ function WorkerPoolControls(props: { pool: WorkerPoolItem; assigned: boolean }):
   const assignWorker = useMutation({
     mutationFn: () => api.assignWorkerToPool(props.pool.pool_key, workerId.trim(), crypto.randomUUID()),
     onSuccess: () => {
-      setMsg({ tone: "green", text: "worker 배정됨" });
+      setMsg({ tone: "green", text: "실행기 배정됨" });
       setWorkerId("");
       void qc.invalidateQueries({ queryKey: ["worker-pools"] });
     },
@@ -233,7 +234,7 @@ function WorkerPoolControls(props: { pool: WorkerPoolItem; assigned: boolean }):
   const removeWorker = useMutation({
     mutationFn: () => api.removeWorkerFromPool(props.pool.pool_key, workerId.trim(), crypto.randomUUID()),
     onSuccess: () => {
-      setMsg({ tone: "green", text: "worker 제거됨" });
+      setMsg({ tone: "green", text: "실행기 제거됨" });
       setWorkerId("");
       void qc.invalidateQueries({ queryKey: ["worker-pools"] });
     },
@@ -255,7 +256,7 @@ function WorkerPoolControls(props: { pool: WorkerPoolItem; assigned: boolean }):
           <input type="number" min={1} value={maxConcurrency} onChange={(e) => setMaxConcurrency(Number(e.target.value))} />
         </label>
         <label style={{ display: "grid", gap: 4 }}>
-          <span className="subtle">Priority</span>
+          <span className="subtle">우선순위</span>
           <select value={priority} onChange={(e) => setPriority(e.target.value as WorkerPoolPriority)}>
             {PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
           </select>
@@ -268,12 +269,12 @@ function WorkerPoolControls(props: { pool: WorkerPoolItem; assigned: boolean }):
         {msg !== null && <span className={`badge ${msg.tone}`}>{msg.text}</span>}
         {workerSummary !== undefined && (
           <span className="badge blue">
-            worker {workerSummary.active}/{workerSummary.total}
-            {workerSummary.stale > 0 ? ` · stale ${workerSummary.stale}` : ""}
+            실행기 {workerSummary.active}/{workerSummary.total}
+            {workerSummary.stale > 0 ? ` · 신호 없음 ${workerSummary.stale}` : ""}
           </span>
         )}
         <PoolStatusButton pool={props.pool} status="active" label="활성화" disabled={props.pool.status === "active"} />
-        <PoolStatusButton pool={props.pool} status="draining" label="Drain" disabled={props.pool.status === "draining"} />
+        <PoolStatusButton pool={props.pool} status="draining" label="비우기(drain)" disabled={props.pool.status === "draining"} />
         <PoolStatusButton pool={props.pool} status="disabled" label="비활성화" disabled={props.pool.status === "disabled"} />
         {!props.assigned && (
           <ActionButton
@@ -296,7 +297,7 @@ function WorkerPoolControls(props: { pool: WorkerPoolItem; assigned: boolean }):
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto auto", gap: 6, alignItems: "end" }}>
         <label style={{ display: "grid", gap: 4 }}>
-          <span className="subtle">Worker UUID</span>
+          <span className="subtle">실행기 UUID</span>
           <input value={workerId} onChange={(e) => setWorkerId(e.target.value)} placeholder="00000000-0000-4000-8000-000000000000" />
         </label>
         <button className="btn" type="button" disabled={!workerIdValid || assignWorker.isPending} onClick={() => assignWorker.mutate()}>
@@ -343,7 +344,7 @@ function PoolStatusButton(props: { pool: WorkerPoolItem; status: WorkerPoolStatu
 
 function statusLabel(status: WorkerPoolStatus): string {
   if (status === "active") return "활성";
-  if (status === "draining") return "Drain";
+  if (status === "draining") return "비우는 중";
   return "비활성";
 }
 
@@ -370,12 +371,12 @@ function queuePressure(
   stuckHint: boolean,
 ): { label: string; detail: string; tone: "green" | "amber" | "" } {
   if (pending.queued_runs <= 0) {
-    return { label: "정상", detail: "queued 0건", tone: "green" };
+    return { label: "정상", detail: "대기 0건", tone: "green" };
   }
   const age = oldestQueuedMs !== null ? ` · 가장 오래된 대기 ${formatQueuedAge(oldestQueuedMs)}` : " · 가장 오래된 대기 미확인";
   return {
     label: stuckHint ? "지연 위험" : "대기 감지",
-    detail: `queued ${pending.queued_runs}건${age}`,
+    detail: `대기 ${pending.queued_runs}건${age}`,
     tone: stuckHint ? "amber" : "",
   };
 }
