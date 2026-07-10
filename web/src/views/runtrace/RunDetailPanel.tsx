@@ -9,7 +9,7 @@ import { StepTrace } from "../../components/StepTrace";
 import { GenerationArtifactsPanel } from "../../components/GenerationArtifactsPanel";
 import { RunModeBadge, StatusBadge } from "../../components/badges";
 import { ErrorState, Loading } from "../../components/states";
-import { formatDateTime } from "../../util/time";
+import { formatDateTime, formatRunDuration } from "../../util/time";
 import type { RunDetail, ScenarioGenerationResult } from "../../api/types";
 import { HUMAN_TASK_TERMINAL, SUSPENDED } from "./constants";
 import { PromoteFromRunPanel } from "./PromoteFromRunPanel";
@@ -157,6 +157,23 @@ export function RunDetailPanel({
             <dd style={{ margin: 0 }}>{detail.data.attempts}</dd>
             <dt className="subtle">기준 시각</dt>
             <dd style={{ margin: 0 }}>{formatDateTime(detail.data.as_of)}</dd>
+            {/* F5: 소요는 관측된 started_at/ended_at이 모두 있을 때만 산출(진행 중 경과 추정 금지). */}
+            <dt className="subtle">시작 시각</dt>
+            <dd style={{ margin: 0 }}>
+              {detail.data.started_at !== null && detail.data.started_at !== undefined
+                ? formatDateTime(detail.data.started_at)
+                : "—"}
+            </dd>
+            <dt className="subtle">종료 시각</dt>
+            <dd style={{ margin: 0 }}>
+              {detail.data.ended_at !== null && detail.data.ended_at !== undefined
+                ? formatDateTime(detail.data.ended_at)
+                : "—"}
+            </dd>
+            <dt className="subtle">소요</dt>
+            <dd style={{ margin: 0 }}>
+              {formatRunDuration(detail.data.started_at, detail.data.ended_at) ?? "—"}
+            </dd>
           </dl>
         </>
       ) : null}

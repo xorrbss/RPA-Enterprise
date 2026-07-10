@@ -52,3 +52,4 @@ PR → CI green → 머지 → main green 확인 후 다음. 문서 file:line은
 | E6 템플릿 갤러리 | ✅머지 | #440 | web 1015·CI 12/12(픽스처 타입 1회 수정) | 홈 갤러리(listTemplates+카탈로그 프리필 계약 재사용). creator 파라미터=STALE(Phase 7이 소비 로직 신설). easy-labels 사전=T4 게이트로 최소선 충족, 위저드 셸 부재로 보류(설계 개정 기록) |
 | E7+T7 스튜디오 액션 재편 | ✅머지 | #439 | web 1015·CI 12/12 | 행 [열기][실행]+더 보기(테스트 계획·편집·이력·배포·운영 기준·보관), 용어 단일화(테스트), 실행 기준 단정 배지 열 삭제 |
 | F6 step-sentences 폴백 정밀화 | ✅머지 | #443 | web 1020(step-sentences 22→27)·lint:copy·CI 11/11 | 객체형 예약 핸들러({handler}) 문장 재사용+"[object Object]" 제거·fallback_chain 전용 노드 문장 신설·평범한 next 기본 문장 유지. §8-⑥: 설계 초안 "대비 방법"은 기존 어휘와 통일해 "대체 경로"로 확정 |
+| F5 run 소요 시간 표면화 | ✅머지대기 | #444 | web 1029(+9)·app unit·temp-db 게이트 전체(int+live e2e)·lint:copy | 계약 4면 동기(openapi Run 1곳=목록·상세 공유·api-surface §1·서버 2파일·web 타입)+README 패치 로그. **패치 번호 v2.35 사용**(설계 가칭 v2.36과 상이 — 최신 v2.34+1, F6은 web 전용이라 로그 불요). DDL·커서 무변경. 소요=종결 run만(경과 추정 금지), tabular-nums는 기존 관례 부재로 신규 인라인 적용 |

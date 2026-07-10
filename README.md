@@ -1008,3 +1008,20 @@
 | 07-03 | #398 | 8c294c6a | 계약 9파일 | 오프보딩 O2 — `tenant_offboarding_requests` 원장 + purge 4 API + SoD(자기승인 403) + **신규 오류코드 `TENANT_OFFBOARDING`** |
 | 07-03 | #399 | 554dca69 | api-surface | 오프보딩 O3 — 전역 잠금 preHandler(approved/purging 테넌트 비-GET 409) + `capabilities.offboarding` |
 | 07-03 | #400 | 142b5d35 | ops-defaults·runtime-contract·security-middleware | 오프보딩 O4 — `tenant_offboarding_purge` 잡(BYPASSRLS 유스케이스 확장, FK 역순 purge 레지스트리, legal_hold 존중) |
+
+## v2.35 패치 로그 (run 소요 시간 표면화 — 기존 DDL 컬럼의 API 노출, 스키마 변경 없음)
+
+> **UI/UX 잔여 감점 해소 F5**(잔여 결함 정리 설계 2026-07-10 §5). `runs.started_at`(R2 run.started 진입)·
+> `ended_at`(terminal 진입) 컬럼은 DDL에 이미 존재하나 run 읽기 API가 미조회여서 콘솔이 실행 소요 시간을
+> 보여줄 수 없었다. 해소: run 목록·상세 응답에 두 필드를 **표시 전용으로 투영**(nullable date-time; 미시작/
+> 미종결은 null — 클라이언트가 경과를 추정하지 않는다, 날조 금지). **DDL 변경 없음**, 목록 keyset 커서
+> `(created_at,id)`·정렬 **무영향**(additive 응답 필드만). 소요 시간은 두 값이 모두 있을 때만
+> `ended_at - started_at`으로 산출한다.
+
+| 항목 | 위치 | 조치 |
+|---|---|---|
+| 계약 | `api-surface.md` §1 | run 상세·목록 응답에 `started_at`/`ended_at` 명기(모름/미시작은 null, 표시 전용·커서 무영향) |
+| 계약 | `codegen/openapi.yaml` `Run` | `started_at`/`ended_at` (nullable, format: date-time) 추가 — 목록·상세 공유 스키마 1곳 반영 |
+| 서버 | `app/src/api/reads-runs.ts`·`server.ts` | 목록·상세 SELECT/직렬화에 `r.started_at`, `r.ended_at` 투영 |
+| 콘솔 | `web/src/api/types-runs.ts`·`util/time.ts`·`views/RunTrace.tsx`·`views/runtrace/RunDetailPanel.tsx` | `formatRunDuration`(둘 다 있을 때만 산출) + 목록 "소요" 열(종결 run만 값) + 상세 시작/종료/소요 3항목 |
+| 검증 | `web/test/time-util.test.ts`·`run-trace.test.tsx` | 포매터 경계(null/1초 미만/59초/분+초/시간)·소요 열 렌더(종결=값, 진행 중="—") |
