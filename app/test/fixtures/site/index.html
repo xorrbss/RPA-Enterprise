@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>상품 리뷰</title>
+  </head>
+  <!--
+    컨테이너 end-to-end 스모크용 대상 페이지(마커 없는 평범한 페이지).
+    site_profiles.page_state_selectors 가 이 DOM 에서 PageState flags 를 산출한다:
+      reviews_visible = min_count(.review-item) >= 1  → 시나리오가 success 로 종결
+      not_found       = present(.empty-results)       → 없음
+    dev/serve.ts 의 /fixture/reviews 와 동일한 형상(같은 셀렉터 계약).
+  -->
+  <body>
+    <header role="banner">
+      <h1>상품</h1>
+      <div class="user-menu">내 계정</div>
+    </header>
+    <main role="main">
+      <section class="reviews">
+        <article class="review-item">좋아요</article>
+        <article class="review-item">별로</article>
+        <article class="review-item">보통</article>
+      </section>
+      <a class="next-page disabled" aria-disabled="true">다음</a>
+    </main>
+    <footer role="contentinfo"><small>©</small></footer>
+  </body>
+</html>

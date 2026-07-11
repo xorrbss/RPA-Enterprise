@@ -131,6 +131,14 @@ services:
     ports:
       - "${RPA_CONSOLE_PORT:-8088}:8080"
 
+  # 자동화 대상 픽스처 사이트(개발/CI 전용). 워커가 실제로 run 을 완주하는지 증명하려면 컨테이너 네트워크
+  # 안에서 접근 가능한 대상 페이지가 필요하다. 제품 이미지가 아니라 nginx 로 정적 파일만 서빙한다.
+  fixture:
+    profiles: ["fixture"]
+    image: nginx:alpine
+    volumes:
+      - ./app/test/fixtures/site:/usr/share/nginx/html:ro
+
   # 로컬 SecretStore. 브라우저 worker 는 부팅 즉시 세션 KEK/resume-token HMAC 을 Vault 에서 해소하고
   # VaultSecretStore 는 https 를 강제한다(우회 모드 없음) — 그래서 로컬 스택에도 실제 TLS Vault 가 필요하다.
   # 개발/CI 전용: dev 모드(인메모리, 고정 root 토큰). 실 배포는 오너 Vault 를 VAULT_* 로 주입해 이 기본값을 덮는다.
