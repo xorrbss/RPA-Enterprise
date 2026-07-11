@@ -614,9 +614,11 @@ jobs:
           }
           probe "sandbox on, no extra privileges"
           probe "sandbox on + apparmor=unconfined" --security-opt apparmor=unconfined
+          probe "sandbox on + seccomp=unconfined" --security-opt seccomp=unconfined
+          probe "sandbox on + seccomp=unconfined + apparmor=unconfined" --security-opt seccomp=unconfined --security-opt apparmor=unconfined
           probe "sandbox on + cap SYS_ADMIN" --cap-add SYS_ADMIN
           docker compose exec -T worker /usr/bin/chromium --headless=new --disable-gpu --dump-dom http://fixture/ \
-            > chromium-render.log 2>&1 || { echo "worker container (as deployed): Chromium cannot render with the sandbox enabled"; tail -5 chromium-render.log; exit 1; }
+            > chromium-render.log 2>&1 || { echo "worker container: Chromium cannot render with the sandbox enabled"; tail -5 chromium-render.log; exit 1; }
           grep -q "review-item" chromium-render.log
           echo "worker container: chromium (sandboxed) rendered the fixture"
 
