@@ -513,6 +513,39 @@ jobs:
           curl -fsS "http://127.0.0.1:${RPA_HEALTH_PORT}/readyz"
           curl -fsS "http://127.0.0.1:${RPA_CONSOLE_PORT}/" | grep -qi "<!doctype html"
 
+      # 브라우저 worker(RUN_MODE=worker)는 부팅 즉시 Vault 에서 세션 KEK/resume-token HMAC 을 해소하므로
+      # 오너가 프로비저닝한 SecretStore 없이는 뜰 수 없다(fail-closed, 우회 모드 없음). lifecycle-worker 는
+      # local_fs 오브젝트 스토어에서 Vault 를 요구하지 않으므로(env-artifact-lifecycle: s3 모드에서만 필요)
+      # 여기서 실제로 기동해 이미지·env·BYPASSRLS 접속·graphile external 모드를 검증한다.
+      - name: Boot the artifact lifecycle worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --profile worker up -d --wait --wait-timeout 240 lifecycle-worker
+
+      # lifecycle-worker 에는 healthcheck 가 없어 `up --wait` 는 "running" 만으로 통과한다(데몬 준비 완료가 아님).
+      # 준비 신호(로그 + workers heartbeat 행)를 폴링한다.
+      - name: Assert the lifecycle worker runs and registers a live heartbeat
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            docker compose logs lifecycle-worker > lifecycle-worker.log 2>&1 || true
+            heartbeat="$(docker compose exec -T postgres \
+              psql -U postgres -d rpa -Atqc \
+              "SELECT status || ':' || kind FROM workers WHERE id = '20000000-0000-4000-8000-0000000000aa'" 2>/dev/null || true)"
+            if grep -q "artifact lifecycle worker daemon running" lifecycle-worker.log \
+              && [ "${heartbeat}" = "active:sweeper" ]; then
+              echo "lifecycle worker ready after ${attempt} attempt(s): heartbeat=${heartbeat}"
+              cat lifecycle-worker.log
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "lifecycle worker did not become ready"
+          cat lifecycle-worker.log
+          exit 1
+
       - name: Container diagnostics on failure
         if: failure()
         run: |
