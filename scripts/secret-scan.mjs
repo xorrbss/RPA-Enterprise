@@ -111,13 +111,19 @@ function scanPath(relPath) {
 function scanText(text, relPath) {
   const hits = [];
   scanPatterns(text, relPath, patterns, hits);
-  if (relPath.startsWith(".github/workflows/")) {
+  if (isCiSurface(relPath)) {
     scanPatterns(text, relPath, workflowHazards, hits);
     scanPatterns(text, relPath, envDumpHazards, hits);
   } else if (isScriptSurface(relPath)) {
     scanPatterns(text, relPath, envDumpHazards, hits);
   }
   return hits;
+}
+
+// CI 정의 표면 — GitHub 워크플로 + Bitbucket 파이프라인. 시크릿 참조·env 덤프 위험은 CI 호스트와 무관하므로
+// 저장소를 Bitbucket 으로 옮겨도 동일 규칙이 걸린다(호스트 이전으로 가드가 사라지지 않게).
+function isCiSurface(relPath) {
+  return relPath.startsWith(".github/workflows/") || relPath === "bitbucket-pipelines.yml";
 }
 
 function isScriptSurface(relPath) {
@@ -177,11 +183,30 @@ function runSelfTest() {
     ["workflow env map", "name: ok\nenv:\n  NODE_VERSION: \"24\"\njobs:\n  test:\n    steps:\n      - run: node scripts/secret-scan.mjs\n"],
     ["ci postgres smoke credentials", "services:\n  postgres:\n    env:\n      POSTGRES_PASSWORD: postgres\nenv:\n  PGSMOKE_USER: rpa_smoke\nsteps:\n  - run: node scripts/db-migration-smoke.mjs --require-non-bypass\n"],
   ];
+  // Bitbucket 파이프라인도 CI 표면이다 — 같은 위험 규칙이 걸리는지(그리고 정상 CI 자격은 안 걸리는지) 고정한다.
+  const bitbucketRejectCases = [
+    ["bitbucket env dump", "image: node:24\npipelines:\n  default:\n    - step:\n        script:\n          - printenv\n"],
+    ["bitbucket xtrace", "image: node:24\npipelines:\n  default:\n    - step:\n        script:\n          - set -euxo pipefail\n"],
+  ];
+  const bitbucketAllowCases = [
+    [
+      "bitbucket ci postgres smoke credentials",
+      "image: node:24\ndefinitions:\n  services:\n    postgres:\n      variables:\n        POSTGRES_PASSWORD: postgres\npipelines:\n  default:\n    - step:\n        script:\n          - PGUSER=rpa_smoke PGPASSWORD=rpa_smoke node scripts/db-migration-smoke.mjs --require-non-bypass\n",
+    ],
+  ];
   const failures = [];
 
   for (const [label, text] of rejectCases) {
     const hits = scanText(text, ".github/workflows/fixture.yml");
     if (hits.length === 0) failures.push(`${label}: expected workflow hazard hit`);
+  }
+  for (const [label, text] of bitbucketRejectCases) {
+    const hits = scanText(text, "bitbucket-pipelines.yml");
+    if (hits.length === 0) failures.push(`${label}: expected CI hazard hit on bitbucket surface`);
+  }
+  for (const [label, text] of bitbucketAllowCases) {
+    const hits = scanText(text, "bitbucket-pipelines.yml");
+    if (hits.length > 0) failures.push(`${label}: unexpected hit(s): ${hits.join("; ")}`);
   }
   for (const [label, text] of scriptRejectCases) {
     const hits = scanText(text, "scripts/deploy.sh");
