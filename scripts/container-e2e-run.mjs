@@ -94,9 +94,16 @@ const SCENARIO_IR = {
   },
   start: "open",
   nodes: {
-    open: { what: [{ action: "navigate", url_ref: "entry_url" }], next: "check" },
+    // policy.recording 기본값은 masked_on_failure — 성공하는 run 은 아티팩트를 하나도 만들지 않는다.
+    // always 로 켜야 스텝 스크린샷이 오브젝트 스토어(프로덕션과 동일한 s3 모드)에 실제로 기록된다.
+    open: {
+      what: [{ action: "navigate", url_ref: "entry_url" }],
+      policy: { recording: "always" },
+      next: "check",
+    },
     check: {
       what: [{ action: "observe" }],
+      policy: { recording: "always" },
       on: [
         { when: "flags.not_found", target: "empty", priority: 2 },
         { when: "flags.reviews_visible", target: "done", priority: 1 },
@@ -143,15 +150,41 @@ async function main() {
       last = status;
     }
     if (TERMINAL.has(status)) {
-      if (status === "completed") {
-        console.log(`\nPASS: the containerized worker drove the run to '${status}' with the image's Chromium`);
-        return;
+      if (status !== "completed") {
+        fail(`run reached terminal '${status}' instead of 'completed': ${JSON.stringify(state.body)}`);
       }
-      fail(`run reached terminal '${status}' instead of 'completed': ${JSON.stringify(state.body)}`);
+      console.log(`  run drove to '${status}' with the image's Chromium`);
+      await assertArtifactsInObjectStore(token, runId);
+      console.log("\nPASS: the containerized stack ran an automation end to end and stored its evidence");
+      return;
     }
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
   fail(`run did not reach a terminal state within ${POLL_ATTEMPTS} polls (last='${last}')`);
+}
+
+/**
+ * 프로덕션과 동일한 s3 모드에서 증거(스텝 스크린샷)가 실제로 오브젝트 스토어에 기록됐는지 확인한다.
+ * 상세 조회는 API 의 S3 리더를 태운다 — 그 설정이 깨져 있으면 API 는 부팅조차 못 한다.
+ */
+async function assertArtifactsInObjectStore(token, runId) {
+  const list = expect(`GET /v1/runs/${runId}/artifacts`, await call(token, "GET", `/v1/runs/${runId}/artifacts`), [200]);
+  const items = Array.isArray(list?.items) ? list.items : Array.isArray(list) ? list : [];
+  if (items.length === 0) {
+    fail("run produced no artifacts — policy.recording=always should store a step screenshot");
+  }
+  console.log(`  run stored ${items.length} artifact(s)`);
+
+  const artifactId = items[0].artifact_id ?? items[0].id;
+  const detail = expect(`GET /v1/artifacts/${artifactId}`, await call(token, "GET", `/v1/artifacts/${artifactId}`), [200]);
+  const objectRef = String(detail.object_ref ?? "");
+  if (!objectRef.startsWith("s3://")) {
+    fail(`artifact object_ref is not in the object store (expected s3://): ${objectRef}`);
+  }
+  console.log(
+    `  artifact ${artifactId}: object_ref=${objectRef} redaction=${detail.redaction_status} ` +
+    `content=${detail.content === null || detail.content === undefined ? "(withheld)" : "present"}`,
+  );
 }
 
 main().catch((err) => {
