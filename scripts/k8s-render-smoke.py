@@ -55,6 +55,38 @@ REQUIRED_ENV_BY_RUN_MODE = {
 API_AUTH_ENV = ["JWT_HS256_SECRET", "JWKS_URL"]
 MIGRATE_REQUIRED_FLAGS = ["--baseline-existing", "--graphile-worker", "--require-non-bypass"]
 
+# 오브젝트 스토어를 s3 로 켜면 각 워크로드가 요구하는 env 가 달라진다(fail-closed). 매니페스트가 모드만 켜고
+# 필요한 env 를 안 주면 컨테이너가 부팅조차 못 한다 — 실제로 API 가 그 상태였다(ARTIFACT_OBJECT_STORE_KIND=s3
+# 인데 엔드포인트/버킷 env 부재). 모드에 따라 조건부로 검사한다.
+# 엔드포인트/리전/버킷/키는 정규 계열(ARTIFACT_OBJECT_STORE_S3_*) 또는 레거시(S3_*) 중 하나면 된다.
+S3_ENDPOINT_ALIASES = [
+    ["ARTIFACT_OBJECT_STORE_S3_ENDPOINT", "S3_ENDPOINT"],
+    ["ARTIFACT_OBJECT_STORE_S3_REGION", "S3_REGION"],
+    ["ARTIFACT_OBJECT_STORE_S3_BUCKET", "S3_BUCKET"],
+    ["ARTIFACT_OBJECT_STORE_S3_ACCESS_KEY_ID", "S3_ACCESS_KEY_ID"],
+]
+CONDITIONAL_S3_ENV = {
+    # (RUN_MODE, 모드를 켜는 env, s3 를 뜻하는 값) -> 그때 추가로 필요한 env
+    ("api", "ARTIFACT_OBJECT_STORE_KIND", "s3"): [
+        "ARTIFACT_OBJECT_STORE_REF",
+        "VAULT_ADDR",
+        "VAULT_API_ROLE_ID",
+        "VAULT_API_SECRET_ID",
+    ],
+    ("worker", "GATEWAY_ARTIFACT_STORE_MODE", "s3"): [
+        "GATEWAY_ARTIFACT_OBJECT_STORE_REF",
+        "VAULT_ADDR",
+        "VAULT_RUNTIME_WORKER_ROLE_ID",
+        "VAULT_RUNTIME_WORKER_SECRET_ID",
+    ],
+    ("lifecycle-worker", "ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE", "s3"): [
+        "ARTIFACT_OBJECT_STORE_REF",
+        "VAULT_ADDR",
+        "VAULT_ARTIFACT_LIFECYCLE_ROLE_ID",
+        "VAULT_ARTIFACT_LIFECYCLE_SECRET_ID",
+    ],
+}
+
 WORKLOAD_KINDS = {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"}
 
 failures: list[str] = []
@@ -188,6 +220,16 @@ def check_workloads(label: str, docs: list[dict]) -> None:
                 fail(f"{where}: RUN_MODE={run_mode} is missing required env: {', '.join(missing)}")
             if run_mode == "api" and not any(key in resolved for key in API_AUTH_ENV):
                 fail(f"{where}: api needs one of {' / '.join(API_AUTH_ENV)}")
+
+            for (mode_run, mode_key, mode_value), extra in CONDITIONAL_S3_ENV.items():
+                if mode_run != run_mode or resolved.get(mode_key, "").lower() != mode_value:
+                    continue
+                missing_s3 = [key for key in extra if key not in resolved]
+                if missing_s3:
+                    fail(f"{where}: {mode_key}={mode_value} but missing: {', '.join(missing_s3)}")
+                for aliases in S3_ENDPOINT_ALIASES:
+                    if not any(alias in resolved for alias in aliases):
+                        fail(f"{where}: {mode_key}={mode_value} but none of {' / '.join(aliases)} is set")
 
     for run_mode in REQUIRED_ENV_BY_RUN_MODE:
         if run_mode not in seen_run_modes:

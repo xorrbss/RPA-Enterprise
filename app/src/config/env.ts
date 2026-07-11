@@ -10,13 +10,13 @@
 import { resolve } from "node:path";
 
 import {
+  assertHttpsUrl,
   bool,
   loadVaultIdentity,
   num,
   opt,
   positiveInt,
   req,
-  reqHttpsUrl,
   strictBool,
   type VaultIdentityConfig,
 } from "./env-primitives";
@@ -308,13 +308,24 @@ function loadArtifactObjectStoreConfig(): ArtifactObjectStoreConfig {
   if (kind !== "s3") {
     throw new Error(`ARTIFACT_OBJECT_STORE_KIND must be one of fs|s3, got ${JSON.stringify(kind)}`);
   }
+  // API 전용 `S3_*` 가 있으면 그대로 쓰고(기존 배포 동작 보존), 없으면 플랫폼 정규 계열
+  // `ARTIFACT_OBJECT_STORE_S3_*` 로 폴백한다 — artifact lifecycle 워커(env-artifact-lifecycle.ts)와 게이트웨이
+  // 폴백(env-gateway.ts)이 이미 그 이름을 쓰고, 배포 매니페스트(ConfigMap)는 **그 이름만** 제공한다. 폴백이
+  // 없던 탓에 ARTIFACT_OBJECT_STORE_KIND=s3 인 프로덕션 설정에서 API 가 부팅조차 못 했다
+  // (missing required env S3_ENDPOINT — 아티팩트는 한 스토어를 공유하므로 값이 갈릴 이유가 없다).
   return {
     kind,
-    endpoint: reqHttpsUrl("S3_ENDPOINT"),
-    region: req("S3_REGION"),
-    bucket: req("S3_BUCKET"),
-    accessKeyId: req("S3_ACCESS_KEY_ID"),
-    forcePathStyle: strictBool("S3_FORCE_PATH_STYLE", true),
+    endpoint: assertHttpsUrl(
+      "S3_ENDPOINT",
+      opt("S3_ENDPOINT") ?? req("ARTIFACT_OBJECT_STORE_S3_ENDPOINT"),
+    ),
+    region: opt("S3_REGION") ?? req("ARTIFACT_OBJECT_STORE_S3_REGION"),
+    bucket: opt("S3_BUCKET") ?? req("ARTIFACT_OBJECT_STORE_S3_BUCKET"),
+    accessKeyId: opt("S3_ACCESS_KEY_ID") ?? req("ARTIFACT_OBJECT_STORE_S3_ACCESS_KEY_ID"),
+    forcePathStyle: strictBool(
+      "S3_FORCE_PATH_STYLE",
+      strictBool("ARTIFACT_OBJECT_STORE_S3_FORCE_PATH_STYLE", true),
+    ),
   };
 }
 
