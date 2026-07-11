@@ -49,10 +49,15 @@ ENV NODE_ENV=production \
     CHROME_EXECUTABLE_PATH=/usr/bin/chromium \
     NPM_CONFIG_UPDATE_NOTIFIER=false
 
+# chromium-sandbox: Debian 은 SUID 샌드박스 바이너리(/usr/lib/chromium/chrome-sandbox)를 별도 패키지로 분리한다.
+# 이게 없으면 Chromium 이 "No usable sandbox!" 로 기동 실패한다 → 워커의 stagehand.init 이 CDP disconnected 로
+# 죽고 run 이 INIT 실패로 재큐된다. 샌드박스를 끄는(--no-sandbox) 대신 패키지를 설치해 브라우저 샌드박스 경계를
+# 유지한다 — 워커는 신뢰할 수 없는 외부 웹 콘텐츠를 렌더한다.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       ca-certificates \
       chromium \
+      chromium-sandbox \
       fonts-noto-cjk \
       postgresql-client \
       tini \
