@@ -13,10 +13,11 @@ import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { insertAuditVerificationRun } from "../src/runtime/audit-verification-runs";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
-import type { RunEnqueuer } from "../src/runtime/run-queue";
+import { PgGraphileRunEnqueuer, type RunEnqueuer } from "../src/runtime/run-queue";
 import { buildServer } from "../src/api/server";
 import { PgDurableSecurityAuditDecisionWriter } from "../src/api/security-audit";
 import { createPool, withTenantTx } from "../src/db/pool";
+import { installGraphileSchema } from "./graphile-schema";
 import type { SecretRef } from "../../ts/core-types";
 import {
   SECURITY_AUDIT_PAYLOAD_SCHEMA_REF,
@@ -36,6 +37,7 @@ const TENANT_A = "00000000-0000-4000-8000-0000000000a1" as TenantId;
 const TENANT_B = "00000000-0000-4000-8000-0000000000b2" as TenantId;
 const SUBJECT_A = "admin-a" as PrincipalId;
 const CORR_A = "83000000-0000-4000-8000-0000000000a1" as CorrelationId;
+const RUN_A = "83000000-0000-4000-8000-000000000301";
 const WORKER_A = "83000000-0000-4000-8000-000000000101";
 const WORKER_B = "83000000-0000-4000-8000-000000000102";
 const DELIVERY_FAIL_A = "83000000-0000-4000-8000-000000000201";
@@ -102,8 +104,6 @@ async function seedDeploymentEvidence(pool: Pool): Promise<void> {
     await direct.query(
       `INSERT INTO schema_migrations (version, status) VALUES ('0001','applied'), ('0002','applied')`,
     );
-    await direct.query(`CREATE SCHEMA IF NOT EXISTS graphile_worker`);
-    await direct.query(`CREATE TABLE graphile_worker.jobs (id serial PRIMARY KEY, locked_at timestamptz, payload jsonb NOT NULL DEFAULT '{}'::jsonb)`);
     await direct.query(
       `INSERT INTO workers (id, kind, status, heartbeat_at, circuit_state)
        VALUES
@@ -130,6 +130,17 @@ async function seedDeploymentEvidence(pool: Pool): Promise<void> {
        VALUES ($1::uuid, 'finance-prod')`,
       [TENANT_A],
     );
+  });
+
+  // 큐 표면은 실 graphile 스키마 + 실 인큐 경로로만 만든다. 가짜 jobs 테이블을 세우면 0.16 의 실제 뷰
+  // 모양(payload 없음)과 어긋나 graphile_queue 게이트 결함을 가린다.
+  await installGraphileSchema();
+  await withTenantTx(pool, TENANT_A, async (client) => {
+    await new PgGraphileRunEnqueuer().enqueueRunClaim(client, {
+      tenantId: TENANT_A,
+      runId: RUN_A,
+      correlationId: CORR_A,
+    });
   });
 
   const writer = new PgDurableSecurityAuditDecisionWriter(pool);
@@ -197,11 +208,16 @@ async function main(): Promise<void> {
     const body = ready.json() as {
       status: string;
       summary: { blocker_count: number; warning_count: number; deferred_count: number; controlled_prod_ready: boolean };
-      gates: Array<{ gate_id: string; status: string; reason_code: string | null }>;
+      gates: Array<{ gate_id: string; status: string; reason_code: string | null; evidence: string[] }>;
       signals: { bot_pool: { capacity_slots: number; workers: { active: number } }; audit_verifier: { latest_status: string | null } };
     };
     const gate = (id: string) => body.gates.find((item) => item.gate_id === id);
     check("viewer production readiness -> 200", ready.statusCode === 200, ready.body);
+    // 실 graphile 스키마 + 실 인큐 1건 → 게이트가 pass 이면서 카운트도 테넌트 스코프여야 한다.
+    // (가짜 jobs 테이블 시절에는 pass 만 보고 카운트 정확성은 아무도 검증하지 않았다.)
+    check("graphile queue gate reports the tenant-scoped pending count",
+      gate("graphile_queue")?.evidence.includes("pending_jobs=1") === true,
+      JSON.stringify(gate("graphile_queue")?.evidence));
     check("runtime gates pass while external evidence remains deferred",
       body.status === "warning" &&
         body.summary.blocker_count === 0 &&

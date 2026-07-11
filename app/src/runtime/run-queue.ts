@@ -11,7 +11,7 @@ import type { PoolClient } from "pg";
 import type { RuntimeWorkerJob } from "../../../ts/runtime-contract";
 import type { RuntimeJobEnqueuePort } from "./executor-ports";
 import { runtimeJobTaskIdentifier } from "./runtime-job-routing";
-import { poolFlagFor } from "./pool-forbidden-flags";
+import { poolFlagFor, tenantFlagFor } from "./pool-forbidden-flags";
 import { ApiResponseError } from "./errors";
 
 export type RunPriority = "low" | "medium" | "high" | "critical";
@@ -91,17 +91,22 @@ const GRAPHILE_PRIORITY_BY_RUN_PRIORITY: Record<RunPriority, number> = {
 /** 운영: graphile_worker.add_job을 호출측 트랜잭션에서 실행(상태변경+인큐 원자화). */
 export class PgGraphileRunEnqueuer implements RunEnqueuer, RuntimeJobEnqueuePort {
   async enqueueRuntimeJob(client: PoolClient, job: RuntimeWorkerJob, delayMs?: number): Promise<void> {
+    // 테넌트 스코프 큐 깊이(api/ops-health.ts readQueueDepth)는 flags 로만 셀 수 있다 — graphile 0.16 의 공개 뷰가
+    // payload 를 노출하지 않기 때문. tenantId 없는 유지보수 잡(lease_sweeper·audit_verifier 등)은 어느 테넌트의
+    // backlog 도 아니므로 flag 를 붙이지 않는다.
+    const flags = job.tenantId === undefined ? [] : [tenantFlagFor(job.tenantId)];
     // delayMs 지정 시 run_at=now()+delay(R3a INIT 재큐 백오프). 음수/비정수는 즉시(now()) — 조용한 무시 아님, 0 하한.
     if (delayMs !== undefined && Number.isFinite(delayMs) && delayMs > 0) {
       await client.query(
-        `SELECT graphile_worker.add_job($1, payload := $2::json, run_at := now() + ($3::double precision * interval '1 millisecond'))`,
-        [runtimeJobTaskIdentifier(job), JSON.stringify(job), delayMs],
+        `SELECT graphile_worker.add_job($1, payload := $2::json, flags := $3::text[], run_at := now() + ($4::double precision * interval '1 millisecond'))`,
+        [runtimeJobTaskIdentifier(job), JSON.stringify(job), flags, delayMs],
       );
       return;
     }
-    await client.query(`SELECT graphile_worker.add_job($1, payload := $2::json)`, [
+    await client.query(`SELECT graphile_worker.add_job($1, payload := $2::json, flags := $3::text[])`, [
       runtimeJobTaskIdentifier(job),
       JSON.stringify(job),
+      flags,
     ]);
   }
 
@@ -139,7 +144,7 @@ export class PgGraphileRunEnqueuer implements RunEnqueuer, RuntimeJobEnqueuePort
     await client.query(`SELECT graphile_worker.add_job($1, payload := $2::json, flags := $3::text[], priority := $4::int)`, [
       runtimeJobTaskIdentifier(job),
       JSON.stringify(job),
-      [poolFlagFor(poolKey)],
+      [poolFlagFor(poolKey), tenantFlagFor(tenantId)],
       priority,
     ]);
   }
