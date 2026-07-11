@@ -177,6 +177,18 @@ jobs:
       - name: Check k8s packaging manifests without a cluster
         run: node scripts/k8s-static-smoke.mjs
 
+      - name: Install PyYAML
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes python3-yaml
+
+      # 정적 regex 로는 템플릿이 실제로 렌더되는지, 렌더된 워크로드가 런타임 필수 env 를 갖는지 알 수 없다.
+      # 렌더만 하고 클러스터에는 적용하지 않는다(읽기 전용).
+      - name: Render packaging manifests without a cluster
+        run: python3 scripts/k8s-render-smoke.py
+
   db-migration-smoke:
     name: PostgreSQL 15 migration smoke
     runs-on: ubuntu-latest
