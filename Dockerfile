@@ -19,6 +19,9 @@ ARG VITE_API_BASE_URL=/api
 ARG VITE_OIDC_AUTH_URL=
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL} \
     VITE_OIDC_AUTH_URL=${VITE_OIDC_AUTH_URL}
+# 콘솔은 레포 루트의 계약 패키지를 직접 임포트한다(web/src/views/security/RbacMatrixPanel.tsx → ../../../../ts/rbac-policy).
+# web/ 만 복사하면 tsc/vite 가 그 모듈을 못 찾아 콘솔 이미지 빌드가 통째로 실패한다.
+COPY ts ./ts
 COPY web ./web
 RUN npm --prefix web run build
 
