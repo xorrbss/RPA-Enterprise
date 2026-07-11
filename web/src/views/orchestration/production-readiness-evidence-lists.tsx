@@ -1,4 +1,10 @@
-import type { ProductionReadinessEvidence } from "../../api/types";
+import type { AiGovernanceReadinessRequirement, ProductionReadinessEvidence } from "../../api/types";
+import {
+  evidenceTypeLabel,
+  openRequirements,
+  requirementStatusLabel,
+  requirementStatusTone,
+} from "../security/ai-governance-evidence-shared";
 import { formatDateTime } from "./format";
 import {
   deliveryStatusText,
@@ -316,6 +322,42 @@ export function ObservabilityEvidenceList({
             </span>
             <span className="subtle">샘플링 {metadataText(item.metadata.sampled_at)}</span>
             <span className="subtle">{expiresText(item.expires_at)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * AI 운영 정책 게이트가 대조하는 요구 증빙(대상 참조까지) 노출.
+ * 서버 signals에는 있었지만 화면에 없어서, 운영자가 어떤 대상 참조로 증빙을 넣어야 게이트가 닫히는지 알 수 없었다.
+ * 요구가 없거나(정책 미설정·AI 미사용) 전부 충족이면 아무것도 그리지 않는다.
+ */
+export function AiGovernanceRequirementList({
+  requirements,
+}: {
+  requirements: readonly AiGovernanceReadinessRequirement[] | undefined;
+}): JSX.Element | null {
+  const open = openRequirements(requirements);
+  if (open.length === 0) return null;
+  return (
+    <div className="production-readiness-evidence">
+      <div className="production-readiness-evidence-head">
+        <strong>AI 운영 정책 요구 증빙</strong>
+        <span className="subtle">{open.length}건 미충족</span>
+      </div>
+      <p className="subtle" style={{ margin: "0 0 8px" }}>
+        보안 &gt; AI 거버넌스 증빙에서 아래 대상 참조 그대로 기록해야 이 게이트가 닫힙니다.
+      </p>
+      <ul className="production-readiness-evidence-list">
+        {open.map((item) => (
+          <li key={`${item.evidence_type}:${item.subject_ref}`}>
+            <div className="production-readiness-evidence-head">
+              <span className={`badge ${requirementStatusTone(item.status)}`}>{requirementStatusLabel(item.status)}</span>
+              <span className="subtle">{evidenceTypeLabel(item.evidence_type)}</span>
+            </div>
+            <code>{item.subject_ref}</code>
           </li>
         ))}
       </ul>

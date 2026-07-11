@@ -262,12 +262,27 @@ export function errorOperatorActionLabel(code: string): string {
   return ERROR_OPERATOR_ACTION_LABELS[code] ?? code;
 }
 
-// 운영자 표면 에러 메시지 단일 출처(8곳 raw enum 덤프 통일). ApiError면 web 표면 라벨,
-// 미매핑이면 raw code 폴백(조용한 공백 금지). 비-ApiError는 아래 분기로 처리.
+// 서버 details.reason → 운영자 한국어(닫힌 맵). 같은 code(예: IR_SCHEMA_INVALID)가 여러 도메인에서 재사용되므로
+// 코드 라벨만 쓰면 원인이 사라진다(AI 증빙 폼에 "시나리오 정의 오류"가 뜨던 문제). reason이 매핑돼 있으면 코드 라벨보다
+// 우선한다. 미매핑 reason은 코드 라벨로 폴백(조용한 공백 금지).
+const ERROR_REASON_LABELS: Record<string, string> = {
+  valid_ai_governance_audit_correlation_required: "유효 증빙에는 감사 추적 ID가 필요합니다.",
+  audit_correlation_not_found: "감사 추적 ID를 감사 기록에서 찾을 수 없습니다. 감사 이력 화면의 추적 번호를 사용하세요.",
+};
+
+function errorReason(err: ApiError): string | null {
+  const reason = err.body?.details?.reason;
+  return typeof reason === "string" ? reason : null;
+}
+
+// 운영자 표면 에러 메시지 단일 출처(8곳 raw enum 덤프 통일). ApiError면 details.reason 라벨 → web 표면 코드 라벨 순,
+// 둘 다 미매핑이면 raw code 폴백(조용한 공백 금지). 비-ApiError는 아래 분기로 처리.
 // correlation_id는 실 응답 필드(types.ts ApiErrorBody)가 있을 때만 부가(없는 추적ID 창작 금지).
 export function errorLabel(err: unknown): string {
   if (err instanceof ApiError) {
-    const base = errorCodeLabel(err.code);
+    const reason = errorReason(err);
+    const reasonLabel = reason === null ? undefined : ERROR_REASON_LABELS[reason];
+    const base = reasonLabel ?? errorCodeLabel(err.code);
     const cid = err.body?.correlation_id;
     return cid !== undefined ? `${base} (추적 ${cid})` : base;
   }

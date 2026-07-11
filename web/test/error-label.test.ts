@@ -97,6 +97,33 @@ describe("errorLabel — 운영자 표면 라벨 + raw 폴백", () => {
     expect(errorLabel(null)).toBe("요청 실패");
   });
 
+  // details.reason 우선: 같은 code(IR_SCHEMA_INVALID)가 여러 도메인에서 재사용되므로 코드 라벨만 쓰면
+  // AI 증빙 폼에 "시나리오 정의 오류"가 뜨는 등 원인이 사라진다. reason이 매핑되면 코드 라벨보다 우선한다.
+  test("details.reason 매핑이 있으면 코드 라벨보다 우선한다(원인 은폐 금지)", () => {
+    const missingAudit = new ApiError(422, "IR_SCHEMA_INVALID", {
+      code: "IR_SCHEMA_INVALID",
+      details: { reason: "valid_ai_governance_audit_correlation_required" },
+    });
+    expect(errorLabel(missingAudit)).toBe("유효 증빙에는 감사 추적 ID가 필요합니다.");
+
+    const notFound = new ApiError(422, "IR_SCHEMA_INVALID", {
+      code: "IR_SCHEMA_INVALID",
+      details: { reason: "audit_correlation_not_found" },
+      correlation_id: "cid-9",
+    });
+    expect(errorLabel(notFound)).toBe(
+      "감사 추적 ID를 감사 기록에서 찾을 수 없습니다. 감사 이력 화면의 추적 번호를 사용하세요. (추적 cid-9)",
+    );
+  });
+
+  test("미매핑 reason은 코드 라벨로 폴백(조용한 공백 금지)", () => {
+    const unknownReason = new ApiError(422, "IR_SCHEMA_INVALID", {
+      code: "IR_SCHEMA_INVALID",
+      details: { reason: "totally_unknown_reason" },
+    });
+    expect(errorLabel(unknownReason)).toBe("시나리오 정의 오류.");
+  });
+
   // correlation_id는 실 응답 필드(types.ts ApiErrorBody)가 있을 때만 부가(없는 추적ID 창작 금지).
   test("correlation_id 있으면 부가, 없으면 미부가", () => {
     const withCid = new ApiError(403, "AUTHZ_FORBIDDEN", { code: "AUTHZ_FORBIDDEN", correlation_id: "abc-123" });

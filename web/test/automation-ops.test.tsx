@@ -284,6 +284,15 @@ function clientWithOpsData(overrides: Partial<ApiClient> = {}): ApiClient {
           violation_count: 0,
           stale: false,
         },
+        // 준비도가 대조하는 요구 증빙(대상 참조는 테넌트 모델에서 파생) — 미충족분만 화면에 뜬다.
+        ai_governance: {
+          ai_runtime_enabled: true,
+          policy_mode: "warn" as const,
+          requirements: [
+            { evidence_type: "model_registry" as const, subject_ref: "model:claude-haiku", status: "missing" as const },
+            { evidence_type: "cost_control" as const, subject_ref: "tenant:tenant-a:ai_cost_control", status: "valid" as const },
+          ],
+        },
       },
     }),
     listBotPools: async () => ({
@@ -1467,6 +1476,22 @@ describe("automation ops view", () => {
     expect(screen.queryByText("SLO/on-call sign-off")).not.toBeInTheDocument();
     expect(screen.queryByText("Support/training completion")).not.toBeInTheDocument();
     expect(screen.queryByText("Observability telemetry wiring")).not.toBeInTheDocument();
+  });
+
+  // AI 운영 정책 게이트는 (증빙 종류 + 대상 참조) 정확 일치로만 닫힌다. 요구 대상 참조가 화면에 없으면 운영자가
+  // 무엇을 기록해야 하는지 알 수 없어 게이트가 조용히 열린 채 남는다 → 미충족 요구를 준비 패널에 노출한다.
+  test("운영 전환 준비 패널은 AI 운영 정책이 요구하는 대상 참조를 미충족분만 노출한다", async () => {
+    openAutomationOpsSection("readiness");
+    renderApp(clientWithOpsData({}));
+
+    expect(await screen.findByRole("heading", { name: "운영 전환 준비 상태" })).toBeInTheDocument();
+    expect(await screen.findByText("AI 운영 정책 요구 증빙")).toBeInTheDocument();
+    expect(screen.getByText("1건 미충족")).toBeInTheDocument();
+    // 미기록 요구는 대상 참조 원문 그대로 노출(운영자가 그대로 입력해야 게이트가 닫힌다).
+    expect(screen.getByText("model:claude-haiku")).toBeInTheDocument();
+    expect(screen.getByText("미기록")).toBeInTheDocument();
+    // 이미 충족된 요구는 할 일이 아니므로 노출하지 않는다.
+    expect(screen.queryByText("tenant:tenant-a:ai_cost_control")).not.toBeInTheDocument();
   });
 
   test("admin records external alert delivery readiness evidence from the readiness panel", async () => {
