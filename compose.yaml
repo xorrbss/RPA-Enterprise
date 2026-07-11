@@ -42,6 +42,8 @@ services:
       - -ec
       - |
         psql -v ON_ERROR_STOP=1 -f db/roles.sql
+        # psql 은 -c 문자열에서 변수 보간(:'var' / :"var")을 하지 않는다 — 콜론이 그대로 서버로 가 syntax error 가
+        # 난다. 보간은 stdin/파일 입력에서만 일어나므로 heredoc 으로 넣는다(비밀번호는 인자로 노출하지 않는다).
         psql -v ON_ERROR_STOP=1 \
           -v migrator_user="$$RPA_MIGRATOR_DB_USER" \
           -v migrator_password="$$RPA_MIGRATOR_DB_PASSWORD" \
@@ -49,7 +51,11 @@ services:
           -v app_password="$$RPA_APP_DB_PASSWORD" \
           -v lifecycle_user="$$RPA_LIFECYCLE_BYPASS_DB_USER" \
           -v lifecycle_password="$$RPA_LIFECYCLE_BYPASS_DB_PASSWORD" \
-          -c "ALTER ROLE :\"migrator_user\" LOGIN PASSWORD :'migrator_password'; ALTER ROLE :\"app_user\" LOGIN PASSWORD :'app_password'; ALTER ROLE :\"lifecycle_user\" LOGIN PASSWORD :'lifecycle_password';"
+          <<'SQL'
+        ALTER ROLE :"migrator_user" LOGIN PASSWORD :'migrator_password';
+        ALTER ROLE :"app_user" LOGIN PASSWORD :'app_password';
+        ALTER ROLE :"lifecycle_user" LOGIN PASSWORD :'lifecycle_password';
+        SQL
     restart: "no"
 
   migrate:
