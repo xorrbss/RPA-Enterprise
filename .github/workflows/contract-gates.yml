@@ -595,6 +595,21 @@ jobs:
           set -euo pipefail
           docker compose --profile fixture up -d --wait --wait-timeout 120 fixture
 
+      # 런타임이 CDP 실패 원인을 감추므로(CdpDisconnectedError), 이미지의 Chromium 이 런타임 유저로 실제 렌더
+      # 가능한지 직접 확인한다. 실패 시 Chromium 자신의 에러가 그대로 찍힌다.
+      - name: Probe the image Chromium against the fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "--- default (sandbox on)"
+          docker compose exec -T worker /usr/bin/chromium --headless=new --disable-gpu --dump-dom http://fixture/ \
+            > chromium-default.log 2>&1 && echo "default: OK" || echo "default: FAILED (see below)"
+          tail -20 chromium-default.log || true
+          echo "--- with --no-sandbox"
+          docker compose exec -T worker /usr/bin/chromium --headless=new --disable-gpu --no-sandbox --dump-dom http://fixture/ \
+            > chromium-nosandbox.log 2>&1 && echo "no-sandbox: OK" || echo "no-sandbox: FAILED (see below)"
+          tail -20 chromium-nosandbox.log || true
+
       # 스텝 이름에 'deploy' 금지 — yaml-parse.py DEPLOY_MARKERS 가드가 문자열로 걸러낸다.
       - name: Drive a real run through the running stack
         shell: bash
