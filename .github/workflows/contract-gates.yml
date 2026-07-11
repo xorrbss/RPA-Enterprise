@@ -546,6 +546,35 @@ jobs:
           cat lifecycle-worker.log
           exit 1
 
+      # 브라우저 worker 는 dev Vault(profile worker)에서 AppRole 로그인 → 세션 KEK 해소를 거쳐야 뜬다.
+      # 제품의 보안 경계(https 강제·AppRole·fail-closed)는 그대로 두고 실제 TLS Vault 를 세워 통과시킨다.
+      - name: Boot the browser worker against the local Vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --profile worker up -d --wait --wait-timeout 300 worker
+
+      - name: Assert the browser worker runs and registers a live heartbeat
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            docker compose logs worker > worker.log 2>&1 || true
+            heartbeat="$(docker compose exec -T postgres \
+              psql -U postgres -d rpa -Atqc \
+              "SELECT status || ':' || kind FROM workers WHERE id = '10000000-0000-4000-8000-0000000000aa'" 2>/dev/null || true)"
+            if grep -q "worker daemon running" worker.log && [ "${heartbeat}" = "active:browser" ]; then
+              echo "browser worker ready after ${attempt} attempt(s): heartbeat=${heartbeat}"
+              cat worker.log
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "browser worker did not become ready"
+          cat worker.log
+          docker compose logs vault-init
+          exit 1
+
       - name: Container diagnostics on failure
         if: failure()
         run: |
