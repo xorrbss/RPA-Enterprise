@@ -44,8 +44,14 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
+        # 브라우저 워커만 Unconfined. Chromium 의 user-namespace 샌드박스는 namespace clone 을 요구하는데
+        # RuntimeDefault 프로파일이 이를 막아 샌드박스가 서지 못하고("Operation not permitted") 워커가 모든 run 을
+        # INIT 실패로 재큐한다. runAsNonRoot·capabilities drop·allowPrivilegeEscalation:false 는 그대로 두고
+        # seccomp 필터만 푼다 — **브라우저 샌드박스는 켜진 채로** 동작한다(--no-sandbox 회피 금지).
+        # ⚠ restricted PodSecurity 를 강제하는 네임스페이스는 Unconfined 를 금지한다 — 그 경우 오너가
+        #   Localhost 프로파일(런타임 기본 + namespace clone 허용)을 노드에 배포해 type: Localhost 로 바꿔야 한다.
         seccompProfile:
-          type: RuntimeDefault
+          type: Unconfined
       containers:
         - name: worker
           image: ghcr.io/example/rpa-runtime:replace-me

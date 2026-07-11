@@ -645,6 +645,30 @@ function grantGraphileRuntimePrivileges() {
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA graphile_worker TO rpa_app, rpa_lifecycle_bypass;`,
       `GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA graphile_worker TO rpa_app, rpa_lifecycle_bypass;`,
       `GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA graphile_worker TO rpa_app, rpa_lifecycle_bypass;`,
+      // GRANT 만으로는 부족하다: graphile-worker 0.16 은 `_private_*` 테이블에 RLS 를 켜고 정책을 하나도 만들지
+      // 않는다. 그래서 스키마 소유자(rpa_migrator)가 아닌 런타임 역할 rpa_app 은 INSERT 가 거부되고(add_job →
+      // 42501 "new row violates row-level security policy") SELECT/UPDATE 는 조용히 0건이 된다 — 제어평면은 run 을
+      // 인큐할 수 없고(POST /v1/runs 500) 워커는 job 을 영원히 못 집는다. add_job/add_jobs 는 SECURITY DEFINER 가
+      // 아니라 호출자 권한으로 실행되므로 함수 경유로도 우회되지 않는다.
+      // 큐는 테넌트 경계가 아닌 인프라 자원이다(테넌트 격리는 우리 테이블의 RLS 가 강제한다).
+      // rpa_lifecycle_bypass 는 BYPASSRLS 라 정책이 불필요하다.
+      `DO $$`,
+      `DECLARE rls_table text;`,
+      `BEGIN`,
+      `  FOR rls_table IN`,
+      `    SELECT c.relname`,
+      `      FROM pg_class c`,
+      `      JOIN pg_namespace n ON n.oid = c.relnamespace`,
+      `     WHERE n.nspname = 'graphile_worker'`,
+      `       AND c.relkind = 'r'`,
+      `       AND c.relrowsecurity`,
+      `  LOOP`,
+      `    EXECUTE format('DROP POLICY IF EXISTS rpa_runtime_all ON graphile_worker.%I', rls_table);`,
+      `    EXECUTE format(`,
+      `      'CREATE POLICY rpa_runtime_all ON graphile_worker.%I FOR ALL TO rpa_app USING (true) WITH CHECK (true)',`,
+      `      rls_table);`,
+      `  END LOOP;`,
+      `END $$;`,
     ].join("\n"),
     "grant graphile-worker runtime privileges",
   );

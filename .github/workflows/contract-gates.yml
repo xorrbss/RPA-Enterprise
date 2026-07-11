@@ -587,6 +587,40 @@ jobs:
           docker compose logs vault-init
           exit 1
 
+      # 여기까지는 "스택이 뜬다"만 증명한다. 실제로 자동화를 실행하는지는 별개 문제 — 배포된 API 로 사이트·시나리오를
+      # 만들고 run 을 큐에 넣어, 컨테이너 워커가 이미지의 Chromium 으로 completed 까지 몰고 가는지 확인한다.
+      - name: Serve the automation target fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --profile fixture up -d --wait --wait-timeout 120 fixture
+
+      # 런타임은 CDP 실패 원인을 감춘다(CdpDisconnectedError). 이미지의 Chromium 이 런타임 유저로, **샌드박스를
+      # 켠 채로** 대상을 렌더할 수 있어야 한다 — chromium-sandbox 패키지가 빠지면 "No usable sandbox!" 로 죽고
+      # 워커는 모든 run 을 INIT 실패로 재큐한다. --no-sandbox 회피는 브라우저 샌드박스 경계를 무너뜨리므로 금지.
+      # 런타임은 CDP 실패 원인을 감춘다(CdpDisconnectedError). 워커 컨테이너가 **배포 형상 그대로**, 즉 샌드박스를
+      # 켠 채로 대상 페이지를 렌더할 수 있어야 한다. --no-sandbox 회피는 금지 — 워커는 외부 웹 콘텐츠를 렌더하고
+      # 컨테이너 안에 Vault AppRole·DB 자격이 있다.
+      - name: Assert the worker Chromium renders the target with its sandbox enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose exec -T worker /usr/bin/chromium --headless=new --disable-gpu --dump-dom http://fixture/ \
+            > chromium-render.log 2>&1 || { echo "worker Chromium cannot render with the sandbox enabled:"; tail -5 chromium-render.log; exit 1; }
+          grep -q "review-item" chromium-render.log
+          echo "worker chromium (sandboxed) rendered the fixture"
+
+      # 스텝 이름에 'deploy' 금지 — yaml-parse.py DEPLOY_MARKERS 가드가 문자열로 걸러낸다.
+      - name: Drive a real run through the running stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/container-e2e-run.mjs
+
+      - name: Worker logs after the run
+        if: always()
+        run: docker compose logs --tail 120 worker
+
       - name: Container diagnostics on failure
         if: failure()
         run: |

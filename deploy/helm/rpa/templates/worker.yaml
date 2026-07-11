@@ -29,8 +29,12 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
+        # 브라우저 워커만 Unconfined — Chromium 의 user-namespace 샌드박스가 요구하는 namespace clone 을
+        # RuntimeDefault 가 막아 샌드박스 자체가 서지 못한다(워커가 모든 run 을 INIT 실패로 재큐).
+        # non-root·capabilities drop·privilege escalation 금지는 유지, 브라우저 샌드박스도 켜진 채 동작한다.
+        # ⚠ restricted PodSecurity 네임스페이스는 Unconfined 금지 — Localhost 프로파일로 대체 필요(오너 배포).
         seccompProfile:
-          type: RuntimeDefault
+          type: Unconfined
       containers:
         - name: worker
           image: {{ include "rpa.image" . | quote }}

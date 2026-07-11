@@ -89,9 +89,12 @@ async function main(): Promise<void> {
   });
   check("db-migrate.mjs --graphile-worker 성공", migrate.status === 0, `exit=${migrate.status}`);
 
-  // 실 인큐 경로로 tenant A job 1건(= run-queue.ts 가 붙이는 flags 를 그대로 생성).
-  const enqueuePool = new pg.Pool({ host: HOST, port: PORT, user: ADMIN_USER, password: ADMIN_PASSWORD, database: DB });
+  // 실 인큐 경로를 **런타임 역할 rpa_app 으로** 실행한다(제어평면이 실제로 쓰는 접속). superuser 로 인큐하면
+  // RLS 를 우회해 결함이 가려진다 — graphile 0.16 은 `_private_*` 에 RLS 를 켜고 정책을 만들지 않으므로,
+  // db-migrate 가 rpa_app 정책을 부여하지 않으면 여기서 42501 로 실패해야 한다(= 실 배포에서 run 생성 불가).
+  const enqueuePool = new pg.Pool({ host: HOST, port: PORT, user: "rpa_app", password: APP_PW, database: DB });
   const enqueueClient = await enqueuePool.connect();
+  let enqueueError: string | undefined;
   try {
     await enqueueClient.query("BEGIN");
     await enqueueClient.query(`SET LOCAL app.tenant_id = '${TENANT_A}'`);
@@ -101,10 +104,14 @@ async function main(): Promise<void> {
       correlationId: CORR_A,
     });
     await enqueueClient.query("COMMIT");
+  } catch (err) {
+    enqueueError = String((err as { message?: string }).message ?? err);
+    await enqueueClient.query("ROLLBACK").catch(() => undefined);
   } finally {
     enqueueClient.release();
     await enqueuePool.end();
   }
+  check("rpa_app 인큐: graphile add_job 성공(제어평면 run 생성 경로)", enqueueError === undefined, enqueueError);
 
   // 2) rpa_app(런타임 역할)로 연결해 동작 검증.
   const app = new pg.Client({ host: HOST, port: PORT, user: "rpa_app", password: APP_PW, database: DB });
@@ -153,6 +160,16 @@ async function main(): Promise<void> {
   );
   check("rpa_app 큐 조회: 타 테넌트 job 은 0건(음성 대조)", queueB.rows[0]?.n === 0, JSON.stringify(queueB.rows[0]));
   await app.query("COMMIT");
+
+  // 워커의 dequeue(잠금) 경로 — graphile 러너가 rpa_app 접속으로 실행하는 UPDATE. RLS 정책이 없으면 여기서
+  // 0행이 갱신되며 **조용히** 아무 job 도 못 집는다(에러도 나지 않는다).
+  const locked = await app.query<{ id: string }>(
+    `UPDATE graphile_worker._private_jobs
+        SET locked_at = now(), locked_by = 'dg1-test-worker'
+      WHERE locked_at IS NULL
+      RETURNING id::text`,
+  );
+  check("rpa_app dequeue: job 잠금 가능(워커가 job 을 집을 수 있음)", locked.rowCount === 1, JSON.stringify(locked.rows));
 
   await app.end();
 
