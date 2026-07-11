@@ -4,6 +4,7 @@ import { useApiClient } from "../../api/context";
 import type { ProductionReadiness, ProductionReadinessEvidence } from "../../api/types";
 import { formatDateTime } from "./format";
 import {
+  AiGovernanceRequirementList,
   BackupEvidenceList,
   ExternalAlertEvidenceList,
   ObservabilityEvidenceList,
@@ -207,6 +208,7 @@ export function ProductionReadinessPanel({
           </li>
         ))}
       </ul>
+      <AiGovernanceRequirementList requirements={readiness?.signals.ai_governance.requirements} />
       <ExternalAlertEvidenceList
         items={externalAlertEvidence}
         isLoading={isExternalAlertEvidenceLoading}

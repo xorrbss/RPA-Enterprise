@@ -80,7 +80,24 @@ export interface ProductionReadiness {
       readonly violation_count: number | null;
       readonly stale: boolean;
     };
+    readonly ai_governance: {
+      readonly ai_runtime_enabled: boolean;
+      readonly policy_mode?: AiGovernanceRuntimePolicyMode | null;
+      readonly requirements?: readonly AiGovernanceReadinessRequirement[];
+    };
   };
+}
+
+/**
+ * ai_governance_runtime 게이트가 실제로 대조하는 증빙 요구(subject_ref는 테넌트 모델·프롬프트에서 파생).
+ * 서버는 AI 운영 정책이 설정된 뒤에만 requirements를 채운다(미설정/AI 미사용이면 부재) → optional.
+ */
+export type AiGovernanceRequirementStatus = "valid" | "missing" | "failed" | "expired" | "deferred";
+
+export interface AiGovernanceReadinessRequirement {
+  readonly evidence_type: AiGovernanceEvidenceType;
+  readonly subject_ref: string;
+  readonly status: AiGovernanceRequirementStatus;
 }
 
 export type AiGovernanceEvidenceType =

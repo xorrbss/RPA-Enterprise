@@ -199,6 +199,60 @@ describe("AI governance evidence panel", () => {
     expect(body?.audit_correlation_id).toBeUndefined();
   });
 
+  // 준비도 게이트는 (증빙 종류 + 대상 참조) 정확 일치로만 요구를 충족한다. 기본 대상 참조는 어느 테넌트의 요구와도
+  // 일치하지 않아, 그대로 기록하면 증빙은 남고 게이트는 열린 채 남는다(조용한 실패) → 요구 값을 제시하고 불일치를 경고한다.
+  test("admin recorder surfaces the readiness-required subjects and warns on a subject that closes no gate", async () => {
+    localStorage.setItem("rpa.token", jwt(["admin"]));
+    const recordAiGovernanceEvidence = vi.fn(async (body: AiGovernanceEvidenceRequest, _idempotencyKey: string) => recordedEvidence(body));
+    const base = fakeClient({
+      listAiGovernanceEvidence: async () => ({ items: [], next_cursor: null }),
+      recordAiGovernanceEvidence,
+    });
+    const readiness = await base.getProductionReadiness();
+    renderApp({
+      ...base,
+      getProductionReadiness: async () => ({
+        ...readiness,
+        signals: {
+          ...readiness.signals,
+          ai_governance: {
+            ai_runtime_enabled: true,
+            policy_mode: "warn",
+            requirements: [
+              { evidence_type: "model_registry", subject_ref: "model:claude-haiku", status: "missing" },
+              { evidence_type: "cost_control", subject_ref: "tenant:tenant-a:ai_cost_control", status: "missing" },
+            ],
+          },
+        },
+      }),
+    });
+
+    const panel = await screen.findByRole("region", { name: "AI 거버넌스 증빙" });
+    const scoped = within(panel);
+
+    // 기본 대상 참조(model:codex-prod-primary)는 요구 목록에 없다 → 게이트를 못 닫는다고 알린다.
+    expect(
+      await scoped.findByText(/이 대상 참조는 운영 전환에 필요한 증빙 목록에 없습니다/),
+    ).toBeInTheDocument();
+
+    // 요구 값을 한 번에 넣는 버튼이 제공된다.
+    fireEvent.click(scoped.getByRole("button", { name: /모델 등록 · model:claude-haiku/ }));
+    expect(scoped.getByLabelText("대상 참조")).toHaveValue("model:claude-haiku");
+    expect(scoped.queryByText(/이 대상 참조는 운영 전환에 필요한 증빙 목록에 없습니다/)).toBeNull();
+
+    fireEvent.change(scoped.getByLabelText("감사 추적 ID"), {
+      target: { value: "71000000-0000-4000-8000-000000000099" },
+    });
+    fireEvent.click(scoped.getByRole("button", { name: "AI 증빙 기록" }));
+
+    await waitFor(() => expect(recordAiGovernanceEvidence).toHaveBeenCalledTimes(1));
+    expect(recordAiGovernanceEvidence.mock.calls[0]?.[0]).toMatchObject({
+      evidence_type: "model_registry",
+      subject_ref: "model:claude-haiku",
+      status: "valid",
+    });
+  });
+
   test("admin form blocks endpoint or credential-looking text before record", async () => {
     localStorage.setItem("rpa.token", jwt(["admin"]));
     const recordAiGovernanceEvidence = vi.fn(async (body: AiGovernanceEvidenceRequest, _idempotencyKey: string) => recordedEvidence(body));

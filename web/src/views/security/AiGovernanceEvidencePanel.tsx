@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApiClient } from "../../api/context";
 import { useCan } from "../../api/permissions";
@@ -38,11 +38,21 @@ export function AiGovernanceEvidencePanel(): JSX.Element {
   );
   const items = lv.query.data?.items ?? [];
   const summary = useMemo(() => summarizeEvidence(items), [items]);
+  // 준비도가 대조하는 요구 증빙(대상 참조는 테넌트 모델에서 파생) — 기록기가 정확한 값을 제시하도록 읽는다.
+  // 기록 권한이 없으면 조회하지 않는다(읽기 전용 표면에서 불필요한 403 방지).
+  const canManage = can("ai_governance.manage");
+  const readiness = useQuery({
+    queryKey: ["production-readiness"],
+    queryFn: () => api.getProductionReadiness(),
+    enabled: canManage,
+  });
   const recordMutation = useMutation({
     mutationFn: (draft: EvidenceRecordDraft) => api.recordAiGovernanceEvidence(buildEvidenceRequest(draft), governanceEvidenceKey(draft)),
     onSuccess: (item) => {
       setLastRecordedId(item.evidence_id);
       void queryClient.invalidateQueries({ queryKey: ["ai-governance-evidence"] });
+      // 기록이 요구를 충족했는지 즉시 반영(요구 목록·게이트 상태).
+      void queryClient.invalidateQueries({ queryKey: ["production-readiness"] });
     },
   });
 
@@ -114,11 +124,12 @@ export function AiGovernanceEvidencePanel(): JSX.Element {
             <button className="btn" type="button" onClick={lv.pager.onNext} disabled={!lv.pager.hasNext}>다음</button>
           </div>
         ) : null}
-        {can("ai_governance.manage") ? (
+        {canManage ? (
           <AiGovernanceEvidenceRecorder
             isRecording={recordMutation.isPending}
             error={recordMutation.error}
             lastRecordedId={lastRecordedId}
+            requirements={readiness.data?.signals.ai_governance.requirements}
             onSubmit={(draft) => recordMutation.mutate(draft)}
           />
         ) : (

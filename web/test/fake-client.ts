@@ -536,6 +536,8 @@ export function fakeClient(overrides: Partial<ApiClient> = {}): ApiClient {
           violation_count: null,
           stale: true,
         },
+        // 기본 fake는 AI 런타임 미사용 → 서버와 동일하게 requirements 부재(요구 증빙 목록 미표시).
+        ai_governance: { ai_runtime_enabled: false },
       },
     }),
     listProductionReadinessEvidence: empty,

@@ -3,6 +3,8 @@ import type {
   AiGovernanceEvidenceRequest,
   AiGovernanceEvidenceStatus,
   AiGovernanceEvidenceType,
+  AiGovernanceReadinessRequirement,
+  AiGovernanceRequirementStatus,
 } from "../../api/types";
 
 export const EVIDENCE_TYPES = ["model_registry", "prompt_registry", "eval_result", "cost_control", "human_override"] as const;
@@ -237,6 +239,28 @@ export function evidenceStatusTone(status: AiGovernanceEvidenceStatus): "green" 
   if (status === "valid") return "green";
   if (status === "deferred") return "amber";
   return "red";
+}
+
+// 준비도 요구 증빙 상태 → 운영자 한국어(닫힌 맵). 증빙 상태(valid/deferred/failed)와 달리 미기록·만료가 더 있다.
+// 미매핑은 raw 폴백(조용한 공백 금지).
+const REQUIREMENT_STATUS_LABELS: Record<string, string> = {
+  valid: "충족", missing: "미기록", expired: "만료", failed: "실패", deferred: "보류",
+};
+export function requirementStatusLabel(status: AiGovernanceRequirementStatus): string {
+  return REQUIREMENT_STATUS_LABELS[status] ?? status;
+}
+
+export function requirementStatusTone(status: AiGovernanceRequirementStatus): "green" | "amber" | "red" {
+  if (status === "valid") return "green";
+  if (status === "failed") return "red";
+  return "amber";
+}
+
+/** 준비도 게이트를 아직 닫지 못한 요구(충족 외 전부). 요구가 없으면 빈 배열. */
+export function openRequirements(
+  requirements: readonly AiGovernanceReadinessRequirement[] | undefined,
+): readonly AiGovernanceReadinessRequirement[] {
+  return (requirements ?? []).filter((item) => item.status !== "valid");
 }
 
 export function metadataSummary(item: AiGovernanceEvidence): string {
