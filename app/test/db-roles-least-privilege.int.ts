@@ -1,7 +1,10 @@
 /**
  * DG1 — DB 역할 분리(최소권한) 실 PG 검증.
  *   db/roles.sql 의 rpa_app 런타임 역할이: DML 동작 · DDL 거부 · RLS 적용(BYPASSRLS 없음)임을 증명한다.
- *   gate 가 제공하는 postgres(superuser, trust)로 셋업하고, rpa_app 로 연결해 검증한다.
+ *   또한 오너 런북 1단계의 실 러너(`db-migrate.mjs --graphile-worker`)를 실행해, 그 GRANT 로 rpa_app 이 큐를
+ *   읽을 수 있음을 못 박는다 — 이 조합이 깨지면 production readiness graphile_queue 게이트가 영구 blocked 다.
+ *   superuser(postgres)로 셋업하고 rpa_app 로 연결해 검증한다. CI 는 비밀번호 인증이라 PGADMIN_PASSWORD 를
+ *   쓰고, 로컬 temp-PG(trust)에서는 undefined 로 무시된다(runtime-worker-claim.int.ts 와 동일 패턴).
  *
  * Run with:
  *   node scripts/db-temp-postgres-gate.mjs -- npm --prefix app exec tsx -- app/test/db-roles-least-privilege.int.ts
@@ -18,8 +21,22 @@ import { PgGraphileRunEnqueuer } from "../src/runtime/run-queue";
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const HOST = process.env.PGHOST ?? "127.0.0.1";
 const PORT = Number(process.env.PGPORT ?? "5432");
+const ADMIN_USER = process.env.PGADMIN_USER ?? "postgres";
+const ADMIN_PASSWORD = process.env.PGADMIN_PASSWORD;
 const DB = "rpa_dg1_roles";
 const APP_PW = "dg1-app-test-pw";
+
+function adminClient(database: string): pg.Client {
+  return new pg.Client({ host: HOST, port: PORT, user: ADMIN_USER, password: ADMIN_PASSWORD, database });
+}
+
+/** db-migrate.mjs 는 DATABASE_URL 로 연결한다(graphile runMigrations 가 연결 문자열을 요구). */
+function adminDatabaseUrl(database: string): string {
+  const auth = ADMIN_PASSWORD === undefined || ADMIN_PASSWORD === ""
+    ? encodeURIComponent(ADMIN_USER)
+    : `${encodeURIComponent(ADMIN_USER)}:${encodeURIComponent(ADMIN_PASSWORD)}`;
+  return `postgresql://${auth}@${HOST}:${PORT}/${encodeURIComponent(database)}`;
+}
 
 const TENANT_A = "00000000-0000-4000-8000-0000000000a1";
 const TENANT_B = "00000000-0000-4000-8000-0000000000b2";
@@ -37,14 +54,14 @@ function check(label: string, cond: boolean, detail?: string): void {
 }
 
 async function main(): Promise<void> {
-  // 1) postgres(superuser, trust)로 깨끗한 DB 생성 + 마이그레이션 + roles.sql 적용.
-  const admin = new pg.Client({ host: HOST, port: PORT, user: "postgres", database: "postgres" });
+  // 1) superuser 로 깨끗한 DB 생성 + 마이그레이션 + roles.sql 적용.
+  const admin = adminClient("postgres");
   await admin.connect();
   await admin.query(`DROP DATABASE IF EXISTS ${DB}`);
   await admin.query(`CREATE DATABASE ${DB}`);
   await admin.end();
 
-  const setup = new pg.Client({ host: HOST, port: PORT, user: "postgres", database: DB });
+  const setup = adminClient(DB);
   await setup.connect();
   await setup.query(readFileSync(`${ROOT}db/migration_concurrency_idempotency.sql`, "utf8"));
   await setup.query(readFileSync(`${ROOT}db/migration_core_entities.sql`, "utf8"));
@@ -68,12 +85,12 @@ async function main(): Promise<void> {
   const migrate = spawnSync(process.execPath, ["scripts/db-migrate.mjs", "--baseline-existing", "--graphile-worker"], {
     cwd: ROOT,
     stdio: "inherit",
-    env: { ...process.env, DATABASE_URL: `postgresql://postgres@${HOST}:${PORT}/${DB}` },
+    env: { ...process.env, DATABASE_URL: adminDatabaseUrl(DB) },
   });
   check("db-migrate.mjs --graphile-worker 성공", migrate.status === 0, `exit=${migrate.status}`);
 
   // 실 인큐 경로로 tenant A job 1건(= run-queue.ts 가 붙이는 flags 를 그대로 생성).
-  const enqueuePool = new pg.Pool({ host: HOST, port: PORT, user: "postgres", database: DB });
+  const enqueuePool = new pg.Pool({ host: HOST, port: PORT, user: ADMIN_USER, password: ADMIN_PASSWORD, database: DB });
   const enqueueClient = await enqueuePool.connect();
   try {
     await enqueueClient.query("BEGIN");
