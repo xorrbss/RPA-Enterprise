@@ -602,10 +602,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          NET="$(docker compose ps --format '{{.Name}}' worker | head -1)"
+          probe() {
+            local label="$1"; shift
+            if docker run --rm --network "container:${NET}" "$@" rpa-runtime:local \
+                 /usr/bin/chromium --headless=new --disable-gpu --dump-dom http://fixture/ > "probe.log" 2>&1; then
+              echo "${label}: OK ($(grep -c review-item probe.log) review-item)"
+            else
+              echo "${label}: FAILED -> $(grep -m1 -iE 'sandbox|namespace|permitted' probe.log || true)"
+            fi
+          }
+          probe "sandbox on, no extra privileges"
+          probe "sandbox on + apparmor=unconfined" --security-opt apparmor=unconfined
+          probe "sandbox on + cap SYS_ADMIN" --cap-add SYS_ADMIN
           docker compose exec -T worker /usr/bin/chromium --headless=new --disable-gpu --dump-dom http://fixture/ \
-            > chromium-render.log 2>&1 || { echo "Chromium failed to render with the sandbox enabled:"; cat chromium-render.log; exit 1; }
+            > chromium-render.log 2>&1 || { echo "worker container (as deployed): Chromium cannot render with the sandbox enabled"; tail -5 chromium-render.log; exit 1; }
           grep -q "review-item" chromium-render.log
-          echo "chromium (sandboxed) rendered the fixture"
+          echo "worker container: chromium (sandboxed) rendered the fixture"
 
       # 스텝 이름에 'deploy' 금지 — yaml-parse.py DEPLOY_MARKERS 가드가 문자열로 걸러낸다.
       - name: Drive a real run through the running stack
