@@ -172,7 +172,9 @@ services:
       - -dev-tls
       - -dev-tls-cert-dir=/vault/tls
       # minio 가 같은 인증서를 재사용한다(자체 서명 CA 하나로 두 서비스의 TLS 를 덮는다).
-      - -dev-tls-san=vault,minio
+      # ⚠ -dev-tls-san 은 콤마 목록을 쪼개지 않는다(SAN 이 "vault,minio" 한 덩어리가 된다) — 플래그를 반복한다.
+      - -dev-tls-san=vault
+      - -dev-tls-san=minio
       - -dev-listen-address=0.0.0.0:8200
       - -dev-root-token-id=${VAULT_DEV_ROOT_TOKEN:-rpa-local-dev-root}
     healthcheck:
