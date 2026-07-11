@@ -23,7 +23,10 @@ const baseResourceFiles = [
 ];
 
 const baseOptionalFiles = [
-  "deploy/k8s/base/32-egress-owner-allowlist.optional.yaml",
+  // 오너 승인 egress 는 자체 kustomization 을 가진 디렉터리다 — kustomize 는 kustomization 루트 바깥의
+  // 개별 파일을 resources 로 참조하는 것을 거부하므로(오버레이 build 실패), 파일 참조로 되돌리지 말 것.
+  "deploy/k8s/optional/owner-approved-egress/egress-owner-allowlist.yaml",
+  "deploy/k8s/optional/owner-approved-egress/kustomization.yaml",
   "deploy/k8s/base/40-ingress.optional.yaml",
 ];
 
@@ -234,7 +237,7 @@ function checkBaseRuntimeContract() {
   const console = base["deploy/k8s/base/23-console.yaml"];
   const policies = base["deploy/k8s/base/30-policies.yaml"];
   const hpa = base["deploy/k8s/base/31-api-hpa.yaml"];
-  const ownerEgress = base["deploy/k8s/base/32-egress-owner-allowlist.optional.yaml"];
+  const ownerEgress = base["deploy/k8s/optional/owner-approved-egress/egress-owner-allowlist.yaml"];
   const ingress = base["deploy/k8s/base/40-ingress.optional.yaml"];
 
   requireRegex("base namespace", base["deploy/k8s/base/00-namespace.yaml"], /name:\s*rpa-system/i);
@@ -316,9 +319,9 @@ function checkK8sStagingSampleOverlay() {
 
   requireRegex("staging sample overlay points at base", overlay, /resources:[\s\S]*-\s*\.\.\/\.\.\/base/i);
   requireRegex(
-    "staging sample overlay includes owner egress optional template",
+    "staging sample overlay includes the owner egress optional kustomization directory",
     overlay,
-    /resources:[\s\S]*32-egress-owner-allowlist\.optional\.yaml/i,
+    /resources:[\s\S]*-\s*\.\.\/\.\.\/optional\/owner-approved-egress/i,
   );
   requireRegex("staging sample overlay sets staging namespace", overlay, /namespace:\s*rpa-staging/i);
   requireRegex("staging sample overlay is marked non-release", overlay, /rpa\.example\.com\/release-artifact:\s*"false"/i);

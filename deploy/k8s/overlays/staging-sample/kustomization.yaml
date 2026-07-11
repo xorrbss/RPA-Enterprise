@@ -3,7 +3,8 @@ kind: Kustomization
 namespace: rpa-staging
 resources:
   - ../../base
-  - ../../base/32-egress-owner-allowlist.optional.yaml
+  # 선택 매니페스트는 디렉터리로 참조한다 — kustomize 는 kustomization 루트 바깥의 개별 파일 참조를 거부한다.
+  - ../../optional/owner-approved-egress
 images:
   - name: ghcr.io/example/rpa-runtime
     newName: registry.owner-approved.invalid/rpa-runtime

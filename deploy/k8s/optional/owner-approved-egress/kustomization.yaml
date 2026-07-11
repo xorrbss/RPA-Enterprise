@@ -1,0 +1,9 @@
+# 오너 승인 egress allowlist(선택). base 에 포함하지 않는다 — 실 CIDR/포트는 오너가 승인해야 한다.
+#
+# 오버레이는 이 **디렉터리**를 resources 로 참조한다. kustomize 의 기본 load restrictor 는 kustomization 루트
+# 바깥의 개별 **파일** 참조를 거부하므로(오버레이가 base/*.yaml 을 직접 가리키면 build 실패), 선택 매니페스트는
+# 자체 kustomization 을 가진 디렉터리로 둔다.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - egress-owner-allowlist.yaml

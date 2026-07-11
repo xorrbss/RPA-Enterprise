@@ -60,7 +60,8 @@ SLO dashboards, and explicit deployment approval.
   constraints. Worker pods stay single-replica by default until unique worker ID
   allocation is modeled.
 - `base/30-policies.yaml` denies runtime egress by default and allows DNS only.
-  Apply `base/32-egress-owner-allowlist.optional.yaml` only after replacing every
+  Apply `optional/owner-approved-egress/` (its own kustomization directory; the
+  sample overlay references it) only after replacing every
   `OWNER_DECISION_REQUIRED_*_CIDR` with owner-approved destination CIDRs and
   ports for managed PostgreSQL, Vault, object storage, OTLP, and LLM providers.
 - Runtime images must be promoted by immutable sha256 digest, not mutable tags.
