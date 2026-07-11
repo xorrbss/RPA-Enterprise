@@ -464,3 +464,61 @@ jobs:
 
       - name: Run console browser e2e
         run: npm --prefix app run test:console-e2e
+
+  container-stack-boot:
+    name: Container stack boot smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # These visible compose passwords are throwaway values for an ephemeral CI
+    # container stack that is torn down in the same job. They are not staging
+    # SecretStore provisioning evidence and must not be reused for any real
+    # environment or runtime material.
+    env:
+      POSTGRES_PASSWORD: ci-compose-postgres
+      RPA_MIGRATOR_DB_PASSWORD: ci-compose-migrator
+      RPA_APP_DB_PASSWORD: ci-compose-app
+      RPA_LIFECYCLE_BYPASS_DB_PASSWORD: ci-compose-lifecycle
+      JWT_HS256_SECRET: ci-compose-boot-smoke-hs256-key-0123456789abcdef
+      RPA_API_PORT: "8080"
+      RPA_HEALTH_PORT: "8081"
+      RPA_CONSOLE_PORT: "8088"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Build runtime and console images
+        run: docker compose build
+
+      - name: Boot the container stack (postgres, role bootstrap, migrations, API, console)
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose up -d --wait --wait-timeout 300 api web
+
+      - name: Assert the migration container ran the real graphile step
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose logs migrate > migrate.log
+          cat migrate.log
+          grep -q "applying graphile-worker schema migrations" migrate.log
+          grep -q "db migrate: complete" migrate.log
+
+      - name: Assert API readiness probe and console are served
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "http://127.0.0.1:${RPA_HEALTH_PORT}/readyz"
+          curl -fsS "http://127.0.0.1:${RPA_CONSOLE_PORT}/" | grep -qi "<!doctype html"
+
+      - name: Container diagnostics on failure
+        if: failure()
+        run: |
+          docker compose ps --all
+          docker compose logs --tail 200
+
+      - name: Tear down the container stack
+        if: always()
+        run: docker compose down -v
