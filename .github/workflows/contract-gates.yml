@@ -523,17 +523,28 @@ jobs:
           set -euo pipefail
           docker compose --profile worker up -d --wait --wait-timeout 240 lifecycle-worker
 
+      # lifecycle-worker 에는 healthcheck 가 없어 `up --wait` 는 "running" 만으로 통과한다(데몬 준비 완료가 아님).
+      # 준비 신호(로그 + workers heartbeat 행)를 폴링한다.
       - name: Assert the lifecycle worker runs and registers a live heartbeat
         shell: bash
         run: |
           set -euo pipefail
-          docker compose logs lifecycle-worker > lifecycle-worker.log
+          for attempt in $(seq 1 60); do
+            docker compose logs lifecycle-worker > lifecycle-worker.log 2>&1 || true
+            heartbeat="$(docker compose exec -T postgres \
+              psql -U postgres -d rpa -Atqc \
+              "SELECT status || ':' || kind FROM workers WHERE id = '20000000-0000-4000-8000-0000000000aa'" 2>/dev/null || true)"
+            if grep -q "artifact lifecycle worker daemon running" lifecycle-worker.log \
+              && [ "${heartbeat}" = "active:sweeper" ]; then
+              echo "lifecycle worker ready after ${attempt} attempt(s): heartbeat=${heartbeat}"
+              cat lifecycle-worker.log
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "lifecycle worker did not become ready"
           cat lifecycle-worker.log
-          grep -q "artifact lifecycle worker daemon running" lifecycle-worker.log
-          docker compose exec -T postgres \
-            psql -U postgres -d rpa -Atqc \
-            "SELECT status || ':' || kind FROM workers WHERE id = '20000000-0000-4000-8000-0000000000aa'" \
-            | grep -qx "active:sweeper"
+          exit 1
 
       - name: Container diagnostics on failure
         if: failure()
