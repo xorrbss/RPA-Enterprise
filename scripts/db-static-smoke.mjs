@@ -225,9 +225,13 @@ function checkDbRestoreDrill() {
 function checkComposeRoleSplit() {
   requireRegex("compose role bootstrap service", compose, /\n  role-bootstrap:\n/i);
   requireRegex("compose role bootstrap applies roles.sql", compose, /psql\s+-v\s+ON_ERROR_STOP=1\s+-f\s+db\/roles\.sql/i);
-  requireRegex("compose role bootstrap injects migrator password", compose, /ALTER ROLE :\\"migrator_user\\"\s+LOGIN\s+PASSWORD\s+:'migrator_password'/i);
-  requireRegex("compose role bootstrap injects app password", compose, /ALTER ROLE :\\"app_user\\"\s+LOGIN\s+PASSWORD\s+:'app_password'/i);
-  requireRegex("compose role bootstrap injects lifecycle bypass password", compose, /ALTER ROLE :\\"lifecycle_user\\"\s+LOGIN\s+PASSWORD\s+:'lifecycle_password'/i);
+  // psql 은 -c 문자열에서 :'var'/:"var" 를 보간하지 않는다(서버가 콜론을 그대로 받아 syntax error). 보간되는
+  // stdin 경로(heredoc)로만 이 주입이 성립하므로 heredoc 형태를 고정한다 — 이전 regex 는 -c 이스케이프 형태를
+  // 요구해 동작한 적 없는 문법을 그대로 얼려두고 있었다(컨테이너 기동 스모크가 적발).
+  requireRegex("compose role bootstrap feeds role SQL via psql stdin (interpolation happens there, not in -c)", compose, /<<'SQL'/);
+  requireRegex("compose role bootstrap injects migrator password", compose, /ALTER ROLE :"migrator_user"\s+LOGIN\s+PASSWORD\s+:'migrator_password'/i);
+  requireRegex("compose role bootstrap injects app password", compose, /ALTER ROLE :"app_user"\s+LOGIN\s+PASSWORD\s+:'app_password'/i);
+  requireRegex("compose role bootstrap injects lifecycle bypass password", compose, /ALTER ROLE :"lifecycle_user"\s+LOGIN\s+PASSWORD\s+:'lifecycle_password'/i);
   requireRegex("compose migrate uses non-bypass release smoke", compose, /"scripts\/db-migrate\.mjs",\s*"--baseline-existing",\s*"--graphile-worker",\s*"--smoke",\s*"--require-non-bypass"/i);
   requireRegex("compose migrate uses migrator role", serviceBlock(compose, "migrate"), /PGUSER:\s+\$\{RPA_MIGRATOR_DB_USER:-rpa_migrator\}/i);
 
