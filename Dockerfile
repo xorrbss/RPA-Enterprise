@@ -8,6 +8,14 @@ WORKDIR /workspace
 COPY app/package.json app/package-lock.json ./app/
 RUN npm ci --prefix app --include=dev && npm cache clean --force
 
+# 런타임은 codegen 산출물(validators/transitions/…)을 직접 임포트하고 validators 는 ajv 를 요구한다.
+# app/node_modules 는 /workspace/codegen/*.ts 의 해석 경로가 아니므로(Node 는 codegen/node_modules → /node_modules
+# 로만 올라간다) codegen 의 프로덕션 의존을 별도로 설치해 이미지에 넣는다.
+FROM node:${NODE_VERSION} AS codegen-deps
+WORKDIR /workspace
+COPY codegen/package.json codegen/package-lock.json ./codegen/
+RUN npm ci --prefix codegen --omit=dev && npm cache clean --force
+
 FROM node:${NODE_VERSION} AS web-deps
 WORKDIR /workspace
 COPY web/package.json web/package-lock.json ./web/
@@ -54,6 +62,7 @@ COPY --from=app-deps /workspace/app/node_modules ./app/node_modules
 COPY app/package.json app/package-lock.json ./app/
 COPY app/src ./app/src
 COPY codegen ./codegen
+COPY --from=codegen-deps /workspace/codegen/node_modules ./codegen/node_modules
 COPY db ./db
 COPY gateway ./gateway
 COPY schema ./schema
