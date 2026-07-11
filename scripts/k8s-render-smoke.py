@@ -165,7 +165,7 @@ def check_workloads(label: str, docs: list[dict]) -> None:
             where = f"{label}: {kind}/{name}/{cname}"
             if not container.get("image"):
                 fail(f"{where}: container has no image")
-            env = container_env(container, sources, where)
+            resolved = container_env(container, sources, where)
 
             command = " ".join(str(part) for part in (container.get("command") or []) + (container.get("args") or []))
             if "db-migrate.mjs" in command:
@@ -175,7 +175,7 @@ def check_workloads(label: str, docs: list[dict]) -> None:
                         fail(f"{where}: migration command is missing {flag} ({command})")
                 continue
 
-            run_mode = env.get("RUN_MODE")
+            run_mode = resolved.get("RUN_MODE")
             if not run_mode:
                 continue
             seen_run_modes.add(run_mode)
@@ -183,10 +183,10 @@ def check_workloads(label: str, docs: list[dict]) -> None:
             if required is None:
                 fail(f"{where}: unknown RUN_MODE {run_mode!r}")
                 continue
-            missing = [key for key in required if key not in env]
+            missing = [key for key in required if key not in resolved]
             if missing:
                 fail(f"{where}: RUN_MODE={run_mode} is missing required env: {', '.join(missing)}")
-            if run_mode == "api" and not any(key in env for key in API_AUTH_ENV):
+            if run_mode == "api" and not any(key in resolved for key in API_AUTH_ENV):
                 fail(f"{where}: api needs one of {' / '.join(API_AUTH_ENV)}")
 
     for run_mode in REQUIRED_ENV_BY_RUN_MODE:
