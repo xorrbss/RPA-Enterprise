@@ -513,6 +513,28 @@ jobs:
           curl -fsS "http://127.0.0.1:${RPA_HEALTH_PORT}/readyz"
           curl -fsS "http://127.0.0.1:${RPA_CONSOLE_PORT}/" | grep -qi "<!doctype html"
 
+      # 브라우저 worker(RUN_MODE=worker)는 부팅 즉시 Vault 에서 세션 KEK/resume-token HMAC 을 해소하므로
+      # 오너가 프로비저닝한 SecretStore 없이는 뜰 수 없다(fail-closed, 우회 모드 없음). lifecycle-worker 는
+      # local_fs 오브젝트 스토어에서 Vault 를 요구하지 않으므로(env-artifact-lifecycle: s3 모드에서만 필요)
+      # 여기서 실제로 기동해 이미지·env·BYPASSRLS 접속·graphile external 모드를 검증한다.
+      - name: Boot the artifact lifecycle worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --profile worker up -d --wait --wait-timeout 240 lifecycle-worker
+
+      - name: Assert the lifecycle worker runs and registers a live heartbeat
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose logs lifecycle-worker > lifecycle-worker.log
+          cat lifecycle-worker.log
+          grep -q "artifact lifecycle worker daemon running" lifecycle-worker.log
+          docker compose exec -T postgres \
+            psql -U postgres -d rpa -Atqc \
+            "SELECT status || ':' || kind FROM workers WHERE id = '20000000-0000-4000-8000-0000000000aa'" \
+            | grep -qx "active:sweeper"
+
       - name: Container diagnostics on failure
         if: failure()
         run: |
