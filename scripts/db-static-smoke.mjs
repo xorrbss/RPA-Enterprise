@@ -202,6 +202,10 @@ function checkDbMigrateBaselineVerifier() {
   requireRegex("db-migrate baseline verifies audit append-only function body", dbMigrate, /audit_log is append-only/);
   requireRegex("db-migrate graphile worker migration flag", dbMigrate, /--graphile-worker/);
   requireRegex("db-migrate graphile runtime grants", dbMigrate, /GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA graphile_worker TO rpa_app, rpa_lifecycle_bypass/i);
+  // GRANT 만으로는 rpa_app 이 큐를 못 쓴다 — graphile 0.16 은 _private_* 에 RLS 를 켜고 정책을 만들지 않아
+  // 비-소유자는 INSERT 거부(42501)·SELECT/UPDATE 0건이 된다(= run 생성 불가, 워커가 job 을 못 집음).
+  // 실 동작은 db-roles-least-privilege.int.ts 가 rpa_app 접속으로 못 박는다.
+  requireRegex("db-migrate graphile RLS policy for the runtime role", dbMigrate, /CREATE POLICY rpa_runtime_all ON graphile_worker\.%I FOR ALL TO rpa_app/i);
   if (/required core table count mismatch/i.test(dbMigrate) || /coreState\.rlsOk/i.test(dbMigrate)) {
     failures.push("db-migrate baseline verifier must not bless baseline=true from table count + RLS flag counts");
   }
