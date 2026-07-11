@@ -208,6 +208,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # Chromium 의 user-namespace 샌드박스는 namespace clone 을 필요로 하는데 런타임 기본 seccomp 프로파일이 이를
+    # 막는다 → 샌드박스가 아예 서지 못해(No usable sandbox / Operation not permitted) 워커가 모든 run 을 INIT
+    # 실패로 재큐한다. 이 워크로드에 한해 seccomp 필터만 해제한다 — non-root·capability drop·privilege escalation
+    # 금지는 그대로 유지되고, **브라우저 샌드박스는 켜진 채로** 동작한다(--no-sandbox 회피 금지: 워커는 외부 웹
+    # 콘텐츠를 렌더하고 컨테이너 안에 Vault AppRole·DB 자격이 있다). 실측: 이 조합에서만 샌드박스 ON 렌더 성공.
+    security_opt:
+      - seccomp=unconfined
     depends_on:
       migrate:
         condition: service_completed_successfully

@@ -598,33 +598,17 @@ jobs:
       # 런타임은 CDP 실패 원인을 감춘다(CdpDisconnectedError). 이미지의 Chromium 이 런타임 유저로, **샌드박스를
       # 켠 채로** 대상을 렌더할 수 있어야 한다 — chromium-sandbox 패키지가 빠지면 "No usable sandbox!" 로 죽고
       # 워커는 모든 run 을 INIT 실패로 재큐한다. --no-sandbox 회피는 브라우저 샌드박스 경계를 무너뜨리므로 금지.
-      - name: Assert the image Chromium renders the target with its sandbox enabled
+      # 런타임은 CDP 실패 원인을 감춘다(CdpDisconnectedError). 워커 컨테이너가 **배포 형상 그대로**, 즉 샌드박스를
+      # 켠 채로 대상 페이지를 렌더할 수 있어야 한다. --no-sandbox 회피는 금지 — 워커는 외부 웹 콘텐츠를 렌더하고
+      # 컨테이너 안에 Vault AppRole·DB 자격이 있다.
+      - name: Assert the worker Chromium renders the target with its sandbox enabled
         shell: bash
         run: |
           set -euo pipefail
-          NET="$(docker compose ps --format '{{.Name}}' worker | head -1)"
-          probe() {
-            local label="$1"; shift
-            if docker run --rm --network "container:${NET}" "$@" rpa-runtime:local \
-                 /usr/bin/chromium --headless=new --disable-gpu --dump-dom http://fixture/ > "probe.log" 2>&1; then
-              echo "${label}: OK ($(grep -c review-item probe.log) review-item)"
-            else
-              echo "${label}: FAILED -> $(grep -m1 -iE 'sandbox|namespace|permitted' probe.log || true)"
-            fi
-          }
-          probe "sandbox on, no extra privileges"
-          probe "sandbox on + apparmor=unconfined" --security-opt apparmor=unconfined
-          probe "sandbox on + seccomp=unconfined" --security-opt seccomp=unconfined
-          probe "sandbox on + seccomp=unconfined + apparmor=unconfined" --security-opt seccomp=unconfined --security-opt apparmor=unconfined
-          probe "sandbox on + cap SYS_ADMIN" --cap-add SYS_ADMIN
-          # k8s 워커 파드 설정과 동형(runAsNonRoot + allowPrivilegeEscalation:false = no-new-privileges,
-          # 모든 capability drop) + seccomp 만 완화 → SUID 경로가 막히므로 user-namespace 샌드박스로만 통과 가능.
-          probe "sandbox on + seccomp=unconfined + no-new-privileges + caps dropped" \
-            --security-opt seccomp=unconfined --security-opt no-new-privileges --cap-drop ALL --user 1000
           docker compose exec -T worker /usr/bin/chromium --headless=new --disable-gpu --dump-dom http://fixture/ \
-            > chromium-render.log 2>&1 || { echo "worker container: Chromium cannot render with the sandbox enabled"; tail -5 chromium-render.log; exit 1; }
+            > chromium-render.log 2>&1 || { echo "worker Chromium cannot render with the sandbox enabled:"; tail -5 chromium-render.log; exit 1; }
           grep -q "review-item" chromium-render.log
-          echo "worker container: chromium (sandboxed) rendered the fixture"
+          echo "worker chromium (sandboxed) rendered the fixture"
 
       # 스텝 이름에 'deploy' 금지 — yaml-parse.py DEPLOY_MARKERS 가드가 문자열로 걸러낸다.
       - name: Drive a real run through the running stack
