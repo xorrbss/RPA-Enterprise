@@ -237,6 +237,24 @@ function main(): void {
     S3_ACCESS_KEY_ID: "s3-access-id",
   }, () =>
     expectThrow("api artifact s3 reader requires API Vault AppRole", () => loadApiConfig(API_COMMON)));
+  // 배포 매니페스트(ConfigMap)는 API 전용 S3_* 를 주지 않고 플랫폼 정규 계열만 준다. 폴백이 없던 탓에
+  // ARTIFACT_OBJECT_STORE_KIND=s3 인 프로덕션 설정에서 API 가 부팅조차 못 했다(missing required env S3_ENDPOINT).
+  withEnv({
+    ...FULL,
+    ARTIFACT_OBJECT_STORE_KIND: "s3",
+    VAULT_API_ROLE_ID: "api-role",
+    VAULT_API_SECRET_ID: "api-secret",
+  }, () => {
+    const a = loadApiConfig(API_COMMON);
+    check(
+      "api artifact s3 reader falls back to the platform ARTIFACT_OBJECT_STORE_S3_* family (no API-only S3_*)",
+      a.artifactObjectStore?.objectStore.kind === "s3" &&
+        a.artifactObjectStore.objectStore.endpoint === "https://s3.example.internal" &&
+        a.artifactObjectStore.objectStore.bucket === "rpa-artifacts" &&
+        a.artifactObjectStore.objectStore.accessKeyId === "rpa-lifecycle-access-key-id",
+      JSON.stringify(a.artifactObjectStore),
+    );
+  });
   withEnv({
     ...FULL,
     ARTIFACT_OBJECT_STORE_KIND: "s3",
