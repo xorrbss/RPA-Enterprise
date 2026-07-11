@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { SignJWT } from "jose";
 import puppeteer, { type HTTPRequest } from "puppeteer-core";
 
+import { checkOwnerEvidenceForms } from "./console-live-readiness";
 import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
@@ -345,6 +346,10 @@ async function main(): Promise<void> {
     check("사람확인 처리완료(resolve) → human_task resolved (실 DB)", htState === "resolved", `state=${htState}`);
     check("처리완료 → 연계 run resume_requested (R13, 실 DB)", suspRunState === "resume_requested", `run=${suspRunState}`);
 
+    // 명령: 운영 전환 준비도 오너 증빙 5종 — 콘솔 폼이 만든 본문을 실 서버가 받아들이고 게이트가 닫히는지.
+    // web fake 도 app int 도 못 보는 칸(폼 본문 ↔ 서버 검증기 ↔ 게이트 전이)을 여기서 막는다.
+    await checkOwnerEvidenceForms(page, base, check);
+
     check("브라우저 페이지 에러 없음", pageErrors.length === 0, pageErrors.join("; "));
   } finally {
     if (browser !== null) await closeWithTimeout("browser close", () => browser!.close());
@@ -362,7 +367,7 @@ async function main(): Promise<void> {
     console.error(`\nFAIL: ${failures} check(s) failed`);
     process.exit(1);
   }
-  console.log("\nPASS: D7 console LIVE e2e green (browser → Fastify → PostgreSQL, read + W10 replay)");
+  console.log("\nPASS: D7 console LIVE e2e green (browser → Fastify → PostgreSQL, read + W10 replay + 준비도 오너 증빙 5종)");
   process.exit(0);
 }
 
