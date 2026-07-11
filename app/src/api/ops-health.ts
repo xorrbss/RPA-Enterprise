@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
 
 import { withTenantTx } from "../db/pool";
+import { tenantFlagFor } from "../runtime/pool-forbidden-flags";
 import { requirePrincipal, type ApiServerDeps } from "./server-shared";
 
 export type OpsHealthStatus = "ok" | "warning" | "critical";
@@ -71,6 +72,17 @@ export async function readOpsHealth(client: PoolClient, tenantId: string): Promi
   };
 }
 
+/**
+ * 테넌트별 미처리 job 수. graphile-worker 0.16 의 공개 뷰 `graphile_worker.jobs` 만 읽는다 — 그 뷰가 런타임
+ * 역할(rpa_app, NOBYPASSRLS)이 큐를 볼 수 있는 유일한 표면이기 때문이다. 실 payload 가 있는 `_private_jobs` 는
+ * RLS 가 켜져 있어(relrowsecurity) 뷰 소유자만 행을 보므로 rpa_app 이 직접 읽으면 항상 0 건이다.
+ * 뷰는 payload 를 노출하지 않으므로 테넌트 스코프는 flags(jsonb)로 판별한다 — runtime/run-queue.ts 가 모든
+ * add_job 에 `tenant:<uuid>` flag 를 부착한다(runtime/pool-forbidden-flags.ts tenantFlagFor).
+ *
+ * 스키마 부재(to_regclass=null)만 available=false 다. 뷰가 있는데 flags 컬럼이 사라진 경우는 조용히 false 로
+ * 덮지 않고 쿼리가 그대로 실패한다 — 큐가 설치됐는데도 "큐 미설치"로 보고하면 운영자가 존재하지 않는 인프라
+ * 문제를 쫓게 된다(조용한 false 금지).
+ */
 async function readQueueDepth(client: PoolClient, tenantId: string): Promise<QueueDepth> {
   const view = await client.query<{ regclass: string | null }>(
     `SELECT to_regclass('graphile_worker.jobs')::text AS regclass`,
@@ -79,25 +91,12 @@ async function readQueueDepth(client: PoolClient, tenantId: string): Promise<Que
     return { available: false, pending_jobs: null };
   }
 
-  const payloadColumn = await client.query<{ exists: boolean }>(
-    `SELECT EXISTS (
-       SELECT 1
-         FROM information_schema.columns
-        WHERE table_schema = 'graphile_worker'
-          AND table_name = 'jobs'
-          AND column_name = 'payload'
-     ) AS exists`,
-  );
-  if (payloadColumn.rows[0]?.exists !== true) {
-    return { available: false, pending_jobs: null };
-  }
-
   const count = await client.query<{ n: number }>(
     `SELECT count(*)::int AS n
        FROM graphile_worker.jobs
       WHERE locked_at IS NULL
-        AND payload ->> 'tenantId' = $1`,
-    [tenantId],
+        AND flags ? $1`,
+    [tenantFlagFor(tenantId)],
   );
   return { available: true, pending_jobs: count.rows[0]?.n ?? 0 };
 }

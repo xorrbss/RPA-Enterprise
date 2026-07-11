@@ -71,7 +71,10 @@ await enqueuer.enqueueRunClaim(client, {
 });
 const runClaimAddJob = calls[calls.length - 1];
 const runClaimPayload = JSON.parse(String(runClaimAddJob?.params[1])) as Record<string, unknown>;
-check("run claim enqueue uses default pool flag", JSON.stringify(runClaimAddJob?.params[2]) === JSON.stringify(["pool:default"]));
+// flags = [pool:<key>, tenant:<uuid>]. tenant flag 는 테넌트별 큐 깊이의 유일한 근거다(api/ops-health.ts).
+check("run claim enqueue uses default pool flag and tenant flag",
+  JSON.stringify(runClaimAddJob?.params[2]) === JSON.stringify(["pool:default", `tenant:${TENANT}`]),
+  JSON.stringify(runClaimAddJob?.params[2]));
 check("critical run priority maps to graphile priority -10", runClaimAddJob?.params[3] === -10, JSON.stringify(runClaimAddJob?.params));
 check(
   "run claim payload carries run id and tenant",
@@ -90,11 +93,12 @@ await enqueuer.enqueueOpsNotificationSend(client, {
 const notificationAddJob = calls[calls.length - 1];
 const notificationPayload = JSON.parse(String(notificationAddJob?.params[1])) as Record<string, unknown>;
 check("ops notification enqueue uses control task", notificationAddJob?.params[0] === RUNTIME_CONTROL_JOB_TASK);
-check("ops notification enqueue preserves attempt id and delay",
+check("ops notification enqueue preserves attempt id, tenant flag, and delay",
   notificationPayload.kind === "ops_notification_send" &&
     notificationPayload.tenantId === TENANT &&
     (notificationPayload.opsNotification as { attemptId?: string } | undefined)?.attemptId === NOTIFICATION_ATTEMPT &&
-    notificationAddJob?.params[2] === 7_000,
+    JSON.stringify(notificationAddJob?.params[2]) === JSON.stringify([`tenant:${TENANT}`]) &&
+    notificationAddJob?.params[3] === 7_000,
   JSON.stringify({ notificationPayload, params: notificationAddJob?.params }),
 );
 

@@ -12,9 +12,10 @@ import { SignJWT } from "jose";
 import { JwtAuthenticationBoundary, hmacJwtVerifier } from "../src/api/auth";
 import { PgControlPlaneIdempotencyStore } from "../src/api/idempotency";
 import { RoleMatrixRbacMiddleware } from "../src/api/rbac";
-import type { RunEnqueuer } from "../src/runtime/run-queue";
+import { PgGraphileRunEnqueuer, type RunEnqueuer } from "../src/runtime/run-queue";
 import { buildServer } from "../src/api/server";
 import { createPool, withTenantTx } from "../src/db/pool";
+import { installGraphileSchema } from "./graphile-schema";
 import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
 
@@ -115,6 +116,18 @@ async function seedHealth(pool: Pool): Promise<void> {
       [LEASE_B, TENANT_B, SITE_B, IDENTITY_B, RUN_B, WORKER_A],
     );
   });
+
+  // 실 graphile 스키마 + 실 인큐 경로. 테넌트 A 2건 / 테넌트 B 1건 → 큐 깊이가 테넌트 스코프인지(전역 3이 아닌지)
+  // 대조 가능. 가짜 jobs 테이블을 쓰면 이 대조가 실 스키마를 전혀 검증하지 못한다.
+  await installGraphileSchema();
+  const enqueuer = new PgGraphileRunEnqueuer();
+  await withTenantTx(pool, TENANT_A, async (client) => {
+    await enqueuer.enqueueRunClaim(client, { tenantId: TENANT_A, runId: RUN_STALE, correlationId: RUN_STALE });
+    await enqueuer.enqueueRunClaim(client, { tenantId: TENANT_A, runId: RUN_FRESH, correlationId: RUN_FRESH });
+  });
+  await withTenantTx(pool, TENANT_B, async (client) => {
+    await enqueuer.enqueueRunClaim(client, { tenantId: TENANT_B, runId: RUN_B, correlationId: RUN_B });
+  });
 }
 
 async function main(): Promise<void> {
@@ -131,6 +144,8 @@ async function main(): Promise<void> {
     const setup = await pool.connect();
     try {
       await setup.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
+      // 큐 깊이를 정확한 수로 단언하므로 앞선 테스트가 남긴 job 이 없어야 한다.
+      await setup.query(`DROP SCHEMA IF EXISTS graphile_worker CASCADE`);
       await setup.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
       await setup.query(`SET search_path = ${SCHEMA}, public`);
       await setup.query(`CREATE TABLE tenants (id uuid PRIMARY KEY)`);
@@ -158,16 +173,16 @@ async function main(): Promise<void> {
     check("expired active browser lease raises critical", body.status === "critical" && body.browser_leases.expired_open === 1, health.body);
     check("lease counts are tenant scoped", body.browser_leases.active === 1 && body.browser_leases.reserved === 1, health.body);
     check("stale nonterminal runs counted", body.stale_runs.nonterminal_over_15m === 1 && body.stale_runs.oldest_updated_at !== null, health.body);
-    check(
-      "queue health is explicit whether graphile schema exists",
-      (body.queue.available === false && body.queue.pending_jobs === null) ||
-        (body.queue.available === true && typeof body.queue.pending_jobs === "number" && Number.isInteger(body.queue.pending_jobs) && body.queue.pending_jobs >= 0),
-      health.body,
-    );
+    // 실 graphile 스키마가 설치돼 있으므로 available 은 반드시 true 다. (이전 단언은 available 이 true 든 false 든
+    // 통과하는 동어반복이라, 실 스키마에서 큐가 영구 '미설치'로 오판되는 결함을 통과시켰다.)
+    check("queue reports available against the real graphile schema", body.queue.available === true, health.body);
+    check("queue depth is tenant scoped (A enqueued 2 of 3 total)", body.queue.pending_jobs === 2, health.body);
 
     const tenantB = await app.inject({ method: "GET", url: "/v1/ops/health", headers: { authorization: `Bearer ${viewerB}` } });
-    const tenantBBody = tenantB.json() as { status: string; browser_leases: { active: number; expired_open: number }; stale_runs: { nonterminal_over_15m: number } };
+    const tenantBBody = tenantB.json() as { status: string; queue: { available: boolean; pending_jobs: number | null }; browser_leases: { active: number; expired_open: number }; stale_runs: { nonterminal_over_15m: number } };
     check("tenant B sees only tenant B health", tenantB.statusCode === 200 && tenantBBody.status === "ok" && tenantBBody.browser_leases.active === 1 && tenantBBody.browser_leases.expired_open === 0 && tenantBBody.stale_runs.nonterminal_over_15m === 0, tenantB.body);
+    // 음성 대조: 전역 카운트(3)나 타 테넌트 카운트(2)가 새어나오면 실패한다.
+    check("tenant B queue depth counts only tenant B jobs", tenantBBody.queue.pending_jobs === 1, tenantB.body);
 
     const denied = await app.inject({ method: "GET", url: "/v1/ops/health", headers: { authorization: `Bearer ${noRole}` } });
     check("no-role ops health denied -> 403", denied.statusCode === 403 && denied.json().code === "AUTHZ_FORBIDDEN", denied.body);

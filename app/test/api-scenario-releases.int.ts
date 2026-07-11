@@ -11,6 +11,7 @@ import type { RunEnqueuer } from "../src/runtime/run-queue";
 import { buildServer } from "../src/api/server";
 import type { AuthReadinessConfig } from "../src/api/server-shared";
 import { createPool, withTenantTx } from "../src/db/pool";
+import { installGraphileSchema } from "./graphile-schema";
 import type { SecretRef } from "../../ts/core-types";
 import type { SignedCommandRegistry } from "../../ts/security-middleware-contract";
 
@@ -105,6 +106,8 @@ async function createSubmitApproveDeploy(
 }
 
 async function seedControlledProdReadiness(pool: ReturnType<typeof createPool>): Promise<void> {
+  // 큐 표면은 실 graphile 스키마로만 만든다(가짜 jobs 테이블 금지 — test/graphile-schema.ts 주석 참조).
+  await installGraphileSchema();
   const direct = await pool.connect();
   try {
     await direct.query(`SET search_path = ${SCHEMA}, public`);
@@ -114,8 +117,6 @@ async function seedControlledProdReadiness(pool: ReturnType<typeof createPool>):
        VALUES ('0001','applied'), ('0002','applied')
        ON CONFLICT (version) DO UPDATE SET status=EXCLUDED.status`,
     );
-    await direct.query(`CREATE SCHEMA IF NOT EXISTS graphile_worker`);
-    await direct.query(`CREATE TABLE IF NOT EXISTS graphile_worker.jobs (id serial PRIMARY KEY, locked_at timestamptz, payload jsonb NOT NULL DEFAULT '{}'::jsonb)`);
     await direct.query(
       `INSERT INTO workers (id, kind, status, heartbeat_at, circuit_state)
        VALUES ($1,'browser','active',now(),'closed'), ($2,'browser','active',now(),'closed')

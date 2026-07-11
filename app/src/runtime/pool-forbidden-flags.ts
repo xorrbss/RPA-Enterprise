@@ -12,10 +12,22 @@
 import type { PgPool } from "../db/pool";
 
 const POOL_FLAG_PREFIX = "pool:";
+const TENANT_FLAG_PREFIX = "tenant:";
 
 /** run 의 풀 키(테넌트 배정 또는 'default')에 대응하는 Graphile job flag 문자열. */
 export function poolFlagFor(poolKey: string): string {
   return POOL_FLAG_PREFIX + poolKey;
+}
+
+/**
+ * job 의 테넌트를 나타내는 flag. 대기열 깊이를 테넌트별로 세기 위한 유일한 경로다 — graphile-worker 0.16 의
+ * 공개 뷰 `graphile_worker.jobs` 는 payload 를 노출하지 않고(payload 는 RLS 가 걸린 `_private_jobs` 에만 존재해
+ * 런타임 역할 rpa_app 은 행을 볼 수 없다), flags 는 노출한다. 소비자는 api/ops-health.ts readQueueDepth.
+ *
+ * forbiddenFlags 는 `pool:` 접두 flag 만 생성하므로(buildPoolForbiddenFlags) 이 flag 는 디스패치에 영향이 없다.
+ */
+export function tenantFlagFor(tenantId: string): string {
+  return TENANT_FLAG_PREFIX + tenantId;
 }
 
 /**
