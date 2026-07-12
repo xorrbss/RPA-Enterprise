@@ -268,7 +268,8 @@ services:
         vault write auth/approle/role/runtime-worker \
           token_policies=runtime-worker token_ttl=1h token_max_ttl=4h
         vault write auth/approle/role/runtime-worker/role-id role_id="$$RUNTIME_WORKER_ROLE_ID"
-        vault write auth/approle/role/runtime-worker/custom-secret-id secret_id="$$RUNTIME_WORKER_SECRET_ID"
+        # custom-secret-id 는 이미 등록돼 있으면 500 을 낸다. compose 는 완료된 one-shot 을 재기동하므로 멱등해야 한다.
+        vault write auth/approle/role/runtime-worker/custom-secret-id secret_id="$$RUNTIME_WORKER_SECRET_ID" || echo "vault-init: runtime-worker secret_id already registered"
 
         # artifact-lifecycle 워커와 API 는 같은 오브젝트 스토어 자격을 읽는다
         # (ConfigMap 의 ARTIFACT_OBJECT_STORE_REF 가 artifact-lifecycle namespace 를 가리킨다).
@@ -280,7 +281,7 @@ services:
         vault write auth/approle/role/artifact-lifecycle \
           token_policies=artifact-lifecycle token_ttl=1h token_max_ttl=4h
         vault write auth/approle/role/artifact-lifecycle/role-id role_id="$$LIFECYCLE_ROLE_ID"
-        vault write auth/approle/role/artifact-lifecycle/custom-secret-id secret_id="$$LIFECYCLE_SECRET_ID"
+        vault write auth/approle/role/artifact-lifecycle/custom-secret-id secret_id="$$LIFECYCLE_SECRET_ID" || echo "vault-init: artifact-lifecycle secret_id already registered"
 
         # API 는 자기 namespace(세션 캡처 KEK — staging 런북 §4.1)와 아티팩트 오브젝트 스토어 자격을 읽는다.
         vault policy write api - <<POLICY
@@ -294,7 +295,7 @@ services:
         vault write auth/approle/role/api \
           token_policies=api token_ttl=1h token_max_ttl=4h
         vault write auth/approle/role/api/role-id role_id="$$API_ROLE_ID"
-        vault write auth/approle/role/api/custom-secret-id secret_id="$$API_SECRET_ID"
+        vault write auth/approle/role/api/custom-secret-id secret_id="$$API_SECRET_ID" || echo "vault-init: api secret_id already registered"
 
         vault kv put secret/rpa/$$RPA_ENV/runtime-worker/browser_session/active \
           value="{\"kid\":\"dev-1\",\"key\":\"$$BROWSER_SESSION_KEK\"}"
