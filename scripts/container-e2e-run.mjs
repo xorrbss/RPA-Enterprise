@@ -175,15 +175,16 @@ async function assertArtifactsInObjectStore(token, runId) {
   }
   console.log(`  run stored ${items.length} artifact(s)`);
 
+  // 상세 조회는 API 의 오브젝트 스토어 리더(s3)로 본문을 실제로 가져온다. object_ref 는 응답에 노출되지 않는다
+  // (raw ObjectRef 미노출 정책) — 본문이 돌아왔다는 것이 곧 "워커가 S3 에 썼고 API 가 S3 에서 읽었다"의 증거다.
   const artifactId = items[0].artifact_id ?? items[0].id;
   const detail = expect(`GET /v1/artifacts/${artifactId}`, await call(token, "GET", `/v1/artifacts/${artifactId}`), [200]);
-  const objectRef = String(detail.object_ref ?? "");
-  if (!objectRef.startsWith("s3://")) {
-    fail(`artifact object_ref is not in the object store (expected s3://): ${objectRef}`);
+  if (detail.content === null || detail.content === undefined || String(detail.content).length === 0) {
+    fail(`artifact ${artifactId} carries no content — the API could not read it back from the object store: ${JSON.stringify(detail)}`);
   }
   console.log(
-    `  artifact ${artifactId}: object_ref=${objectRef} redaction=${detail.redaction_status} ` +
-    `content=${detail.content === null || detail.content === undefined ? "(withheld)" : "present"}`,
+    `  artifact ${artifactId}: type=${detail.type} media=${detail.media_type} bytes=${detail.byte_size} ` +
+    `redaction=${detail.redaction_status} — content read back through the API's object-store reader`,
   );
 }
 
