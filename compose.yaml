@@ -83,6 +83,10 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      vault-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
     environment:
       RUN_MODE: api
       RPA_ENV: ${RPA_ENV:-local}
@@ -103,6 +107,19 @@ services:
       SCENARIO_GENERATION_LLM_V1_ENABLED: ${SCENARIO_GENERATION_LLM_V1_ENABLED:-false}
       VISUAL_EVIDENCE_VIDEO_ENABLED: ${VISUAL_EVIDENCE_VIDEO_ENABLED:-false}
       GATEWAY_ARTIFACT_DIR: /var/lib/rpa/artifacts
+      # 아티팩트 조회는 프로덕션과 동일한 s3 모드. 시크릿 키는 SecretRef 로만(평문 env 금지).
+      ARTIFACT_OBJECT_STORE_KIND: ${ARTIFACT_OBJECT_STORE_KIND:-s3}
+      ARTIFACT_OBJECT_STORE_REF: rpa/${RPA_ENV:-local}/artifact-lifecycle/object_store/artifacts
+      ARTIFACT_OBJECT_STORE_S3_ENDPOINT: ${ARTIFACT_S3_ENDPOINT:-https://minio:9000}
+      ARTIFACT_OBJECT_STORE_S3_REGION: ${ARTIFACT_S3_REGION:-us-east-1}
+      ARTIFACT_OBJECT_STORE_S3_BUCKET: ${ARTIFACT_S3_BUCKET:-rpa-artifacts}
+      ARTIFACT_OBJECT_STORE_S3_ACCESS_KEY_ID: ${ARTIFACT_S3_ACCESS_KEY_ID:-rpa-local-dev-artifact-writer}
+      ARTIFACT_OBJECT_STORE_S3_FORCE_PATH_STYLE: "true"
+      VAULT_ADDR: ${VAULT_ADDR:-https://vault:8200}
+      VAULT_MOUNT: ${VAULT_MOUNT:-secret}
+      VAULT_API_ROLE_ID: ${VAULT_API_ROLE_ID:-rpa-local-dev-api-role}
+      VAULT_API_SECRET_ID: ${VAULT_API_SECRET_ID:-rpa-local-dev-api-secret}
+      NODE_EXTRA_CA_CERTS: ${NODE_EXTRA_CA_CERTS:-/vault/tls/vault-ca.pem}
     ports:
       - "${RPA_API_PORT:-8080}:8080"
       - "${RPA_HEALTH_PORT:-8081}:8081"
@@ -113,6 +130,7 @@ services:
       retries: 12
     volumes:
       - rpa_artifacts:/var/lib/rpa/artifacts
+      - rpa_vault_tls:/vault/tls:ro
 
   web:
     build:
@@ -141,9 +159,10 @@ services:
 
   # 로컬 SecretStore. 브라우저 worker 는 부팅 즉시 세션 KEK/resume-token HMAC 을 Vault 에서 해소하고
   # VaultSecretStore 는 https 를 강제한다(우회 모드 없음) — 그래서 로컬 스택에도 실제 TLS Vault 가 필요하다.
+  # 실 배포는 항상 SecretStore + 오브젝트 스토어를 갖는다. 로컬 스택이 그 형상과 갈리면 "배포하지 않는 설정"을
+  # 테스트하게 되므로 vault/minio 는 프로필 없이 상시 기동한다.
   # 개발/CI 전용: dev 모드(인메모리, 고정 root 토큰). 실 배포는 오너 Vault 를 VAULT_* 로 주입해 이 기본값을 덮는다.
   vault:
-    profiles: ["worker"]
     image: hashicorp/vault:1.17
     user: "0:0"
     entrypoint: ["vault"]
@@ -152,7 +171,10 @@ services:
       - -dev
       - -dev-tls
       - -dev-tls-cert-dir=/vault/tls
+      # minio 가 같은 인증서를 재사용한다(자체 서명 CA 하나로 두 서비스의 TLS 를 덮는다).
+      # ⚠ -dev-tls-san 은 콤마 목록을 쪼개지 않는다(SAN 이 "vault,minio" 한 덩어리가 된다) — 플래그를 반복한다.
       - -dev-tls-san=vault
+      - -dev-tls-san=minio
       - -dev-listen-address=0.0.0.0:8200
       - -dev-root-token-id=${VAULT_DEV_ROOT_TOKEN:-rpa-local-dev-root}
     healthcheck:
@@ -163,10 +185,58 @@ services:
     volumes:
       - rpa_vault_tls:/vault/tls
 
-  # AppRole + 최소권한 정책 + runtime-worker 시크릿 시드(개발/CI 전용 고정값).
+  # 아티팩트 오브젝트 스토어(S3 호환). 프로덕션 ConfigMap 이 GATEWAY_ARTIFACT_STORE_MODE=s3 /
+  # ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE=s3 / ARTIFACT_OBJECT_STORE_KIND=s3 를 켜므로 로컬도 같은 모드로 돈다.
+  # S3ObjectStore 는 https 를 강제하므로 vault 의 자체 서명 인증서(SAN 에 minio 포함)를 재사용해 TLS 로 서빙한다.
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    depends_on:
+      vault:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${ARTIFACT_S3_ACCESS_KEY_ID:-rpa-local-dev-artifact-writer}
+      MINIO_ROOT_PASSWORD: ${ARTIFACT_S3_SECRET_ACCESS_KEY:-rpa-local-dev-artifact-secret-key}
+    entrypoint: ["sh", "-ec"]
+    command:
+      - |
+        mkdir -p /certs/CAs
+        cp /vault/tls/vault-cert.pem /certs/public.crt
+        cp /vault/tls/vault-key.pem /certs/private.key
+        cp /vault/tls/vault-ca.pem /certs/CAs/vault-ca.pem
+        exec minio server /data --certs-dir /certs --address :9000
+    volumes:
+      - rpa_vault_tls:/vault/tls:ro
+      - rpa_minio_data:/data
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_ROOT_USER: ${ARTIFACT_S3_ACCESS_KEY_ID:-rpa-local-dev-artifact-writer}
+      MINIO_ROOT_PASSWORD: ${ARTIFACT_S3_SECRET_ACCESS_KEY:-rpa-local-dev-artifact-secret-key}
+      ARTIFACT_BUCKET: ${ARTIFACT_S3_BUCKET:-rpa-artifacts}
+    entrypoint: ["sh", "-ec"]
+    command:
+      - |
+        mkdir -p /root/.mc/certs/CAs
+        cp /vault/tls/vault-ca.pem /root/.mc/certs/CAs/vault-ca.pem
+        i=0
+        until mc alias set local https://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do
+          i=$$((i+1)); [ "$$i" -ge 30 ] && { echo "minio-init: minio did not become ready"; exit 1; }
+          sleep 2
+        done
+        mc mb --ignore-existing "local/$$ARTIFACT_BUCKET"
+        echo "minio-init: bucket $$ARTIFACT_BUCKET ready"
+    volumes:
+      - rpa_vault_tls:/vault/tls:ro
+    restart: "no"
+
+  # AppRole + 최소권한 정책 + 시크릿 시드(개발/CI 전용 고정값). identity 별로 자기 namespace 만 read 한다.
   # 시크릿 페이로드는 {kid,key} JSON — browser_session KEK 는 base64 32바이트(AES-256-GCM).
+  # 오브젝트 스토어 secret access key 는 SecretRef 로만 전달된다(env 로 평문 전달 금지 — security-contracts).
   vault-init:
-    profiles: ["worker"]
     image: hashicorp/vault:1.17
     depends_on:
       vault:
@@ -178,12 +248,18 @@ services:
       RPA_ENV: ${RPA_ENV:-local}
       RUNTIME_WORKER_ROLE_ID: ${VAULT_RUNTIME_WORKER_ROLE_ID:-rpa-local-dev-runtime-worker-role}
       RUNTIME_WORKER_SECRET_ID: ${VAULT_RUNTIME_WORKER_SECRET_ID:-rpa-local-dev-runtime-worker-secret}
+      LIFECYCLE_ROLE_ID: ${VAULT_ARTIFACT_LIFECYCLE_ROLE_ID:-rpa-local-dev-artifact-lifecycle-role}
+      LIFECYCLE_SECRET_ID: ${VAULT_ARTIFACT_LIFECYCLE_SECRET_ID:-rpa-local-dev-artifact-lifecycle-secret}
+      API_ROLE_ID: ${VAULT_API_ROLE_ID:-rpa-local-dev-api-role}
+      API_SECRET_ID: ${VAULT_API_SECRET_ID:-rpa-local-dev-api-secret}
       BROWSER_SESSION_KEK: ${VAULT_DEV_BROWSER_SESSION_KEK:-BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=}
       RESUME_TOKEN_KEY: ${VAULT_DEV_RESUME_TOKEN_KEY:-rpa-local-dev-resume-token-hmac-key}
+      ARTIFACT_S3_SECRET_ACCESS_KEY: ${ARTIFACT_S3_SECRET_ACCESS_KEY:-rpa-local-dev-artifact-secret-key}
     entrypoint: ["sh", "-ec"]
     command:
       - |
         vault auth enable approle 2>/dev/null || true
+
         vault policy write runtime-worker - <<POLICY
         path "secret/data/rpa/$$RPA_ENV/runtime-worker/*" {
           capabilities = ["read"]
@@ -192,12 +268,47 @@ services:
         vault write auth/approle/role/runtime-worker \
           token_policies=runtime-worker token_ttl=1h token_max_ttl=4h
         vault write auth/approle/role/runtime-worker/role-id role_id="$$RUNTIME_WORKER_ROLE_ID"
-        vault write auth/approle/role/runtime-worker/custom-secret-id secret_id="$$RUNTIME_WORKER_SECRET_ID"
+        # custom-secret-id 는 이미 등록돼 있으면 500 을 낸다. compose 는 완료된 one-shot 을 재기동하므로 멱등해야 한다.
+        vault write auth/approle/role/runtime-worker/custom-secret-id secret_id="$$RUNTIME_WORKER_SECRET_ID" || echo "vault-init: runtime-worker secret_id already registered"
+
+        # artifact-lifecycle 워커와 API 는 같은 오브젝트 스토어 자격을 읽는다
+        # (ConfigMap 의 ARTIFACT_OBJECT_STORE_REF 가 artifact-lifecycle namespace 를 가리킨다).
+        vault policy write artifact-lifecycle - <<POLICY
+        path "secret/data/rpa/$$RPA_ENV/artifact-lifecycle/*" {
+          capabilities = ["read"]
+        }
+        POLICY
+        vault write auth/approle/role/artifact-lifecycle \
+          token_policies=artifact-lifecycle token_ttl=1h token_max_ttl=4h
+        vault write auth/approle/role/artifact-lifecycle/role-id role_id="$$LIFECYCLE_ROLE_ID"
+        vault write auth/approle/role/artifact-lifecycle/custom-secret-id secret_id="$$LIFECYCLE_SECRET_ID" || echo "vault-init: artifact-lifecycle secret_id already registered"
+
+        # API 는 자기 namespace(세션 캡처 KEK — staging 런북 §4.1)와 아티팩트 오브젝트 스토어 자격을 읽는다.
+        vault policy write api - <<POLICY
+        path "secret/data/rpa/$$RPA_ENV/api/*" {
+          capabilities = ["read"]
+        }
+        path "secret/data/rpa/$$RPA_ENV/artifact-lifecycle/*" {
+          capabilities = ["read"]
+        }
+        POLICY
+        vault write auth/approle/role/api \
+          token_policies=api token_ttl=1h token_max_ttl=4h
+        vault write auth/approle/role/api/role-id role_id="$$API_ROLE_ID"
+        vault write auth/approle/role/api/custom-secret-id secret_id="$$API_SECRET_ID" || echo "vault-init: api secret_id already registered"
+
         vault kv put secret/rpa/$$RPA_ENV/runtime-worker/browser_session/active \
           value="{\"kid\":\"dev-1\",\"key\":\"$$BROWSER_SESSION_KEK\"}"
         vault kv put secret/rpa/$$RPA_ENV/runtime-worker/resume_token_hmac/active \
           value="{\"kid\":\"dev-1\",\"key\":\"$$RESUME_TOKEN_KEY\"}"
-        echo "vault-init: runtime-worker AppRole and secrets seeded"
+        vault kv put secret/rpa/$$RPA_ENV/runtime-worker/object_store/artifacts \
+          value="$$ARTIFACT_S3_SECRET_ACCESS_KEY"
+        vault kv put secret/rpa/$$RPA_ENV/artifact-lifecycle/object_store/artifacts \
+          value="$$ARTIFACT_S3_SECRET_ACCESS_KEY"
+        # API 세션 캡처 KEK — Vault identity 를 가진 API 는 부팅 시 이 값을 fail-closed 로 요구한다.
+        vault kv put secret/rpa/$$RPA_ENV/api/browser_session/active \
+          value="{\"kid\":\"dev-1\",\"key\":\"$$BROWSER_SESSION_KEK\"}"
+        echo "vault-init: AppRoles (runtime-worker, artifact-lifecycle, api) and secrets seeded"
     volumes:
       - rpa_vault_tls:/vault/tls:ro
     restart: "no"
@@ -221,6 +332,8 @@ services:
       lifecycle-worker:
         condition: service_started
       vault-init:
+        condition: service_completed_successfully
+      minio-init:
         condition: service_completed_successfully
     environment:
       RUN_MODE: worker
@@ -248,9 +361,16 @@ services:
       CODEX_BASE_URL: ${CODEX_BASE_URL:-https://codex.invalid/v1}
       CODEX_API_KEY: ${CODEX_API_KEY:-local-nonsecret-placeholder}
       CODEX_MODEL: ${CODEX_MODEL:-local-model-alias}
-      GATEWAY_ARTIFACT_STORE_MODE: fs
+      # 프로덕션 ConfigMap 과 동일한 s3 모드. 시크릿 키는 SecretRef 로만 전달된다(평문 env 금지).
+      GATEWAY_ARTIFACT_STORE_MODE: ${GATEWAY_ARTIFACT_STORE_MODE:-s3}
+      GATEWAY_ARTIFACT_OBJECT_STORE_REF: rpa/${RPA_ENV:-local}/runtime-worker/object_store/artifacts
+      ARTIFACT_OBJECT_STORE_S3_ENDPOINT: ${ARTIFACT_S3_ENDPOINT:-https://minio:9000}
+      ARTIFACT_OBJECT_STORE_S3_REGION: ${ARTIFACT_S3_REGION:-us-east-1}
+      ARTIFACT_OBJECT_STORE_S3_BUCKET: ${ARTIFACT_S3_BUCKET:-rpa-artifacts}
+      ARTIFACT_OBJECT_STORE_S3_ACCESS_KEY_ID: ${ARTIFACT_S3_ACCESS_KEY_ID:-rpa-local-dev-artifact-writer}
+      ARTIFACT_OBJECT_STORE_S3_FORCE_PATH_STYLE: "true"
       GATEWAY_ARTIFACT_DIR: /var/lib/rpa/artifacts
-      # 기본값은 위 dev Vault(profile worker). 실 배포는 오너 Vault 주소/AppRole 로 덮어쓴다.
+      # 기본값은 위 dev Vault. 실 배포는 오너 Vault 주소/AppRole 로 덮어쓴다.
       VAULT_ADDR: ${VAULT_ADDR:-https://vault:8200}
       VAULT_MOUNT: ${VAULT_MOUNT:-secret}
       VAULT_RUNTIME_WORKER_ROLE_ID: ${VAULT_RUNTIME_WORKER_ROLE_ID:-rpa-local-dev-runtime-worker-role}
@@ -271,6 +391,10 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      vault-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
     environment:
       RUN_MODE: lifecycle-worker
       RPA_ENV: ${RPA_ENV:-local}
@@ -285,15 +409,28 @@ services:
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
       OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: ${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:-}
       ARTIFACT_LIFECYCLE_WORKER_ID: ${ARTIFACT_LIFECYCLE_WORKER_ID:-20000000-0000-4000-8000-0000000000aa}
-      ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE: local_fs
-      ARTIFACT_OBJECT_STORE_REF: rpa/${RPA_ENV:-local}/artifact-lifecycle/object_store/local-fs
-      ARTIFACT_OBJECT_STORE_BACKEND_ALIAS: fs-local
+      # 프로덕션 ConfigMap 과 동일한 s3 모드(자격은 Vault SecretRef 로 해소 — artifact-lifecycle AppRole).
+      ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE: ${ARTIFACT_LIFECYCLE_OBJECT_STORE_MODE:-s3}
+      ARTIFACT_OBJECT_STORE_REF: rpa/${RPA_ENV:-local}/artifact-lifecycle/object_store/artifacts
+      ARTIFACT_OBJECT_STORE_BACKEND_ALIAS: s3-compatible
+      ARTIFACT_OBJECT_STORE_S3_ENDPOINT: ${ARTIFACT_S3_ENDPOINT:-https://minio:9000}
+      ARTIFACT_OBJECT_STORE_S3_REGION: ${ARTIFACT_S3_REGION:-us-east-1}
+      ARTIFACT_OBJECT_STORE_S3_BUCKET: ${ARTIFACT_S3_BUCKET:-rpa-artifacts}
+      ARTIFACT_OBJECT_STORE_S3_ACCESS_KEY_ID: ${ARTIFACT_S3_ACCESS_KEY_ID:-rpa-local-dev-artifact-writer}
+      ARTIFACT_OBJECT_STORE_S3_FORCE_PATH_STYLE: "true"
+      VAULT_ADDR: ${VAULT_ADDR:-https://vault:8200}
+      VAULT_MOUNT: ${VAULT_MOUNT:-secret}
+      VAULT_ARTIFACT_LIFECYCLE_ROLE_ID: ${VAULT_ARTIFACT_LIFECYCLE_ROLE_ID:-rpa-local-dev-artifact-lifecycle-role}
+      VAULT_ARTIFACT_LIFECYCLE_SECRET_ID: ${VAULT_ARTIFACT_LIFECYCLE_SECRET_ID:-rpa-local-dev-artifact-lifecycle-secret}
+      NODE_EXTRA_CA_CERTS: ${NODE_EXTRA_CA_CERTS:-/vault/tls/vault-ca.pem}
       GATEWAY_ARTIFACT_DIR: /var/lib/rpa/artifacts
       GRAPHILE_CONCURRENCY: ${ARTIFACT_LIFECYCLE_GRAPHILE_CONCURRENCY:-1}
     volumes:
       - rpa_artifacts:/var/lib/rpa/artifacts
+      - rpa_vault_tls:/vault/tls:ro
 
 volumes:
   rpa_pgdata:
   rpa_artifacts:
   rpa_vault_tls:
+  rpa_minio_data:
