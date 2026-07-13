@@ -48,3 +48,6 @@ app/dist/
 
 # Vite 로컬 캐시(의존성 최적화 산출물 — 커밋 금지, 재현은 dev/build로 자동 생성)
 .vite/
+
+# 세션 임시 리뷰 산출물(스크린샷 등 — 커밋 금지). 정식 감사 리포트는 audit/<주제>-<날짜>/report.md 로 명시 추가한다.
+audit/current-review-*/
