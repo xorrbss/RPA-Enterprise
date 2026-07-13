@@ -55,6 +55,14 @@ REQUIRED_ENV_BY_RUN_MODE = {
 API_AUTH_ENV = ["JWT_HS256_SECRET", "JWKS_URL"]
 MIGRATE_REQUIRED_FLAGS = ["--baseline-existing", "--graphile-worker", "--require-non-bypass"]
 
+# seccomp 태세. 정적 게이트도 render-smoke 도 seccompProfile 을 전혀 보지 않아, 이번 세션이 브라우저 worker 만
+# Unconfined 로 완화한 것이 어떤 게이트로도 지켜지지 않는다 — api/console/lifecycle/migrate 가 몰래 Unconfined 로
+# 퇴행해도(공격면 확대) 아무도 못 잡는다. 브라우저 worker 는 Chromium user-namespace 샌드박스가 런타임 기본
+# seccomp 프로파일에 막혀 실측상 Unconfined 가 필요하다(#469). 그 워크로드 하나만 Unconfined 를 허용하고
+# 나머지 전부는 RuntimeDefault 를 강제한다.
+SECCOMP_UNCONFINED_RUN_MODE = "worker"
+SECCOMP_REQUIRED_DEFAULT = "RuntimeDefault"
+
 # 오브젝트 스토어를 s3 로 켜면 각 워크로드가 요구하는 env 가 달라진다(fail-closed). 매니페스트가 모드만 켜고
 # 필요한 env 를 안 주면 컨테이너가 부팅조차 못 한다 — 실제로 API 가 그 상태였다(ARTIFACT_OBJECT_STORE_KIND=s3
 # 인데 엔드포인트/버킷 env 부재). 모드에 따라 조건부로 검사한다.
@@ -191,6 +199,25 @@ def check_workloads(label: str, docs: list[dict]) -> None:
         if not containers:
             fail(f"{label}: {kind}/{name} declares no containers")
             continue
+
+        # seccomp 는 pod-level securityContext 에 있다. 이 워크로드가 무엇인지(RUN_MODE 또는 migrate 커맨드)
+        # 판별해 브라우저 worker 만 Unconfined 를 허용하고 나머지는 RuntimeDefault 를 강제한다.
+        # 지역변수명을 env 로 두지 말 것 — secret-scan 의 env-dump 패턴이 scripts/ 파일의 행 시작 `env ` 를 오탐한다.
+        workload_run_mode = None
+        for container in containers:
+            container_env_map = container_env(container, sources, f"{label}: {kind}/{name}")
+            if container_env_map.get("RUN_MODE"):
+                workload_run_mode = container_env_map["RUN_MODE"]
+        seccomp_type = ((spec.get("securityContext") or {}).get("seccompProfile") or {}).get("type")
+        if seccomp_type is None:
+            fail(f"{label}: {kind}/{name} pod has no seccompProfile.type (defaults are node-dependent — pin it)")
+        elif workload_run_mode == SECCOMP_UNCONFINED_RUN_MODE:
+            if seccomp_type != "Unconfined":
+                fail(f"{label}: {kind}/{name} (browser worker) must set seccompProfile Unconfined "
+                     f"for the Chromium sandbox, got {seccomp_type}")
+        elif seccomp_type != SECCOMP_REQUIRED_DEFAULT:
+            fail(f"{label}: {kind}/{name} must set seccompProfile {SECCOMP_REQUIRED_DEFAULT} "
+                 f"(only the browser worker may relax it), got {seccomp_type}")
 
         for container in containers:
             cname = container.get("name", "?")

@@ -209,13 +209,24 @@ function checkKustomizeBase() {
   for (const file of baseResourceFiles.filter((path) => !path.endsWith("kustomization.yaml"))) {
     requireIn("kustomization resource list", kustomization, file.replace("deploy/k8s/base/", ""));
   }
+  // base kustomization 은 옵셔널 오너-결정 템플릿을 포함하면 안 된다(fail-closed — 실 CIDR/호스트/TLS 승인 전
+  // 렌더 금지). optional 파일은 이번 세션에 base/ 밖(deploy/k8s/optional/...)으로 이동했으므로, kustomization 이
+  // 나열할 수 있는 두 형태 모두를 막는다: (1) bare basename(egress-owner-allowlist.yaml, 40-ingress.optional.yaml),
+  // (2) 디렉터리 상대참조(../optional/owner-approved-egress). basename 만 strip 하던 이전 regex 는 optional 경로에
+  // 대해 no-op 이 되어(전체 repo 경로는 kustomization 에 절대 안 나타남) 가드가 vacuous 했다.
   for (const file of baseOptionalFiles) {
+    const basename = file.replace(/^.*\//, "");
     rejectRegex(
-      `kustomization must not include optional owner-decision template ${file}`,
+      `kustomization must not include optional owner-decision template ${basename}`,
       kustomization,
-      new RegExp(`\\b${escapeRegex(file.replace("deploy/k8s/base/", ""))}\\b`),
+      new RegExp(`\\b${escapeRegex(basename)}\\b`),
     );
   }
+  rejectRegex(
+    "kustomization must not include the owner-approved egress optional directory",
+    kustomization,
+    /optional\/owner-approved-egress/,
+  );
 
   const serviceAccounts = base["deploy/k8s/base/01-serviceaccounts.yaml"];
   for (const name of ["rpa-api", "rpa-worker", "rpa-lifecycle-worker", "rpa-console", "rpa-migrate"]) {
